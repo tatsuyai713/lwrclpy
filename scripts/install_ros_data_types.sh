@@ -9,9 +9,9 @@ set -e
 
 # --- Install SWIG 4.1 and register it as the default 'swig' ---
 sudo apt update
-sudo apt install -y swig4* rsync
-ls -l /usr/bin/swig4.1
-sudo update-alternatives --install /usr/bin/swig swig /usr/bin/swig4.1 50
+sudo apt install -y swig4.* rsync
+ls -l /usr/bin/swig4.*
+sudo update-alternatives --install /usr/bin/swig swig /usr/bin/swig4.* 50
 
 # Verify SWIG is the expected version (4.1.x)
 hash -r
