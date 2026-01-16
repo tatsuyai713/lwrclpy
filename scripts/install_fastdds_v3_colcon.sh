@@ -48,8 +48,8 @@ if ! dpkg -l | grep -qw openjdk-11-jre || ! dpkg -l | grep -qw openjdk-11-jdk; t
   sudo apt-get install -y openjdk-11-jre openjdk-11-jdk
 fi
 
-# SWIG 4.1 is recommended (avoid 4.2+ unless you have patches)
-sudo apt-get install -y swig4.1 || true
+# SWIG 4.* is recommended (avoid 4.2+ unless you have patches)
+sudo apt-get install -y swig4.* || true
 
 need git
 need curl
