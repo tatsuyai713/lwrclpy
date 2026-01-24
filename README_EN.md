@@ -69,7 +69,6 @@ lwrclpy reimplements the "rclpy" API (ROS 2's Python client library) on top of F
 |----|---------|--------|--------|
 | **Ubuntu** | 24.04 LTS | 3.12 | ✅ Full support |
 | **macOS** | Sonoma 14+ | 3.11 | ✅ Full support (Apple Silicon) |
-| **macOS** | Sonoma 14+ | 3.11 | ✅ Full support (Intel) |
 
 ---
 
