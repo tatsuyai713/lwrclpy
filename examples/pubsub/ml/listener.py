@@ -3,7 +3,7 @@ import rclpy
 from std_msgs.msg import String
 
 def on_msg(msg: String):
-    print("[recv]", msg.data())
+    print("[recv]", msg.data)
 
 def main():
     rclpy.init()

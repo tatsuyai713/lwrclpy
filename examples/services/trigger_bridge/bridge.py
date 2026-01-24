@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Service + client in one process to show round-trip using new API."""
+import time
 import rclpy
 from std_srvs.srv import Trigger
 
@@ -15,6 +16,9 @@ def main():
 
     srv = node.create_service(Trigger, "ping", on_trigger)
     client = node.create_client(Trigger, "ping")
+    
+    # Wait for DDS discovery (in-process should be fast but still needed)
+    time.sleep(0.5)
     client.wait_for_service()
 
     req = Trigger.Request()

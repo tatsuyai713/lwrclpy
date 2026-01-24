@@ -2,13 +2,21 @@
 # Zero-copy–friendly DataWriter wrapper for Fast DDS v3.
 # - Prefer DDS internal zero-copy (DataSharing) where available.
 # - Keep compatibility with QoSProfile mapping.
+# - Support loan_message() for true zero-copy publishing.
 
 from __future__ import annotations
+from contextlib import contextmanager
 import fastdds  # type: ignore
 import os
+from typing import Optional, TypeVar, Generic, TYPE_CHECKING
 from .qos import QoSProfile
 from .message_utils import clone_message
 from .duration import Duration
+
+if TYPE_CHECKING:
+    from typing import Type
+
+T = TypeVar('T')
 
 
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> None:
@@ -28,6 +36,37 @@ def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> None:
         pass
 
 
+class LoanedMessage(Generic[T]):
+    """Context manager for loaned messages enabling zero-copy publishing.
+    
+    Usage:
+        with publisher.loan_message() as msg:
+            msg.data = "Hello"
+        # Message is automatically published when exiting the context
+    """
+    
+    __slots__ = ("_publisher", "_msg", "_published")
+    
+    def __init__(self, publisher: "Publisher", msg: T):
+        self._publisher = publisher
+        self._msg = msg
+        self._published = False
+    
+    @property
+    def msg(self) -> T:
+        """Access the loaned message."""
+        return self._msg
+    
+    def __enter__(self) -> T:
+        return self._msg
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self._published and exc_type is None:
+            self._publisher._publish_loaned(self._msg)
+            self._published = True
+        return False
+
+
 class Publisher:
     """Publisher managing Publisher/DataWriter with zero-copy friendly QoS."""
 
@@ -36,6 +75,7 @@ class Publisher:
         self._topic = topic
         self._msg_ctor = msg_ctor
         self._destroyed = False
+        self._publish_count = 0
 
         # Create Publisher
         pub_qos = fastdds.PublisherQos()
@@ -66,6 +106,70 @@ class Publisher:
         except Exception:
             to_send = msg  # fall back to original on failure
         self._writer.write(to_send)
+        self._publish_count += 1
+
+    def loan_message(self) -> LoanedMessage:
+        """Loan a message from the middleware for zero-copy publishing.
+        
+        Returns a LoanedMessage context manager. The message is published
+        automatically when exiting the context (unless an exception occurred).
+        
+        Note: Fast DDS loan support depends on the data type and QoS settings.
+        If loaning fails, a regular message instance is created instead.
+        """
+        if self._msg_ctor is None:
+            raise RuntimeError("Cannot loan message: message constructor not available")
+        
+        # Try to use Fast DDS loan API if available
+        loaned_msg = None
+        try:
+            if hasattr(self._writer, "loan_sample"):
+                loaned_msg = self._writer.loan_sample()
+        except Exception:
+            pass
+        
+        # Fall back to creating a regular message if loaning not supported
+        if loaned_msg is None:
+            loaned_msg = self._msg_ctor()
+        
+        return LoanedMessage(self, loaned_msg)
+
+    def _publish_loaned(self, msg) -> None:
+        """Publish a loaned message. Called by LoanedMessage context manager."""
+        try:
+            # Try to use discard_loan if available (for true loaned messages)
+            if hasattr(self._writer, "write_loaned"):
+                self._writer.write_loaned(msg)
+            else:
+                self._writer.write(msg)
+        except Exception:
+            # Fallback to regular write
+            self._writer.write(msg)
+        self._publish_count += 1
+
+    def get_subscription_count(self) -> int:
+        """Return the number of subscriptions matched to this publisher."""
+        try:
+            if hasattr(self._writer, "get_matched_subscriptions"):
+                matches = self._writer.get_matched_subscriptions()
+                return len(matches) if hasattr(matches, "__len__") else 0
+            # Alternative API
+            if hasattr(self._writer, "get_publication_matched_status"):
+                status = self._writer.get_publication_matched_status()
+                return getattr(status, "current_count", 0)
+        except Exception:
+            pass
+        return 0
+
+    def assert_liveliness(self) -> bool:
+        """Manually assert liveliness (for MANUAL_BY_TOPIC liveliness policy)."""
+        try:
+            if hasattr(self._writer, "assert_liveliness"):
+                self._writer.assert_liveliness()
+                return True
+        except Exception:
+            pass
+        return False
 
     def wait_for_all_acked(self, timeout: Duration | float | int | None = None) -> bool:
         """Block until all samples are acknowledged or timeout occurs."""

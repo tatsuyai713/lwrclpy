@@ -10,6 +10,9 @@ def main():
     rclpy.init()
     node = rclpy.Node("set_bool_client")
     client = node.create_client(SetBool, "set_flag")
+    
+    # Wait for DDS discovery
+    time.sleep(1.0)
     client.wait_for_service()
     req = SetBool.Request()
 

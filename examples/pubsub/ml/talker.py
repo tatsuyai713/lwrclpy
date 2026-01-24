@@ -17,7 +17,7 @@ def main():
     for i in range(10):
         y = (x @ w).relu().mean().item()
         msg = String()
-        msg.data(f"[step {i}] score={y:.4f}")
+        msg.data = f"[step {i}] score={y:.4f}"
         pub.publish(msg)
         time.sleep(0.5)
 

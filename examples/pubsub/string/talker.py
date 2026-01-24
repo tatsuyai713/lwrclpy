@@ -15,9 +15,9 @@ def main():
 
     try:
         while rclpy.ok():
-            msg.data(f"hello {i}")
+            msg.data = f"hello {i}"
             pub.publish(msg)
-            print(f"[send] {msg.data()}")
+            print(f"[send] {msg.data}")
             i += 1
             rate.sleep()
     finally:

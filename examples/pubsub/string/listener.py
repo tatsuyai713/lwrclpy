@@ -3,7 +3,7 @@ import rclpy
 from std_msgs.msg import String
 
 def callback(msg: String):
-    print(f"[recv] {msg.data()}")
+    print(f"[recv] {msg.data}")
 
 def main():
     rclpy.init()

@@ -114,6 +114,11 @@ VEN_FASTDDS_DIR="${VEN_FASTDDS_PARENT}/fastdds"
 mkdir -p "${VEN_FASTDDS_PARENT}"
 rsync -a "${FASTDDS_PKG_SRC}/" "${VEN_FASTDDS_DIR}/"
 
+# Also copy fastdds to site-packages root so std_msgs etc can import it directly
+echo "[INFO] Copying fastdds to site-packages root for direct import"
+FASTDDS_ROOT_DIR="${STAGING_ROOT}/fastdds"
+rsync -a "${FASTDDS_PKG_SRC}/" "${FASTDDS_ROOT_DIR}/"
+
 echo "[INFO] Writing bootstrap loader"
 LWRCLPY_INIT="${STAGING_ROOT}/lwrclpy/__init__.py"
 [[ -f "${LWRCLPY_INIT}" ]] || echo "# auto-generated" > "${LWRCLPY_INIT}"

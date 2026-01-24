@@ -1,6 +1,8 @@
 import logging
+import threading
 import time
-from typing import Optional
+from collections import deque
+from typing import Optional, List, Any
 
 from .context import get_participant
 from .parameters import Parameter, ParameterType, SetParametersResult, coerce_parameter
@@ -105,7 +107,7 @@ class Node:
         *,
         allow_undeclared_parameters: bool = True,
         automatically_declare_parameters_from_overrides: bool = False,
-        parameters: Optional[list[Parameter]] = None,
+        parameters: Optional[List[Parameter]] = None,
     ):
         self._name = name
         self._namespace = namespace if namespace.startswith("/") or namespace == "" else "/" + namespace
@@ -114,18 +116,22 @@ class Node:
         self._participant = get_participant()
         self._logger = _NodeLogger(self.get_fully_qualified_name())
         self._topics: dict[str, tuple[object, bool]] = {}  # resolved name -> (Topic, owned)
-        self._publishers = []
-        self._subscriptions = []
-        self._clients = []
-        self._services = []
-        self._timers = []
-        self._guard_conditions = []
-        self._callback_queue = []
+        self._publishers: List[Publisher] = []
+        self._subscriptions: List[Subscription] = []
+        self._clients: List[Client] = []
+        self._services: List[Service] = []
+        self._timers: List[Any] = []
+        self._guard_conditions: List[GuardCondition] = []
+        self._callback_queue: deque = deque()
+        self._callback_lock = threading.Lock()
         self._type_cache = {}  # key: message classの完全修飾名 / module名
         self._parameters: dict[str, Parameter] = {}
+        self._parameters_lock = threading.Lock()
         self._allow_undeclared_parameters = allow_undeclared_parameters
         self._auto_declare_from_overrides = automatically_declare_parameters_from_overrides
         self._clock = Clock()
+        self._default_callback_group = None
+        self._callback_groups: List[Any] = []
 
         if parameters:
             self.declare_parameters("", [(p.name, p.value) if isinstance(p, Parameter) else p for p in parameters])
@@ -171,11 +177,12 @@ class Node:
 
     def declare_parameter(self, name: str, value=None):
         """Store a parameter locally (best-effort rclpy compatibility)."""
-        if name in self._parameters:
-            return self._parameters[name]
-        param = Parameter(name, value)
-        self._parameters[name] = param
-        return param
+        with self._parameters_lock:
+            if name in self._parameters:
+                return self._parameters[name]
+            param = Parameter(name, value)
+            self._parameters[name] = param
+            return param
 
     def declare_parameters(self, namespace: str, parameters):
         """Bulk declare with optional namespace prefix."""
@@ -190,31 +197,34 @@ class Node:
         return declared
 
     def has_parameter(self, name: str) -> bool:
-        return name in self._parameters
+        with self._parameters_lock:
+            return name in self._parameters
 
     def get_parameter(self, name: str) -> Parameter:
-        if name in self._parameters:
-            return self._parameters[name]
+        with self._parameters_lock:
+            if name in self._parameters:
+                return self._parameters[name]
         if self._allow_undeclared_parameters:
             return Parameter(name, ParameterType.NOT_SET)
         raise KeyError(f"Parameter '{name}' is not declared")
 
-    def get_parameters(self, names) -> list[Parameter]:
+    def get_parameters(self, names) -> List[Parameter]:
         return [self.get_parameter(n) for n in names]
 
-    def set_parameters(self, parameters) -> list[SetParametersResult]:
+    def set_parameters(self, parameters) -> List[SetParametersResult]:
         """Set parameters from Parameter objects or (name, value) tuples."""
         results = []
-        for p in parameters:
-            param = coerce_parameter(p)
-            if param.name not in self._parameters:
-                if self._auto_declare_from_overrides or self._allow_undeclared_parameters:
-                    self._parameters[param.name] = Parameter(param.name, param.value)
-                else:
-                    results.append(SetParametersResult(False, f"Parameter '{param.name}' not declared"))
-                    continue
-            self._parameters[param.name] = param
-            results.append(SetParametersResult(True, ""))
+        with self._parameters_lock:
+            for p in parameters:
+                param = coerce_parameter(p)
+                if param.name not in self._parameters:
+                    if self._auto_declare_from_overrides or self._allow_undeclared_parameters:
+                        self._parameters[param.name] = Parameter(param.name, param.value)
+                    else:
+                        results.append(SetParametersResult(False, f"Parameter '{param.name}' not declared"))
+                        continue
+                self._parameters[param.name] = param
+                results.append(SetParametersResult(True, ""))
         return results
 
     def set_parameters_atomically(self, parameters) -> SetParametersResult:
@@ -377,24 +387,28 @@ class Node:
             return existing
         return get_or_create_topic(self._participant, name, type_name)
 
-    # ---- executor enqueue/dequeue -----------------------------------
+    # ---- executor enqueue/dequeue (thread-safe) -----------------------------------
     def _enqueue_callback(self, cb, msg):
-        self._callback_queue.append((cb, msg))
+        with self._callback_lock:
+            self._callback_queue.append((cb, msg))
 
     def _drain_callbacks(self):
-        queue = self._callback_queue
-        self._callback_queue = []
+        with self._callback_lock:
+            queue = list(self._callback_queue)
+            self._callback_queue.clear()
         return queue
 
     def _pop_callback(self):
-        if not self._callback_queue:
-            return None
-        return self._callback_queue.pop(0)
+        with self._callback_lock:
+            if not self._callback_queue:
+                return None
+            return self._callback_queue.popleft()
 
     def _has_pending_work(self) -> bool:
         """Internal: check if callbacks are queued or timers are still active."""
-        if self._callback_queue:
-            return True
+        with self._callback_lock:
+            if self._callback_queue:
+                return True
         for t in self._timers:
             try:
                 if not t.is_canceled():

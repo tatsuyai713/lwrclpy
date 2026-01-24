@@ -9,8 +9,26 @@ from lwrclpy import (
     ParameterType,
     SetParametersResult,
     shutdown as _core_shutdown,  # Use lwrclpy.shutdown (with force_exit)
+    Future,
+    Clock,
+    ClockType,
+    Time,
+    Timer,
 )
-from lwrclpy.context import init as _core_init, ok as _core_ok
+from lwrclpy.context import init as _core_init, ok as _core_ok, get_domain_id, Context
+
+
+class _DefaultContext:
+    """Wrapper for default context that provides rclpy-compatible interface."""
+    
+    def ok(self) -> bool:
+        return _core_ok()
+    
+    def get_domain_id(self) -> int:
+        return get_domain_id()
+
+
+_default_context = _DefaultContext()
 
 from .executors import (
     spin,
@@ -25,6 +43,7 @@ from .executors import (
 from .duration import Duration
 from . import logging
 from . import qos
+from .callback_groups import CallbackGroup, MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 
 
 class _InitContext:
@@ -36,9 +55,16 @@ class _InitContext:
         return False
 
 
-def init(*, args=None, context=None):
+def init(*, args=None, context=None, domain_id=None):
+    """Initialize rclpy.
+    
+    Args:
+        args: Command line arguments (ignored)
+        context: Context (ignored, for compatibility)
+        domain_id: Optional domain ID override
+    """
     del context  # compatibility placeholder
-    _core_init(args=args)
+    _core_init(args=args, domain_id=domain_id)
     return _InitContext()
 
 
@@ -56,6 +82,11 @@ def create_node(name: str, **kwargs) -> Node:
 
 def create_rate(hz: float) -> Rate:
     return _create_rate_impl(hz)
+
+
+def get_default_context():
+    """Return the default context wrapper."""
+    return _default_context
 
 
 __all__ = [
@@ -80,4 +111,14 @@ __all__ = [
     "Duration",
     "logging",
     "qos",
+    "Future",
+    "Clock",
+    "ClockType",
+    "Time",
+    "Timer",
+    "CallbackGroup",
+    "MutuallyExclusiveCallbackGroup",
+    "ReentrantCallbackGroup",
+    "get_default_context",
+    "get_domain_id",
 ]
