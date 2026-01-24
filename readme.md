@@ -69,7 +69,6 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 |----|-----------|--------|------|
 | **Ubuntu** | 24.04 LTS | 3.12 | ✅ 完全対応 |
 | **macOS** | Sonoma 14+ | 3.11 | ✅ 完全対応（Apple Silicon） |
-| **macOS** | Sonoma 14+ | 3.11 | ✅ 完全対応（Intel） |
 
 ---
 
