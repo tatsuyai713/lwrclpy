@@ -1,4 +1,4 @@
-# lwrclpy  (Fast DDS V3)
+# lwrclpy — rclpy-Compatible API Without ROS 2 (Fast DDS v3)
 
 [![CI](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/ci.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/ci.yml)
 [![Test Ubuntu](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/test-ubuntu.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/test-ubuntu.yml)
@@ -6,514 +6,449 @@
 [![Build Ubuntu](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/build-ubuntu.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/build-ubuntu.yml)
 [![Build macOS](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/build-macos.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy-for-FastDDSv3/actions/workflows/build-macos.yml)
 
-**lwrclpy** is an rclpy-compatible Python library built directly on Fast DDS v3. It ships ROS-like APIs (`Node`, `QoS`, `publisher`, `subscription`, `spin`) without ROS 2 distro/ABI constraints. Message fields can be set with ROS 2–style setters (`msg.data("hi")`) or plain attributes (`msg.data = "hi"`); lwrclpy clones messages on publish/receive so both styles work.
+[English](README_EN.md)
 
-> ✅ **Now tested end-to-end on macOS Sonoma (Apple Silicon)** — full Fast DDS v3 toolchain, ROS DataTypes generation, and packaged wheels are available via the scripts under `scripts/mac/`. Linux (Ubuntu) instructions remain unchanged.
-
-> Tested on Ubuntu 24.04 with Python 3.12.
+**lwrclpy**（Lightweight rclpy）は、Fast DDS v3上に直接構築したrclpy互換のPythonライブラリです。ROS 2をインストールせずに、rclpyと同じAPIでロボットアプリケーションを開発できます。
 
 ---
 
-## Contents
+## 🎯 lwrclpyとは？
 
-1. [Quickstart (prebuilt wheel)](#quickstart-prebuilt-wheel)
-2. [Full build & package from this repo](#full-build--package-from-this-repo)
-3. [Examples](#examples)
-4. [Testing](#testing)
-5. [Continuous Integration](#continuous-integration)
-6. [ROS 2 interoperability](#ros-2-interoperability)
-7. [Troubleshooting](#troubleshooting)
-8. [License](#license)
+lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを、Fast DDS v3上で再実装したライブラリです。ROS 2の複雑なビルドシステムや依存関係を避けながら、馴染みのあるrclpy APIをそのまま使用できます。
+
+### 💡 こんな時に便利
+
+- **macOSでROS 2アプリを開発したい** — ROS 2はmacOSを公式サポートしていません
+- **ROS 2のフルインストールを避けたい** — 単一のpipパッケージで完結
+- **既存のrclpyコードを移植したい** — API互換なのでコード変更最小限
+- **軽量な環境でロボット通信したい** — 必要なのはPythonとFast DDSだけ
+- **ROS 2ノードと相互通信したい** — 同じDDS/RTPSネットワークで動作
 
 ---
 
-## Quickstart (prebuilt wheel)
+## 📊 rclpyとの比較
 
-If you already have a wheel in `dist/` (e.g., `dist/lwrclpy-0.1.0-*.whl`), you can run the samples with no extra environment variables.
+### 機能比較表
+
+| 機能 | lwrclpy | rclpy (ROS 2) | 備考 |
+|------|---------|---------------|------|
+| **インストール** | `pip install` のみ | ROS 2フルインストール必要 | lwrclpyは依存関係が少ない |
+| **macOSサポート** | ✅ 完全対応 | ⚠️ 非公式/困難 | lwrclpyはApple Silicon対応 |
+| **Ubuntu/Linuxサポート** | ✅ 完全対応 | ✅ 完全対応 | 両方問題なし |
+| **Windowsサポート** | 🚧 開発中 | ✅ 対応 | - |
+| **ROS 2との相互運用** | ✅ DDS経由で通信可能 | - | 同じドメインIDで接続 |
+| **Publisher/Subscriber** | ✅ | ✅ | 完全互換 |
+| **Service Server/Client** | ✅ | ✅ | 完全互換 |
+| **Action Server/Client** | ✅ | ✅ | 完全互換 |
+| **Timer** | ✅ | ✅ | OneShot/Periodic対応 |
+| **Parameters** | ✅ | ✅ | 基本機能対応 |
+| **Executor** | ✅ | ✅ | Single/MultiThreaded対応 |
+| **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
+| **Guard Conditions** | ✅ | ✅ | スレッド間同期 |
+| **QoS Profiles** | ✅ | ✅ | 全ポリシー対応 |
+| **ゼロコピー通信** | ✅ DataSharing/SHM | ✅ | `loan_message()` 対応 |
+| **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time対応 |
+| **Logging** | ✅ | ✅ | レベル/スロットリング対応 |
+| **Context/Domain ID** | ✅ | ✅ | 複数コンテキスト対応 |
+| **Lifecycle Nodes** | ❌ 未対応 | ✅ | 将来対応予定 |
+| **Component Nodes** | ❌ 未対応 | ✅ | 将来対応予定 |
+| **ros2 CLI** | ❌ 不要 | ✅ | lwrclpyはCLI不要 |
+
+### パフォーマンス特性
+
+| 項目 | lwrclpy | rclpy | 備考 |
+|------|---------|-------|------|
+| **起動時間** | ⚡ 高速 | 🐢 やや遅い | ROS 2ミドルウェア層がない |
+| **メモリ使用量** | 📉 少ない | 📈 多い | 最小限の依存関係 |
+| **ゼロコピー** | ✅ Fast DDS DataSharing | ✅ rmw経由 | 大型メッセージで効果大 |
+| **レイテンシ** | ⚡ 低い | ⚡ 低い | 同等（同じDDS基盤） |
+
+### 動作確認済み環境
+
+| OS | バージョン | Python | 状態 |
+|----|-----------|--------|------|
+| **Ubuntu** | 24.04 LTS | 3.12 | ✅ 完全対応 |
+| **macOS** | Sonoma 14+ | 3.11 | ✅ 完全対応（Apple Silicon） |
+| **macOS** | Sonoma 14+ | 3.11 | ✅ 完全対応（Intel） |
+
+---
+
+## 📦 クイックスタート
+
+### 事前ビルド済みホイールがある場合
 
 ```bash
-# 1) Create & activate a venv (recommended)
+# 1) venvを作成して有効化（推奨）
 python3 -m venv venv
 source venv/bin/activate
-pip install setuptools
-
-# 2) Install the wheel
-pip install dist/lwrclpy-*.whl
-
-# 3) Run the basic pub/sub example (two terminals)
-# Terminal A (listener)
-python3 examples/pubsub/string/listener.py
-# Terminal B (talker)
-python3 examples/pubsub/string/talker.py
-```
-
-Quick sanity check after install:
-
-```bash
-python3 - <<'PY'
-import os, lwrclpy
-root = os.path.dirname(lwrclpy.__file__)
-print("lwrclpy root:", root)
-print("vendored fastdds present:",
-      os.path.exists(os.path.join(root, "_vendor", "fastdds", "_fastdds_python.so")))
-PY
-```
-
----
-
-## Full build & package from this repo
-
-This path installs Fast DDS v3, generates ROS DataTypes, and builds a self-contained wheel using the provided scripts. Result: a wheel like `dist/lwrclpy-<version>-*.whl` that you can pip-install in any venv.
-
-### 0) Fetch submodules
-```bash
-git submodule update --init --recursive
-```
-
-### 1) Install Fast DDS v3 toolchain
-Installs Fast DDS v3, fastddsgen, and Python bindings under `/opt/fast-dds-v3` and `/opt/fast-dds-gen-v3`.
-```bash
-bash scripts/install_fastdds_v3_colcon.sh
-```
-Sanity checks:
-```bash
-which fastddsgen && fastddsgen -version
-python3 -c "import fastdds; print('fastdds OK')"
-```
-
-### 2) Generate and install ROS DataTypes
-Generates all message/service/action bindings, applies SWIG patches, builds, stages as ROS-like packages, and exports env vars.
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install setuptools
-bash scripts/install_ros_data_types.sh
-```
-Notes:
-- A new shell will have the required env vars via `~/.bashrc`.  
-- If you need manual export, see the script output for `PYTHONPATH` / `LD_LIBRARY_PATH` snippets.
-- The script also injects ROS 2-style service aliases (e.g., `SetBool.Request`) into the generated Python packages so rclpy code runs unchanged.
-
-### 3) Build the self-contained wheel (inside a venv)
-This packages lwrclpy + vendored Fast DDS runtime + generated Python types from `._types_python_build_v3/src`.
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install setuptools
-bash scripts/make_pip_package_with_runtime.sh
-```
-Artifacts:
-- `dist/lwrclpy-<version>-*.whl` (runtime-bundled wheel)
-
-### 4) Install and test the new wheel
-```bash
-pip install dist/lwrclpy-*.whl
-python3 examples/pubsub/string/listener.py   # Terminal A
-python3 examples/pubsub/string/talker.py     # Terminal B
-```
-
-### macOS manual build (Homebrew + scripts)
-
-Use the macOS helpers under `scripts/mac/` to mirror the full Ubuntu build flow on Apple hardware. The scripts install Fast DDS v3, fastddsgen, ROS DataTypes, and optionally produce a runtime-bundled wheel:
-
-1. Install Homebrew (if needed), add it to your shell, and refresh the Apple toolchain:
-   ```bash
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   eval "$(/opt/homebrew/bin/brew shellenv)"
-   ```
-2. Install Xcode CLT and the required dependencies:
-   ```bash
-   xcode-select --install   # execute once
-   brew install cmake ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 python@3.11
-   ```
-3. Build Fast DDS v3, fastddsgen, and the Python bindings:
-   ```bash
-   bash scripts/mac/mac_install_fastdds_v3_colcon.sh
-   ```
-4. Generate and install the ROS DataTypes:
-   ```bash
-   bash scripts/mac/mac_install_ros_data_types.sh
-   ```
-5. (Optional) Inside a venv, build the runtime-bundled wheel and install it:
-   ```bash
-   python3 -m venv venv && source venv/bin/activate
-   bash scripts/mac/mac_make_pip_package_with_runtime.sh
-   pip install dist/lwrclpy-*-macosx*.whl
-   ```
-6. Sanity check that `lwrclpy` and `std_msgs` import successfully:
-   ```bash
-   python3 - <<'PY'
-   import lwrclpy, os
-   print("lwrclpy:", lwrclpy.__file__)
-   from std_msgs.msg import String
-   print("std_msgs OK:", String)
-   PY
-   ```
-
-The scripts export the same `PYTHONPATH` / `DYLD_LIBRARY_PATH` contents as the Ubuntu flow, so the remaining samples and troubleshooting guidance apply unchanged.
-
-The repository now ships a drop-in `rclpy` shim, so you can launch the official ROS 2 samples without edits. From this repo’s root:
-
-```bash
-# Minimal publisher from the official ros2/examples repo (already cloned under third_party/)
-python3 third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_member_function.py
-# In another terminal, start the matching subscriber
-python3 third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_member_function.py
-```
-
----
-
-## Examples
-
-- Basic pub/sub (string): `examples/pubsub/string/{listener.py,talker.py}`
-- Executors: `examples/executor/{single_node_spin.py,multithreaded_spin.py}`
-- Timers/parameters/services: see `examples/timers/`, `examples/parameters/`, `examples/services/`.
-- Actions: `examples/actions/{fibonacci_action_server.py,fibonacci_action_client.py}` demonstrates the bundled action server/client.
-- Guard conditions: `examples/guard_condition/trigger_guard_condition.py` demonstrates `Node.create_guard_condition`.
-- ML demo with PyTorch: `examples/pubsub/ml/` (requires your ML deps).
-
-> **Note:** On macOS the listener/talker processes may take several extra seconds to reach the running state, so wait for their initial output before assuming the launch failed.
-
-For parity testing you can also run the unmodified ROS 2 rclpy samples mirrored in `third_party/ros2_examples/rclpy/…` thanks to the bundled compatibility shim. Service aliases (e.g., `SetBool.Request`) are auto-generated when you run `scripts/install_ros_data_types.sh`, so plain `from std_msgs.srv import SetBool` works exactly like upstream ROS 2.
-
-Example action round-trip with the bundled demos (two shells):
-
-```bash
-# Terminal A
-python3 examples/actions/fibonacci_action_server.py
-
-# Terminal B
-python3 examples/actions/fibonacci_action_client.py
-```
-
----
-
-## Testing
-
-Comprehensive test suites are available for both macOS and Ubuntu to verify all examples work correctly:
-
-### Running Tests Locally
-
-**macOS:**
-```bash
-source ~/venv/bin/activate
-python3 test/test_examples_mac.py
-```
-
-**Ubuntu:**
-```bash
-source ~/venv/bin/activate
-python3 test/test_examples_ubuntu.py
-```
-
-### Test Coverage
-
-The test suites validate:
-- Basic lwrclpy imports and initialization
-- Node creation and message publishing
-- Publisher/Subscriber examples
-- Timer examples (wall_timer, oneshot_and_periodic)
-- Parameter handling
-- Executor examples (single/multi-threaded)
-- Guard conditions
-- Service examples (SetBool, Trigger)
-- Action examples (Fibonacci)
-
-All tests should pass with 100% success rate. See `test/README.md` for detailed documentation.
-
----
-
-## Continuous Integration
-
-This project uses GitHub Actions for automated testing and building:
-
-### CI Workflows
-
-- **CI** (`.github/workflows/ci.yml`)
-  - Main orchestrator workflow that triggers all build and test jobs
-  - Runs on push to main branch and pull requests
-
-- **Build Ubuntu Wheels** (`.github/workflows/build-ubuntu.yml`)
-  - Builds distribution wheels for Ubuntu 24.04
-  - Python version: 3.12
-  - Uploads artifacts for testing and releases
-
-- **Build macOS Wheels** (`.github/workflows/build-macos.yml`)
-  - Builds distribution wheels for macOS 15 (Apple Silicon ARM64)
-  - Python version: 3.11
-  - Uploads artifacts for testing and releases
-
-- **Test Ubuntu** (`.github/workflows/test-ubuntu.yml`)
-  - Tests on Ubuntu 24.04 with Python 3.12
-  - Downloads and installs built wheel
-  - Runs full test suite including all examples
-
-- **Test macOS** (`.github/workflows/test-macos.yml`)
-  - Tests on macOS 15 (Apple Silicon ARM64) with Python 3.11
-  - Downloads and installs built wheel
-  - Validates all examples work correctly
-
-Each build rebuilds FastDDS v3 from scratch to ensure clean builds without cache dependencies.
-
-### Automated Releases
-
-When a version tag (e.g., `v0.1.1`) is pushed:
-1. All tests run automatically
-2. Wheels are built for all supported platforms/Python versions
-3. GitHub Release is created with wheel artifacts
-4. Download wheels directly from the Releases page
-
----
-
-## ROS 2 interoperability
-
-lwrclpy nodes participate in the same DDS/RTPS network as ROS 2 nodes.
-
-- **Domain**: match IDs. ROS 2 uses `ROS_DOMAIN_ID`; lwrclpy uses `LWRCL_DOMAIN_ID`.
-  ```bash
-  export ROS_DOMAIN_ID=0
-  export LWRCL_DOMAIN_ID=0
-  ```
-- **Topic names/types**: must match (e.g., `std_msgs/String` on `chatter`).
-- **QoS**: align history depth, reliability, durability (defaults mirror common ROS 2 settings).
-- **Discovery**: ensure UDP/RTPS ports (7400+ range) aren’t blocked at startup.
-
-Example (ROS 2 listener ↔ lwrclpy talker):
-- Terminal A (ROS 2): `ros2 run demo_nodes_cpp listener`
-- Terminal B (lwrclpy): `python3 examples/pubsub/string/talker.py`
-
-Reverse direction works the same (ROS 2 talker → lwrclpy listener).
-
----
-
-## Troubleshooting
-
-- `ModuleNotFoundError: std_msgs`  
-  Use the runtime-bundled wheel or run `bash scripts/install_ros_data_types.sh`.
-
-- `ImportError: libXxx.so` (source builds)  
-  Ensure `/opt/fast-dds-v3-libs/lib` and collected `lib*.so` paths from the script are on `LD_LIBRARY_PATH`.
-
-- QoS enum differences / ReturnCode_t  
-  Fast DDS v3 exposes return codes as module constants; `lwrclpy/qos.py` and code paths handle v3 safely.
-
-- Discovery/domain isolation  
-  Set `export LWRCL_DOMAIN_ID=<id>` on all lwrclpy processes (and `ROS_DOMAIN_ID` on ROS 2 if interop).
-
-- Zero-copy (SHM) check  
-  After discovery, data may use SHM. Inspect `/dev/shm/fastdds_*` and `lsof -p <PID> | grep /dev/shm`.
-
----
-
-## License
-
-- This repository: Apache-2.0  
-- Generated code includes eProsima Fast-DDS templates; follow their licenses where applicable.
-- rclpy-derived shims mirror the upstream Apache-2.0 license (see `rclpy/LICENSE` in this repo for attribution).
-
----
-
-# lwrclpy — ゼロから動かすためのガイド（Fast DDS v3）
-
-**lwrclpy** は Fast DDS v3 上に直接構築した rclpy 互換の Python ライブラリです。ROS 2 のディストリ/ABI 制約を避けながら、`Node` / `QoS` / `publisher` / `subscription` / `spin` といった ROS 風 API を提供します。メッセージフィールドは ROS 2 風のセッター（`msg.data("hi")`）でも属性代入（`msg.data = "hi"`）でも設定でき、publish/receive 時にクローンされるためどちらのスタイルも使えます。
-
-> ✅ **macOS Sonoma (Apple Silicon) 対応** — `scripts/mac/` 以下のスクリプトで Fast DDS v3 ツールチェーン、ROS DataTypes 生成、ランタイム同梱ホイールまで一通り動作確認済みです。Linux (Ubuntu) 向け手順はこれまで通りです。
-
-> Ubuntu 24.04 / Python 3.12 で動作確認済み。
-
----
-
-## 目次
-
-1. [クイックスタート（事前ビルド済みホイール）](#クイックスタート事前ビルド済みホイール)
-2. [このリポジトリからビルドしてパッケージ化](#このリポジトリからビルドしてパッケージ化)
-3. [サンプル](#サンプル)
-4. [ROS 2 との相互運用](#ros-2-との相互運用)
-5. [トラブルシューティング](#トラブルシューティング)
-6. [ライセンス](#ライセンス)
-
----
-
-## クイックスタート（事前ビルド済みホイール）
-
-`dist/` にホイール（例: `dist/lwrclpy-0.1.0-*.whl`）がある場合、追加の環境変数なしですぐ動かせます。
-
-```bash
-# 1) venv を作成して有効化（推奨）
-python3 -m venv venv
-source venv/bin/activate
-pip install setuptools
 
 # 2) ホイールをインストール
 pip install dist/lwrclpy-*.whl
 
-# 3) 基本的な pub/sub サンプルを実行（2 端末）
-# 端末 A（リスナー）
+# 3) サンプルを実行（2つのターミナルで）
+# ターミナルA（受信側）
 python3 examples/pubsub/string/listener.py
-# 端末 B（トーカー）
+
+# ターミナルB（送信側）
 python3 examples/pubsub/string/talker.py
 ```
 
-インストール後の簡易チェック:
+### インストール確認
 
 ```bash
-python3 - <<'PY'
-import os, lwrclpy
-root = os.path.dirname(lwrclpy.__file__)
-print("lwrclpy root:", root)
-print("vendored fastdds present:",
-      os.path.exists(os.path.join(root, "_vendor", "fastdds", "_fastdds_python.so")))
-PY
+python3 -c "
+import rclpy
+from std_msgs.msg import String
+
+rclpy.init()
+node = rclpy.create_node('test_node')
+print('✅ lwrclpy is working!')
+print(f'Node name: {node.get_name()}')
+node.destroy_node()
+rclpy.shutdown()
+"
 ```
 
 ---
-## このリポジトリからビルドしてパッケージ化
 
-Fast DDS v3 をインストールし、ROS DataTypes を生成した上で、ランタイム同梱ホイールを作ります。結果として `dist/lwrclpy-<version>-*.whl` が得られ、どの venv でも `pip install` できます。
+## 🔧 ビルド方法
 
-### 0) サブモジュール取得
+### Ubuntu
+
 ```bash
+# 1) サブモジュール取得
 git submodule update --init --recursive
-```
 
-### 1) Fast DDS v3 ツールチェーンをインストール
-Fast DDS v3 / fastddsgen / Python バインディングを `/opt/fast-dds-v3` と `/opt/fast-dds-gen-v3` に配置します。
-```bash
+# 2) Fast DDS v3ツールチェーンをインストール
 bash scripts/install_fastdds_v3_colcon.sh
-```
-動作確認:
-```bash
-which fastddsgen && fastddsgen -version
-python3 -c "import fastdds; print('fastdds OK')"
-```
 
-### 2) ROS DataTypes を生成・インストール
-全メッセージ/サービス/アクションを生成し、SWIG パッチを適用してビルド・配置、環境変数を設定します。
-```bash
+# 3) venv作成
 python3 -m venv venv
 source venv/bin/activate
 pip install setuptools
+
+# 4) ROS DataTypesを生成・インストール
 bash scripts/install_ros_data_types.sh
-```
-備考:
-- 新しいシェルでは `~/.bashrc` 経由で環境変数が適用されます。手動設定が必要ならスクリプト出力を参照してください。
-- 実行後には生成済み Python パッケージに ROS 2 互換のサービスラッパー（`SetBool.Request` など）が自動で追加されるため、オリジナルの rclpy コードをそのまま使用できます。
 
-### 3) ランタイム同梱ホイールをビルド（venv 内）
-`._types_python_build_v3/src` の生成物と Fast DDS ランタイムを同梱したホイールを作ります。
+# 5) ランタイム同梱ホイールをビルド
+bash scripts/make_pip_package_with_runtime.sh
+
+# 6) インストール
+pip install dist/lwrclpy-*.whl
+```
+
+### macOS (Apple Silicon / Intel)
+
 ```bash
+# 1) Homebrewで依存関係をインストール
+brew install cmake ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 python@3.11
+
+# 2) サブモジュール取得
+git submodule update --init --recursive
+
+# 3) Fast DDS v3をビルド
+bash scripts/mac/mac_install_fastdds_v3_colcon.sh
+
+# 4) venv作成
 python3 -m venv venv
 source venv/bin/activate
 pip install setuptools
-bash scripts/make_pip_package_with_runtime.sh
-```
-生成物:
-- `dist/lwrclpy-<version>-*.whl`
 
-### 4) 新しいホイールをインストールしてテスト
+# 5) ROS DataTypesを生成・インストール
+bash scripts/mac/mac_install_ros_data_types.sh
+
+# 6) ランタイム同梱ホイールをビルド
+bash scripts/mac/mac_make_pip_package_with_runtime.sh
+
+# 7) インストール
+pip install dist/lwrclpy-*-macosx*.whl
+```
+
+---
+
+## 📚 基本的な使い方
+
+### Publisher / Subscriber
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from std_msgs.msg import String
+
+# 初期化
+rclpy.init()
+node = rclpy.create_node('example_node')
+
+# Publisher作成
+pub = node.create_publisher(String, 'chatter', 10)
+
+# Subscriber作成
+def callback(msg):
+    print(f'受信: {msg.data}')
+
+sub = node.create_subscription(String, 'chatter', callback, 10)
+
+# メッセージ送信
+msg = String()
+msg.data = 'Hello, lwrclpy!'
+pub.publish(msg)
+
+# スピン（コールバック処理）
+rclpy.spin(node)
+
+# 終了処理
+node.destroy_node()
+rclpy.shutdown()
+```
+
+### Service Server / Client
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from std_srvs.srv import SetBool
+
+rclpy.init()
+node = rclpy.create_node('service_example')
+
+# サービスサーバー
+def handle_service(request, response):
+    response.success = request.data
+    response.message = 'OK' if request.data else 'NG'
+    return response
+
+server = node.create_service(SetBool, 'set_bool', handle_service)
+
+# サービスクライアント
+client = node.create_client(SetBool, 'set_bool')
+client.wait_for_service()
+
+request = SetBool.Request()
+request.data = True
+future = client.call_async(request)
+
+rclpy.spin_until_future_complete(node, future)
+print(f'結果: {future.result().message}')
+
+node.destroy_node()
+rclpy.shutdown()
+```
+
+### Timer
+
+```python
+#!/usr/bin/env python3
+import rclpy
+
+rclpy.init()
+node = rclpy.create_node('timer_example')
+
+count = 0
+
+def timer_callback():
+    global count
+    count += 1
+    print(f'タイマー発火: {count}回目')
+
+# 1秒周期のタイマー
+timer = node.create_timer(1.0, timer_callback)
+
+rclpy.spin(node)
+node.destroy_node()
+rclpy.shutdown()
+```
+
+### Action Server / Client
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.action import ActionClient
+from action_tutorials_interfaces.action import Fibonacci
+
+rclpy.init()
+node = rclpy.create_node('action_example')
+
+# Actionクライアント
+action_client = ActionClient(node, Fibonacci, 'fibonacci')
+action_client.wait_for_server()
+
+# Goal送信
+goal = Fibonacci.Goal()
+goal.order = 10
+
+future = action_client.send_goal_async(goal)
+rclpy.spin_until_future_complete(node, future)
+
+goal_handle = future.result()
+result_future = goal_handle.get_result_async()
+rclpy.spin_until_future_complete(node, result_future)
+
+print(f'結果: {result_future.result().result.sequence}')
+
+node.destroy_node()
+rclpy.shutdown()
+```
+
+---
+
+## 🚀 高度な機能
+
+### ゼロコピー通信（loan_message）
+
+大きなメッセージ（画像、点群など）を効率的に送信できます。
+
+```python
+# ゼロコピーでメッセージを送信
+with publisher.loan_message() as loaned_msg:
+    loaned_msg.data = large_data
+    # コンテキスト終了時に自動publish
+```
+
+### QoSプロファイル
+
+```python
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+
+# カスタムQoS
+qos = QoSProfile(
+    depth=10,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL
+)
+
+pub = node.create_publisher(String, 'topic', qos)
+```
+
+### マルチスレッドExecutor
+
+```python
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+
+# コールバックグループ
+group = MutuallyExclusiveCallbackGroup()
+
+# タイマーにグループを指定
+timer = node.create_timer(1.0, callback, callback_group=group)
+
+# マルチスレッド実行
+executor = MultiThreadedExecutor(num_threads=4)
+executor.add_node(node)
+executor.spin()
+```
+
+### Context と Domain ID
+
+```python
+from rclpy.context import Context
+
+# カスタムDomain IDでコンテキスト作成
+context = Context()
+rclpy.init(context=context, domain_id=42)
+
+node = rclpy.create_node('isolated_node', context=context)
+```
+
+---
+
+## 🔗 ROS 2との相互運用
+
+lwrclpyノードはROS 2ノードと同じDDS/RTPSネットワーク上で通信できます。
+
+### 設定
+
 ```bash
-pip install dist/lwrclpy-*.whl
-python3 examples/pubsub/string/listener.py   # 端末 A
-python3 examples/pubsub/string/talker.py     # 端末 B
+# Domain IDを一致させる
+export ROS_DOMAIN_ID=0      # ROS 2側
+export LWRCL_DOMAIN_ID=0    # lwrclpy側
 ```
 
-### macOS での手動ビルド（Homebrew + スクリプト）
+### 通信例
 
-`scripts/mac/` 以下のヘルパーを使えば、Ubuntu のフルビルド手順を macOS 上で同じように再現できます。Fast DDS v3、fastddsgen、ROS DataTypes、そして任意のランタイム同梱ホイールを順番に準備できます。
+```bash
+# ターミナルA: ROS 2 リスナー
+ros2 run demo_nodes_cpp listener
 
-1. Homebrew をインストールし、シェルにパスを通します（必要なら再実行）:
-   ```bash
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   eval "$(/opt/homebrew/bin/brew shellenv)"
-   ```
-2. Xcode CLT とビルド依存を揃えます:
-   ```bash
-   xcode-select --install   # 初回のみ
-   brew install cmake ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 python@3.11
-   ```
-3. Fast DDS v3、fastddsgen、Python バインディングをビルドします:
-   ```bash
-   bash scripts/mac/mac_install_fastdds_v3_colcon.sh
-   ```
-4. ROS DataTypes を生成・インストールします:
-   ```bash
-   bash scripts/mac/mac_install_ros_data_types.sh
-   ```
-5. 必要に応じて venv から runtime-bundled ホイールを作成・インストールします:
-   ```bash
-   python3 -m venv venv && source venv/bin/activate
-   bash scripts/mac/mac_make_pip_package_with_runtime.sh
-   pip install dist/lwrclpy-*-macosx*.whl
-   ```
-6. `lwrclpy` と `std_msgs` がインポートできるか確認します:
-   ```bash
-   python3 - <<'PY'
-   import lwrclpy, os
-   print("lwrclpy:", lwrclpy.__file__)
-   from std_msgs.msg import String
-   print("std_msgs OK:", String)
-   PY
-   ```
+# ターミナルB: lwrclpy トーカー
+python3 examples/pubsub/string/talker.py
+```
 
-これらのスクリプトは Ubuntu と同じ `PYTHONPATH` / `DYLD_LIBRARY_PATH` をエクスポートするので、以降のサンプルやトラブルシュートもそのまま使えます。
+### 注意点
+
+- **トピック名/型**: 完全に一致させる必要があります
+- **QoS**: 互換性のある設定にする（特にReliability/Durability）
+- **Discovery時間**: DDSディスカバリには数秒かかることがあります
 
 ---
 
-## サンプル
+## 📖 サンプル一覧
 
-- 文字列 pub/sub: `examples/pubsub/string/{listener.py,talker.py}`
-- Executor: `examples/executor/{single_node_spin.py,multithreaded_spin.py}`
-- Timers / Parameters / Services: `examples/timers/`, `examples/parameters/`, `examples/services/`
-- PyTorch を用いた ML デモ: `examples/pubsub/ml/`（必要に応じて ML 依存を導入）
+詳細は [examples/README.md](examples/README.md) を参照してください。
 
-> **注意:** macOS ではリスナーやトーカーが起動後すぐに動作しないことがあり、状態が `RUNNING` になるまで数秒待ってから次の操作に移ってください。
-
-`third_party/ros2_examples/` に ROS 2 Jazzy ブランチの rclpy サンプルをそのまま配置しているため、`python3 third_party/ros2_examples/rclpy/...` のように実行すればオリジナルの rclpy コードをそのまま動かせます。`scripts/install_ros_data_types.sh` 実行時には Request/Response を束ねたサービスラッパー（`SetBool.Request` 等）が自動追加されるので、ROS 2 と同じ import で利用できます。
-
----
-
-## ROS 2 との相互運用
-
-同じ DDS/RTPS ネットワーク上で動作し、ROS 2 と pub/sub できます。
-
-- **ドメイン**: ID を一致させる。ROS 2 は `ROS_DOMAIN_ID`, lwrclpy は `LWRCL_DOMAIN_ID`。
-  ```bash
-  export ROS_DOMAIN_ID=0
-  export LWRCL_DOMAIN_ID=0
-  ```
-- **トピック名 / 型**: 一致させる（例: `std_msgs/String` の `chatter`）。
-- **QoS**: 履歴深さ、信頼性、永続性を合わせる（デフォルトは一般的な ROS 2 設定に近い）。
-- **ディスカバリ**: 起動時に UDP/RTPS ポート（7400 以降）をブロックしない。
-
-例（ROS 2 リスナー ↔ lwrclpy トーカー）:
-- 端末 A (ROS 2): `ros2 run demo_nodes_cpp listener`
-- 端末 B (lwrclpy): `python3 examples/pubsub/string/talker.py`
-
-逆方向（ROS 2 トーカー → lwrclpy リスナー）も同様です。
+| カテゴリ | サンプル | 説明 |
+|----------|---------|------|
+| **Pub/Sub** | `pubsub/string/` | 基本的な文字列メッセージ |
+| **Pub/Sub** | `pubsub/typed_messages/` | 各種ROS型メッセージ |
+| **Pub/Sub** | `pubsub/zero_copy/` | ゼロコピー通信 |
+| **Service** | `services/set_bool/` | SetBoolサービス |
+| **Service** | `services/trigger/` | Triggerサービス |
+| **Action** | `actions/` | Fibonacciアクション |
+| **Timer** | `timers/` | 周期/ワンショットタイマー |
+| **Executor** | `executor/` | Single/MultiThreaded |
+| **QoS** | `qos/` | 各種QoSプロファイル |
+| **Parameters** | `parameters/` | ノードパラメータ |
+| **Logging** | `logging/` | ログレベル設定 |
+| **Clock** | `clock/` | ROS Time/Sim Time |
+| **Context** | `context/` | Domain ID設定 |
+| **Guard Condition** | `guard_condition/` | スレッド間同期 |
 
 ---
 
-## トラブルシューティング
+## 🧪 テスト
 
-- `ModuleNotFoundError: std_msgs`  
-  ランタイム同梱ホイールを使うか、`bash scripts/install_ros_data_types.sh` を実行してください。
+```bash
+# Ubuntu
+python3 test/test_examples_ubuntu.py
 
-- `ImportError: libXxx.so`（ソースビルド時）  
-  `/opt/fast-dds-v3-libs/lib` とスクリプトで収集した `lib*.so` のパスが `LD_LIBRARY_PATH` に入っているか確認してください。
-
-- QoS enum / ReturnCode_t の差分  
-  Fast DDS v3 は return code をモジュール定数で提供します。`lwrclpy/qos.py` などで v3 に対応済みです。
-
-- ディスカバリ / ドメイン分離  
-  lwrclpy 側で `export LWRCL_DOMAIN_ID=<id>` を設定（ROS 2 と連携する場合は `ROS_DOMAIN_ID` も合わせる）。
-
-- ゼロコピー（SHM）確認  
-  ディスカバリ後に SHM を使う場合があります。`/dev/shm/fastdds_*` や `lsof -p <PID> | grep /dev/shm` を確認してください。
+# macOS
+python3 test/test_examples_mac.py
+```
 
 ---
 
-## ライセンス
+## 🐛 トラブルシューティング
 
-- 本リポジトリ: Apache-2.0  
-- 生成コードには eProsima Fast-DDS のテンプレートが含まれるため、該当箇所のライセンスにも従ってください。
-- rclpy 由来の互換レイヤーは Apache-2.0 ライセンスです（詳細は `rclpy/LICENSE` を参照）。
+### `ModuleNotFoundError: std_msgs`
+
+ランタイム同梱ホイールを使用するか、`bash scripts/install_ros_data_types.sh`を実行してください。
+
+### `ImportError: libXxx.so`（ソースビルド時）
+
+`LD_LIBRARY_PATH`に`/opt/fast-dds-v3-libs/lib`が含まれているか確認してください。
+
+### DDSディスカバリに失敗する
+
+- Domain IDが一致しているか確認
+- ファイアウォールでUDPポート7400以降がブロックされていないか確認
+- 同一ネットワーク上にいるか確認
+
+### macOSで起動が遅い
+
+macOSでは初回のDDSディスカバリに数秒かかることがあります。プロセス間通信の場合は、`time.sleep(1.0)`などで待機してください。
+
+---
+
+## 📄 ライセンス
+
+- 本リポジトリ: Apache-2.0
+- 生成コードにはeProsima Fast-DDSのテンプレートが含まれます
+- rclpy互換レイヤーはApache-2.0（詳細は`rclpy/LICENSE`参照）
+
+---
+
+## 🙏 謝辞
+
+- [eProsima Fast DDS](https://github.com/eProsima/Fast-DDS) - 高性能DDSミドルウェア
+- [ROS 2](https://ros.org/) - ロボット開発フレームワーク
+- [rclpy](https://github.com/ros2/rclpy) - 公式ROS 2 Pythonクライアントライブラリ

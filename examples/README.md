@@ -1,178 +1,200 @@
-# lwrclpy Examples
+# lwrclpy サンプル集
 
-This directory contains examples demonstrating various features of lwrclpy, a lightweight rclpy-compatible library using Fast DDS directly.
+このディレクトリには、lwrclpyの各機能を実演するサンプルコードが含まれています。
 
-## Directory Structure
+[English](README_EN.md)
+
+---
+
+## 📁 ディレクトリ構成
 
 ```
 examples/
-├── actions/              # Action server/client examples
+├── actions/              # Actionサーバー/クライアント
 │   ├── fibonacci_action_server.py
 │   ├── fibonacci_action_client.py
 │   └── advanced_action_client.py
-├── async/                # Asyncio integration with Future
+├── async/                # asyncio統合とFuture
 │   └── async_future_demo.py
-├── callback_groups/      # MutuallyExclusive/Reentrant callbacks
+├── callback_groups/      # MutuallyExclusive/Reentrantコールバック
 │   └── callback_groups_demo.py
-├── clock/                # Clock, Time, Duration usage
+├── clock/                # Clock, Time, Duration
 │   ├── clock_time_duration_demo.py
 │   └── sim_time_demo.py
-├── context/              # Context management and domain IDs
+├── context/              # Context管理とDomain ID
 │   └── context_demo.py
-├── duration/             # Duration arithmetic and comparisons
+├── duration/             # Duration演算と比較
 │   └── duration_demo.py
-├── executor/             # Single/MultiThreaded executors
+├── executor/             # Single/MultiThreaded Executor
 │   ├── single_threaded_demo.py
 │   ├── multithreaded_executor_demo.py
 │   └── multiple_nodes.py
-├── guard_condition/      # Guard condition triggers
+├── guard_condition/      # Guard Conditionトリガー
 │   ├── trigger_guard_condition.py
 │   └── guard_condition_advanced.py
-├── logging/              # Logging levels and patterns
+├── logging/              # ロギングレベルとパターン
 │   └── logging_demo.py
-├── node/                 # Comprehensive node usage
+├── node/                 # 包括的なノード使用例
 │   ├── comprehensive_node_demo.py
 │   └── class_based_node.py
-├── parameters/           # Node parameters
+├── parameters/           # ノードパラメータ
 │   ├── logger_and_params.py
 │   └── parameter_events.py
-├── pubsub/               # Publisher/Subscriber patterns
-│   ├── string/           # Basic string messaging
-│   ├── sensor_qos/       # Sensor-optimized QoS
-│   ├── ml/               # Machine learning integration
-│   ├── zero_copy/        # Zero-copy with loan_message
-│   ├── typed_messages/   # Geometry, sensor, nav messages
+├── pubsub/               # Publisher/Subscriberパターン
+│   ├── string/           # 基本的な文字列メッセージ
+│   ├── sensor_qos/       # センサー最適化QoS
+│   ├── ml/               # 機械学習統合
+│   ├── zero_copy/        # loan_messageによるゼロコピー
+│   ├── typed_messages/   # Geometry, Sensor, Navメッセージ
 │   ├── rate_publisher.py
 │   ├── multi_pubsub.py
 │   ├── smart_publisher.py
 │   └── message_info_demo.py
-├── qos/                  # QoS profiles and policies
+├── qos/                  # QoSプロファイルとポリシー
 │   ├── qos_profiles_demo.py
 │   ├── reliable_pubsub.py
 │   └── best_effort_pubsub.py
-├── services/             # Service server/client
+├── services/             # Serviceサーバー/クライアント
 │   ├── set_bool/
 │   ├── trigger/
 │   └── advanced_client.py
-├── timers/               # Timer features
+├── timers/               # Timer機能
 │   ├── wall_timer.py
 │   ├── oneshot_and_periodic.py
 │   └── timer_features_demo.py
-└── video/                # Video streaming examples
+└── video/                # ビデオストリーミング
 ```
 
-## Running Examples
+---
 
-All examples can be run directly with Python:
+## 🚀 サンプルの実行方法
+
+すべてのサンプルはPythonで直接実行できます：
 
 ```bash
 python examples/<category>/<example_name>.py
 ```
 
-## Feature Examples
+多くのサンプルは2つのターミナルで実行する必要があります（Publisher/Subscriber、Server/Clientなど）。
 
-### Core Features
+---
 
-| Feature | Example | Description |
-|---------|---------|-------------|
-| Basic Pub/Sub | `pubsub/string/` | Simple string message publishing and subscribing |
-| Typed Messages | `pubsub/typed_messages/` | Geometry, sensor, and navigation messages |
-| Rate Publishing | `pubsub/rate_publisher.py` | Fixed-frequency publishing with create_rate() |
-| Multi Pub/Sub | `pubsub/multi_pubsub.py` | Multiple publishers/subscribers in one node |
-| QoS Profiles | `qos/qos_profiles_demo.py` | All QoS profiles including deadline, lifespan, liveliness |
-| Reliable QoS | `qos/reliable_pubsub.py` | Reliable delivery with transient local durability |
-| Best Effort QoS | `qos/best_effort_pubsub.py` | Best effort for high-frequency data |
-| Zero-Copy | `pubsub/zero_copy/` | `loan_message()` for efficient large message publishing |
-| Services | `services/set_bool/` | Request-response service pattern |
-| Trigger Services | `services/trigger/` | Empty-request services for triggering actions |
-| Actions | `actions/` | Long-running tasks with feedback |
-| Parameters | `parameters/` | Node parameter declaration and access |
-| Guard Conditions | `guard_condition/` | Thread signaling and synchronization |
+## 📚 機能別サンプル一覧
 
-### Node Patterns
+### コア機能
 
-| Pattern | Example | Description |
-|---------|---------|-------------|
-| Comprehensive Node | `node/comprehensive_node_demo.py` | Full node feature demonstration |
-| Class-based Node | `node/class_based_node.py` | Recommended pattern for larger projects |
-| Multiple Nodes | `executor/multiple_nodes.py` | Running multiple nodes in one process |
+| 機能 | サンプル | 説明 |
+|------|---------|------|
+| 基本的なPub/Sub | `pubsub/string/` | シンプルな文字列メッセージの送受信 |
+| 型付きメッセージ | `pubsub/typed_messages/` | Geometry, Sensor, Navメッセージ |
+| レート制御Publishing | `pubsub/rate_publisher.py` | `create_rate()`による固定周波数送信 |
+| 複数Pub/Sub | `pubsub/multi_pubsub.py` | 1ノードで複数のPublisher/Subscriber |
+| QoSプロファイル | `qos/qos_profiles_demo.py` | Deadline, Lifespan, Liveliness含む全QoS |
+| Reliable QoS | `qos/reliable_pubsub.py` | Transient Local durabilityでの確実な配信 |
+| Best Effort QoS | `qos/best_effort_pubsub.py` | 高周波データ向けBest Effort |
+| ゼロコピー | `pubsub/zero_copy/` | 大きなメッセージの効率的な送信 |
+| Service | `services/set_bool/` | リクエスト-レスポンスパターン |
+| Trigger Service | `services/trigger/` | 空リクエストによるアクション起動 |
+| Action | `actions/` | フィードバック付き長時間実行タスク |
+| Parameter | `parameters/` | ノードパラメータの宣言とアクセス |
+| Guard Condition | `guard_condition/` | スレッド間シグナリングと同期 |
 
-### New/Enhanced Features
+### ノードパターン
 
-| Feature | Example | Description |
-|---------|---------|-------------|
-| Clock & Time | `clock/clock_time_duration_demo.py` | ROS Time, Sim Time, time arithmetic |
-| Simulated Time | `clock/sim_time_demo.py` | Time override for testing |
-| Duration | `duration/duration_demo.py` | Duration math and comparisons |
-| Async/Future | `async/async_future_demo.py` | asyncio integration with Future |
-| Logging | `logging/logging_demo.py` | Log levels, child loggers, throttling |
-| Callback Groups | `callback_groups/callback_groups_demo.py` | Mutual exclusion vs reentrant |
-| SingleThreadedExecutor | `executor/single_threaded_demo.py` | Basic executor usage |
-| MultiThreadedExecutor | `executor/multithreaded_executor_demo.py` | Multi-threaded execution |
-| Context | `context/context_demo.py` | Domain ID, multiple contexts |
-| Timer Features | `timers/timer_features_demo.py` | Drift compensation, call count |
-| Smart Publisher | `pubsub/smart_publisher.py` | Subscription count, liveliness |
-| MessageInfo | `pubsub/message_info_demo.py` | Message metadata access |
-| Advanced Client | `services/advanced_client.py` | Async service calls with timeout |
-| Advanced Action | `actions/advanced_action_client.py` | Action cancellation and multiple goals |
+| パターン | サンプル | 説明 |
+|----------|---------|------|
+| 包括的ノード | `node/comprehensive_node_demo.py` | ノードの全機能デモ |
+| クラスベースノード | `node/class_based_node.py` | 大規模プロジェクト向け推奨パターン |
+| 複数ノード | `executor/multiple_nodes.py` | 1プロセスで複数ノード実行 |
 
-## QoS Profiles
+### 新機能/強化機能
 
-lwrclpy supports all standard ROS 2 QoS profiles:
+| 機能 | サンプル | 説明 |
+|------|---------|------|
+| Clock & Time | `clock/clock_time_duration_demo.py` | ROS Time, Sim Time, 時間演算 |
+| シミュレーション時間 | `clock/sim_time_demo.py` | テスト用時間オーバーライド |
+| Duration | `duration/duration_demo.py` | Duration演算と比較 |
+| Async/Future | `async/async_future_demo.py` | asyncioとFutureの統合 |
+| Logging | `logging/logging_demo.py` | ログレベル、子ロガー、スロットリング |
+| Callback Groups | `callback_groups/callback_groups_demo.py` | 排他制御 vs 再入可能 |
+| SingleThreadedExecutor | `executor/single_threaded_demo.py` | 基本的なExecutor使用法 |
+| MultiThreadedExecutor | `executor/multithreaded_executor_demo.py` | マルチスレッド実行 |
+| Context | `context/context_demo.py` | Domain ID、複数コンテキスト |
+| Timer機能 | `timers/timer_features_demo.py` | ドリフト補正、呼び出し回数 |
+| Smart Publisher | `pubsub/smart_publisher.py` | Subscriber数、Liveliness |
+| MessageInfo | `pubsub/message_info_demo.py` | メッセージメタデータアクセス |
+| Advanced Client | `services/advanced_client.py` | タイムアウト付き非同期サービス呼び出し |
+| Advanced Action | `actions/advanced_action_client.py` | Actionキャンセルと複数Goal |
 
-| Profile | Use Case |
-|---------|----------|
-| `qos_profile_sensor_data` | High-frequency sensor data (best effort) |
-| `qos_profile_services_default` | Service requests/responses |
-| `qos_profile_parameters` | Parameter services |
-| `qos_profile_system_default` | Default DDS settings |
-| `qos_profile_action_status_default` | Action status updates |
+---
 
-Custom QoS options include:
-- **Deadline**: Maximum time between messages
-- **Lifespan**: Message expiration time
-- **Liveliness**: Publisher alive detection (AUTOMATIC, MANUAL_BY_PARTICIPANT, MANUAL_BY_TOPIC)
+## 📋 QoSプロファイル
 
-## Zero-Copy Publishing
+lwrclpyは標準的なROS 2 QoSプロファイルをすべてサポート：
 
-For large messages, use `loan_message()` to avoid copying:
+| プロファイル | 用途 |
+|--------------|------|
+| `qos_profile_sensor_data` | 高周波センサーデータ（Best Effort） |
+| `qos_profile_services_default` | サービスのリクエスト/レスポンス |
+| `qos_profile_parameters` | パラメータサービス |
+| `qos_profile_system_default` | デフォルトDDS設定 |
+| `qos_profile_action_status_default` | Actionステータス更新 |
+
+カスタムQoSオプション：
+- **Deadline**: メッセージ間の最大時間
+- **Lifespan**: メッセージ有効期限
+- **Liveliness**: Publisher生存検出（AUTOMATIC, MANUAL_BY_PARTICIPANT, MANUAL_BY_TOPIC）
+
+---
+
+## ⚡ ゼロコピーPublishing
+
+大きなメッセージには`loan_message()`でコピーを回避：
 
 ```python
 with publisher.loan_message() as loaned_msg:
     loaned_msg.data = large_data
-    # Message is published on context exit
+    # コンテキスト終了時にメッセージが自動publish
 ```
 
-## Simulated Time
+---
 
-For testing, you can override ROS time:
+## ⏰ シミュレーション時間
+
+テスト用にROS Timeをオーバーライド：
 
 ```python
 from lwrclpy.clock import Clock, ClockType, Time
 
 clock = Clock(clock_type=ClockType.ROS_TIME)
 clock.set_ros_time_override(Time(seconds=1000))
-# Now clock.now() returns simulated time
+# clock.now()がシミュレーション時間を返す
 ```
 
-## Thread Safety
+---
 
-When using `MultiThreadedExecutor`:
+## 🔒 スレッドセーフティ
 
-1. Use `MutuallyExclusiveCallbackGroup` for callbacks that must not run concurrently
-2. Use `ReentrantCallbackGroup` for callbacks that can run in parallel
-3. Protect shared state with locks
+`MultiThreadedExecutor`使用時：
 
-## Common Patterns
+1. 同時実行を避けたいコールバックには`MutuallyExclusiveCallbackGroup`を使用
+2. 並列実行可能なコールバックには`ReentrantCallbackGroup`を使用
+3. 共有状態はロックで保護
 
-### Wait for Subscribers
+---
+
+## 📝 よく使うパターン
+
+### Subscriberを待つ
+
 ```python
 while publisher.get_subscription_count() < 1:
     time.sleep(0.1)
-# Now safe to publish
+# publishしても安全
 ```
 
-### Graceful Shutdown
+### グレースフルシャットダウン
+
 ```python
 try:
     rclpy.init()
@@ -185,7 +207,8 @@ finally:
     rclpy.shutdown()
 ```
 
-### Async Service Call
+### 非同期サービス呼び出し
+
 ```python
 future = client.call_async(request)
 while not future.done():
@@ -193,35 +216,42 @@ while not future.done():
 response = future.result()
 ```
 
-## Message Types Examples
+---
 
-The `pubsub/typed_messages/` directory contains examples for common ROS message types:
+## 📨 メッセージ型サンプル
 
-| Message Type | Publisher | Subscriber |
+`pubsub/typed_messages/`ディレクトリに一般的なROSメッセージ型のサンプル：
+
+| メッセージ型 | Publisher | Subscriber |
 |--------------|-----------|------------|
 | `geometry_msgs` | `geometry_publisher.py` | `geometry_subscriber.py` |
 | `sensor_msgs` | `sensor_publisher.py` | `sensor_subscriber.py` |
 | `nav_msgs` | `navigation_demo.py` | - |
 
-### Geometry Messages
+### Geometryメッセージ
 - `Point`, `Pose`, `PoseStamped`, `Twist`, `Vector3`, `Quaternion`
 
-### Sensor Messages
+### Sensorメッセージ
 - `LaserScan`, `Imu`, `Range`, `Temperature`
 
-### Navigation Messages
+### Navigationメッセージ
 - `Odometry`, `Path`
 
-## Service Types
+---
 
-| Service Type | Example |
-|--------------|---------|
+## 🔧 サービス型
+
+| サービス型 | サンプル |
+|------------|---------|
 | `std_srvs/SetBool` | `services/set_bool/` |
 | `std_srvs/Trigger` | `services/trigger/` |
 
-## Quick Start Examples
+---
 
-### Minimal Publisher
+## ⚡ クイックスタートサンプル
+
+### 最小Publisher
+
 ```python
 #!/usr/bin/env python3
 import rclpy
@@ -232,21 +262,22 @@ node = rclpy.create_node('minimal_pub')
 pub = node.create_publisher(String, 'topic', 10)
 
 msg = String()
-msg.data('Hello!')
+msg.data = 'Hello!'
 pub.publish(msg)
 
 node.destroy_node()
 rclpy.shutdown()
 ```
 
-### Minimal Subscriber
+### 最小Subscriber
+
 ```python
 #!/usr/bin/env python3
 import rclpy
 from std_msgs.msg import String
 
 def callback(msg):
-    print(f'Received: {msg.data()}')
+    print(f'Received: {msg.data}')
 
 rclpy.init()
 node = rclpy.create_node('minimal_sub')
@@ -256,15 +287,16 @@ node.destroy_node()
 rclpy.shutdown()
 ```
 
-### Minimal Service Server
+### 最小Serviceサーバー
+
 ```python
 #!/usr/bin/env python3
 import rclpy
 from std_srvs.srv import Trigger
 
 def handle(request, response):
-    response.success(True)
-    response.message('Done!')
+    response.success = True
+    response.message = 'Done!'
     return response
 
 rclpy.init()
