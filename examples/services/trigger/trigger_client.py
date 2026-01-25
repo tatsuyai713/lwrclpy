@@ -15,7 +15,7 @@ def call_service(client, node, name):
     """Call a Trigger service and return response."""
     if not client.service_is_ready():
         node.get_logger().warn(f"Service {name} not ready, waiting...")
-        client.wait_for_service(timeout_sec=5.0)
+        client.wait_for_service(timeout_sec=10.0)
     
     request = Trigger.Request()
     future = client.call_async(request)
@@ -42,12 +42,12 @@ def main():
     
     logger.info("Waiting for services...")
     
-    # Wait for DDS discovery
-    time.sleep(1.0)
+    # Wait for DDS discovery (important for separate process communication)
+    time.sleep(3.0)
     
     # Wait for services
     for client, name in [(client_arm, "arm"), (client_status, "status")]:
-        if not client.wait_for_service(timeout_sec=5.0):
+        if not client.wait_for_service(timeout_sec=10.0):
             logger.error(f"Service /{name} not available. Run trigger_server.py first.")
             node.destroy_node()
             rclpy.shutdown()

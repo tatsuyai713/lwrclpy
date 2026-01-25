@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minimal Fibonacci action client using the lwrclpy ActionClient."""
 
+import time
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
@@ -17,7 +18,9 @@ class FibonacciActionClient(Node):
 
     def send_goal(self, order: int):
         self.get_logger().info("Waiting for action server...")
-        self._action_client.wait_for_server()
+        # Wait for DDS discovery between processes
+        time.sleep(2.0)
+        self._action_client.wait_for_server(timeout_sec=10.0)
 
         goal_msg = Fibonacci.Goal()
         goal_msg.order = order

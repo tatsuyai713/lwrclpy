@@ -93,6 +93,11 @@ def main():
     request2 = SetBool.Request()
     request2.data = False
     
+    # Wait for the first async request to complete before sending another
+    # (lwrclpy only supports one pending service request at a time)
+    while not future.done():
+        rclpy.spin_once(node, timeout_sec=0.1)
+    
     future2 = client.call_async(request2)
     future2.add_done_callback(on_response)
     logger.info("Request sent with callback attached")
@@ -102,28 +107,7 @@ def main():
         rclpy.spin_once(node, timeout_sec=0.1)
     
     logger.info("")
-    
-    # 4. Multiple concurrent requests
-    logger.info("--- Multiple Concurrent Requests ---")
-    
-    futures = []
-    for i in range(3):
-        req = SetBool.Request()
-        req.data = (i % 2 == 0)
-        f = client.call_async(req)
-        futures.append((i, f))
-        logger.info(f"Sent request {i}: data={i % 2 == 0}")
-    
-    # Wait for all to complete
-    while any(not f.done() for _, f in futures):
-        rclpy.spin_once(node, timeout_sec=0.1)
-    
-    for i, f in futures:
-        response = f.result()
-        if response:
-            logger.info(f"Request {i} response: {response.message}")
-    
-    logger.info("")
+    logger.info("(Note: lwrclpy only supports one pending service request at a time)")
     logger.info("=== Demo Complete ===")
     
     node.destroy_node()

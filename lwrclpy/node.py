@@ -64,6 +64,9 @@ class _NodeLogger:
     """Minimal rclpy.get_logger() equivalent backed by Python logging."""
 
     _configured = False
+    _throttle_last: dict = {}  # class-level storage for throttle timestamps
+    _once_logged: set = set()  # class-level storage for once-only messages
+    _skipfirst_done: set = set()  # class-level storage for skipfirst messages
 
     def __init__(self, name: str):
         if not _NodeLogger._configured and not logging.getLogger().handlers:
@@ -73,6 +76,27 @@ class _NodeLogger:
             )
             _NodeLogger._configured = True
         self._logger = logging.getLogger(name)
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def set_level(self, level):
+        """Set the logging level."""
+        if hasattr(level, 'value'):
+            self._logger.setLevel(level.value)
+        else:
+            self._logger.setLevel(level)
+
+    def get_effective_level(self):
+        """Get the effective logging level."""
+        from rclpy.logging import LoggingSeverity
+        level = self._logger.getEffectiveLevel()
+        try:
+            return LoggingSeverity(level)
+        except ValueError:
+            return LoggingSeverity.INFO
 
     def debug(self, msg, *args, **kwargs):
         self._logger.debug(msg, *args, **kwargs)
@@ -97,6 +121,121 @@ class _NodeLogger:
 
     def log(self, level, msg, *args, **kwargs):
         self._logger.log(level, msg, *args, **kwargs)
+
+    # Throttled logging methods
+    def _should_log_throttle(self, key: str, period: float) -> bool:
+        now = time.time()
+        last = _NodeLogger._throttle_last.get(key, 0)
+        if now - last >= period:
+            _NodeLogger._throttle_last[key] = now
+            return True
+        return False
+
+    def debug_throttle(self, period: float, msg, *args, **kwargs):
+        key = f"{self._name}:debug:{msg}"
+        if self._should_log_throttle(key, period):
+            self.debug(msg, *args, **kwargs)
+
+    def info_throttle(self, period: float, msg, *args, **kwargs):
+        key = f"{self._name}:info:{msg}"
+        if self._should_log_throttle(key, period):
+            self.info(msg, *args, **kwargs)
+
+    def warn_throttle(self, period: float, msg, *args, **kwargs):
+        key = f"{self._name}:warn:{msg}"
+        if self._should_log_throttle(key, period):
+            self.warn(msg, *args, **kwargs)
+
+    def warning_throttle(self, period: float, msg, *args, **kwargs):
+        self.warn_throttle(period, msg, *args, **kwargs)
+
+    def error_throttle(self, period: float, msg, *args, **kwargs):
+        key = f"{self._name}:error:{msg}"
+        if self._should_log_throttle(key, period):
+            self.error(msg, *args, **kwargs)
+
+    def fatal_throttle(self, period: float, msg, *args, **kwargs):
+        key = f"{self._name}:fatal:{msg}"
+        if self._should_log_throttle(key, period):
+            self.fatal(msg, *args, **kwargs)
+
+    # Once-only logging methods
+    def debug_once(self, msg, *args, **kwargs):
+        key = f"{self._name}:debug:{msg}"
+        if key not in _NodeLogger._once_logged:
+            _NodeLogger._once_logged.add(key)
+            self.debug(msg, *args, **kwargs)
+
+    def info_once(self, msg, *args, **kwargs):
+        key = f"{self._name}:info:{msg}"
+        if key not in _NodeLogger._once_logged:
+            _NodeLogger._once_logged.add(key)
+            self.info(msg, *args, **kwargs)
+
+    def warn_once(self, msg, *args, **kwargs):
+        key = f"{self._name}:warn:{msg}"
+        if key not in _NodeLogger._once_logged:
+            _NodeLogger._once_logged.add(key)
+            self.warn(msg, *args, **kwargs)
+
+    def warning_once(self, msg, *args, **kwargs):
+        self.warn_once(msg, *args, **kwargs)
+
+    def error_once(self, msg, *args, **kwargs):
+        key = f"{self._name}:error:{msg}"
+        if key not in _NodeLogger._once_logged:
+            _NodeLogger._once_logged.add(key)
+            self.error(msg, *args, **kwargs)
+
+    def fatal_once(self, msg, *args, **kwargs):
+        key = f"{self._name}:fatal:{msg}"
+        if key not in _NodeLogger._once_logged:
+            _NodeLogger._once_logged.add(key)
+            self.fatal(msg, *args, **kwargs)
+
+    # Skip-first logging methods
+    def debug_skipfirst(self, msg, *args, **kwargs):
+        key = f"{self._name}:debug:{msg}"
+        if key in _NodeLogger._skipfirst_done:
+            self.debug(msg, *args, **kwargs)
+        else:
+            _NodeLogger._skipfirst_done.add(key)
+
+    def info_skipfirst(self, msg, *args, **kwargs):
+        key = f"{self._name}:info:{msg}"
+        if key in _NodeLogger._skipfirst_done:
+            self.info(msg, *args, **kwargs)
+        else:
+            _NodeLogger._skipfirst_done.add(key)
+
+    def warn_skipfirst(self, msg, *args, **kwargs):
+        key = f"{self._name}:warn:{msg}"
+        if key in _NodeLogger._skipfirst_done:
+            self.warn(msg, *args, **kwargs)
+        else:
+            _NodeLogger._skipfirst_done.add(key)
+
+    def warning_skipfirst(self, msg, *args, **kwargs):
+        self.warn_skipfirst(msg, *args, **kwargs)
+
+    def error_skipfirst(self, msg, *args, **kwargs):
+        key = f"{self._name}:error:{msg}"
+        if key in _NodeLogger._skipfirst_done:
+            self.error(msg, *args, **kwargs)
+        else:
+            _NodeLogger._skipfirst_done.add(key)
+
+    def fatal_skipfirst(self, msg, *args, **kwargs):
+        key = f"{self._name}:fatal:{msg}"
+        if key in _NodeLogger._skipfirst_done:
+            self.fatal(msg, *args, **kwargs)
+        else:
+            _NodeLogger._skipfirst_done.add(key)
+
+    def get_child(self, suffix: str) -> "_NodeLogger":
+        """Get a child logger with the given suffix."""
+        child_name = f"{self._name}.{suffix}"
+        return _NodeLogger(child_name)
 
 
 class Node:
@@ -211,6 +350,12 @@ class Node:
     def get_parameters(self, names) -> List[Parameter]:
         return [self.get_parameter(n) for n in names]
 
+    def set_parameter(self, name: str, value) -> SetParametersResult:
+        """Set a single parameter by name and value."""
+        param = Parameter(name, value)
+        results = self.set_parameters([param])
+        return results[0] if results else SetParametersResult(False, "Failed to set parameter")
+
     def set_parameters(self, parameters) -> List[SetParametersResult]:
         """Set parameters from Parameter objects or (name, value) tuples."""
         results = []
@@ -320,6 +465,34 @@ class Node:
         finally:
             if sub in self._subscriptions:
                 self._subscriptions.remove(sub)
+
+    def destroy_timer(self, timer):
+        try:
+            timer.cancel()
+        finally:
+            if timer in self._timers:
+                self._timers.remove(timer)
+
+    def destroy_client(self, client):
+        try:
+            client.destroy()
+        finally:
+            if client in self._clients:
+                self._clients.remove(client)
+
+    def destroy_service(self, service):
+        try:
+            service.destroy()
+        finally:
+            if service in self._services:
+                self._services.remove(service)
+
+    def destroy_guard_condition(self, gc):
+        try:
+            gc.destroy()
+        finally:
+            if gc in self._guard_conditions:
+                self._guard_conditions.remove(gc)
 
     def get_name(self):
         return self._name

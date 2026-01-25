@@ -105,44 +105,8 @@ class Time:
 # Alias for backward compatibility
 _TimePoint = Time
 
-
-class Duration:
-    """Represents a duration of time."""
-    
-    __slots__ = ("_nanoseconds",)
-    
-    def __init__(self, *, seconds: float = 0.0, nanoseconds: int = 0):
-        total_ns = int(nanoseconds)
-        total_ns += int(seconds * 1_000_000_000)
-        self._nanoseconds = total_ns
-
-    @property
-    def nanoseconds(self) -> int:
-        return self._nanoseconds
-
-    def to_msg(self):
-        """Convert to builtin_interfaces/Duration message."""
-        try:
-            from builtin_interfaces.msg import Duration as DurationMsg
-            msg = DurationMsg()
-            msg.sec = self._nanoseconds // 1_000_000_000
-            msg.nanosec = self._nanoseconds % 1_000_000_000
-            return msg
-        except Exception:
-            return None
-
-    def __eq__(self, other):
-        if not isinstance(other, Duration):
-            return NotImplemented
-        return self._nanoseconds == other._nanoseconds
-
-    def __lt__(self, other):
-        if not isinstance(other, Duration):
-            return NotImplemented
-        return self._nanoseconds < other._nanoseconds
-
-    def __repr__(self):
-        return f"Duration(nanoseconds={self._nanoseconds})"
+# Import Duration from the duration module to ensure consistency
+from .duration import Duration
 
 
 class Clock:

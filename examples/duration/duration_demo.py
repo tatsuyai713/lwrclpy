@@ -108,7 +108,7 @@ def main():
     msg = d.to_msg()
     if msg:
         print(f"Original: {d}")
-        print(f"Message: sec={msg.sec()}, nanosec={msg.nanosec()}")
+        print(f"Message: sec={msg.sec}, nanosec={msg.nanosec}")
     else:
         print("Duration message type not available")
     

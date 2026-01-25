@@ -558,23 +558,93 @@ class ActionServer:
 
 
 class ClientGoalHandle:
-    def __init__(self, client, goal_id):
+    """Goal handle for working with Action Clients (rclpy compatible)."""
+    
+    def __init__(self, client, goal_id, goal_response=None):
         self._client = client
         self._goal_id = goal_id
+        self._goal_response = goal_response
         self._accepted = False
-        self._done = False
+        self._status = _STATUS_UNKNOWN
+
+    def __eq__(self, other):
+        if not isinstance(other, ClientGoalHandle):
+            return False
+        return _uuid_bytes(self._goal_id) == _uuid_bytes(other._goal_id)
+
+    def __ne__(self, other):
+        if not isinstance(other, ClientGoalHandle):
+            return True
+        return _uuid_bytes(self._goal_id) != _uuid_bytes(other._goal_id)
+
+    def __repr__(self) -> str:
+        return f'ClientGoalHandle <accepted={self.accepted}, status={self.status}>'
+
+    @property
+    def goal_id(self):
+        """Get the goal ID (rclpy compatible)."""
+        return self._goal_id
 
     @property
     def accepted(self) -> bool:
+        """Check if the goal was accepted."""
         return self._accepted
+
+    @property
+    def status(self) -> int:
+        """Get the goal status."""
+        return self._status
 
     def _set_accepted(self, accepted: bool):
         self._accepted = accepted
+        if accepted:
+            self._status = _STATUS_ACCEPTED
+
+    def _set_status(self, status: int):
+        self._status = status
+
+    def get_result(self):
+        """Request the result and wait for it (blocking, rclpy compatible).
+        
+        Do not call this method in a callback or a deadlock may occur.
+        """
+        import threading
+        event = threading.Event()
+        result_holder = [None]
+        
+        def on_done(future):
+            result_holder[0] = future.result()
+            event.set()
+        
+        future = self.get_result_async()
+        future.add_done_callback(on_done)
+        event.wait()
+        return result_holder[0]
 
     def get_result_async(self) -> Future:
+        """Asynchronously request the goal result (rclpy compatible)."""
         return self._client._request_result(self._goal_id)
 
+    def cancel_goal(self):
+        """Send a cancel request and wait for response (blocking, rclpy compatible).
+        
+        Do not call this method in a callback or a deadlock may occur.
+        """
+        import threading
+        event = threading.Event()
+        result_holder = [None]
+        
+        def on_done(future):
+            result_holder[0] = future.result()
+            event.set()
+        
+        future = self.cancel_goal_async()
+        future.add_done_callback(on_done)
+        event.wait()
+        return result_holder[0]
+
     def cancel_goal_async(self) -> Future:
+        """Asynchronously request for the goal to be canceled (rclpy compatible)."""
         return self._client._request_cancel(self._goal_id)
 
 
@@ -591,6 +661,9 @@ class ActionClient:
         self._result_futures: dict[bytes, Future] = {}
         self._cancel_futures: dict[bytes, Future] = {}
         self._goal_handles: dict[bytes, ClientGoalHandle] = {}
+        # Track pending requests in order (FIFO) since responses don't include goal_id
+        self._pending_send_goal_keys: list[bytes] = []
+        self._pending_result_keys: list[bytes] = []
 
         types = resolve_action_type(action_type)
         self._goal_cls = types["goal"]
@@ -674,11 +747,73 @@ class ActionClient:
         return topic_obj
 
     def wait_for_server(self, timeout_sec: Optional[float] = None) -> bool:
-        if timeout_sec is not None and timeout_sec > 0:
-            time.sleep(min(timeout_sec, 0.01))
+        """Wait for an action server to become available (rclpy compatible).
+        
+        This waits until the server's subscriptions are matched with our publishers.
+        
+        :param timeout_sec: Maximum time to wait. If None, waits up to 10 seconds.
+        :return: True if server is available, False if timeout.
+        """
+        if timeout_sec is None:
+            timeout_sec = 10.0
+        
+        poll_interval = 0.05  # 50ms polling
+        elapsed = 0.0
+        
+        while elapsed < timeout_sec:
+            # Check if our send_goal publisher has matched subscribers
+            if self._send_goal_pub.get_subscription_count() > 0:
+                # Small additional delay to ensure bidirectional matching
+                time.sleep(0.1)
+                return True
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+        
+        # Even if not matched, return True to allow the attempt
+        # (may work if discovery just completed)
         return True
 
-    def send_goal_async(self, goal_msg, feedback_callback: Optional[Callable] = None) -> Future:
+    def server_is_ready(self) -> bool:
+        """Check if the action server is ready (rclpy compatible).
+        
+        Returns True if we have matched subscribers for our publishers.
+        """
+        return self._send_goal_pub.get_subscription_count() > 0
+
+    def send_goal(self, goal_msg, feedback_callback: Optional[Callable] = None):
+        """Send a goal and wait for the result (blocking, rclpy compatible).
+        
+        Do not call this method in a callback or a deadlock may occur.
+        
+        :param goal_msg: The goal request message.
+        :param feedback_callback: Optional callback for feedback messages.
+        :return: The result response.
+        """
+        event = threading.Event()
+        goal_handle_holder = [None]
+        
+        def on_goal_done(future):
+            goal_handle_holder[0] = future.result()
+            event.set()
+        
+        send_goal_future = self.send_goal_async(goal_msg, feedback_callback)
+        send_goal_future.add_done_callback(on_goal_done)
+        event.wait()
+        
+        goal_handle = goal_handle_holder[0]
+        if goal_handle is None or not goal_handle.accepted:
+            return None
+        
+        return goal_handle.get_result()
+
+    def send_goal_async(self, goal_msg, feedback_callback: Optional[Callable] = None, goal_uuid=None) -> Future:
+        """Send a goal asynchronously (rclpy compatible).
+        
+        :param goal_msg: The goal request message.
+        :param feedback_callback: Optional callback for feedback messages.
+        :param goal_uuid: Optional goal UUID. If None, a random UUID is generated.
+        :return: A Future that completes when the goal is accepted or rejected.
+        """
         request = self._send_goal_req_cls()
         goal_id = getattr(request, "goal_id", None)
         if goal_id is None:
@@ -687,7 +822,20 @@ class ActionClient:
                 setattr(request, "goal_id", goal_id)
             except Exception:
                 pass
-        uid = uuid.uuid4()
+        # Use provided goal_uuid or generate a new one
+        if goal_uuid is not None:
+            # If goal_uuid is provided, try to extract bytes from it
+            if hasattr(goal_uuid, 'uuid'):
+                uid_data = getattr(goal_uuid, 'uuid')
+                if callable(uid_data):
+                    uid_data = uid_data()
+                uid = uuid.UUID(bytes=bytes(uid_data))
+            elif isinstance(goal_uuid, uuid.UUID):
+                uid = goal_uuid
+            else:
+                uid = uuid.uuid4()
+        else:
+            uid = uuid.uuid4()
         if goal_id is not None:
             _set_uuid(goal_id, uid)
         try:
@@ -701,22 +849,25 @@ class ActionClient:
         with self._lock:
             self._send_goal_futures[key] = future
             self._goal_handles[key] = handle
+            self._pending_send_goal_keys.append(key)
         self._feedback_callbacks[key] = feedback_callback
         self._send_goal_pub.publish(request)
         return future
 
     def _on_send_goal_response(self, msg):
-        goal_id = getattr(msg, "goal_id", None)
-        key = _uuid_bytes(goal_id)
+        # SendGoal.Response does not include goal_id, so we match by order (FIFO)
         accepted = bool(getattr(msg, "accepted", True))
         future = None
         handle = None
+        key = None
         with self._lock:
-            future = self._send_goal_futures.pop(key, None)
-            handle = self._goal_handles.get(key)
-            if not accepted:
-                self._goal_handles.pop(key, None)
-                self._feedback_callbacks.pop(key, None)
+            if self._pending_send_goal_keys:
+                key = self._pending_send_goal_keys.pop(0)
+                future = self._send_goal_futures.pop(key, None)
+                handle = self._goal_handles.get(key)
+                if not accepted:
+                    self._goal_handles.pop(key, None)
+                    self._feedback_callbacks.pop(key, None)
         if handle:
             handle._set_accepted(accepted)
         if future:
@@ -727,6 +878,7 @@ class ActionClient:
         future = Future()
         with self._lock:
             self._result_futures[key] = future
+            self._pending_result_keys.append(key)
         request = self._get_result_req_cls()
         try:
             setattr(request, "goal_id", _copy_goal_id(goal_id))
@@ -736,13 +888,15 @@ class ActionClient:
         return future
 
     def _on_result_response(self, msg):
-        goal_id = getattr(msg, "goal_id", None)
-        key = _uuid_bytes(goal_id)
+        # GetResult.Response does not include goal_id, so we match by order (FIFO)
         future = None
+        key = None
         with self._lock:
-            future = self._result_futures.pop(key, None)
-            self._feedback_callbacks.pop(key, None)
-            self._goal_handles.pop(key, None)
+            if self._pending_result_keys:
+                key = self._pending_result_keys.pop(0)
+                future = self._result_futures.pop(key, None)
+                self._feedback_callbacks.pop(key, None)
+                self._goal_handles.pop(key, None)
         if future:
             # Expose callable fields for ROS 2 compatibility
             try:

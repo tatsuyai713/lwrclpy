@@ -111,12 +111,12 @@ def main():
     time_obj = Time(seconds=123, nanoseconds=456789)
     time_msg = time_obj.to_msg()
     if time_msg:
-        logger.info(f"Time to message: sec={time_msg.sec()}, nanosec={time_msg.nanosec()}")
+        logger.info(f"Time to message: sec={time_msg.sec}, nanosec={time_msg.nanosec}")
     
     duration_obj = Duration(seconds=10, nanoseconds=500000000)
     duration_msg = duration_obj.to_msg()
     if duration_msg:
-        logger.info(f"Duration to message: sec={duration_msg.sec()}, nanosec={duration_msg.nanosec()}")
+        logger.info(f"Duration to message: sec={duration_msg.sec}, nanosec={duration_msg.nanosec}")
     
     logger.info("\n=== Demo Complete ===")
     

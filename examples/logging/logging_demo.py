@@ -75,18 +75,16 @@ def main():
     logger.info(f"quiet_logger effective level: {level.name}")
     logger.info("")
     
-    # 7. Throttled logging (simplified - logs every call in this implementation)
+    # 7. Throttled logging
     logger.info("--- Throttled Logging ---")
     for i in range(3):
         logger.info_throttle(1.0, f"Throttled message iteration {i}")
-    logger.info("(Note: throttling is simplified in lwrclpy)")
     logger.info("")
     
     # 8. Once-only logging
     logger.info("--- Once-Only Logging ---")
     for i in range(3):
-        logger.warn_once(f"This warning appears (iteration {i})")
-    logger.info("(Note: once-only is simplified in lwrclpy)")
+        logger.warn_once(f"This warning appears only once")
     logger.info("")
     
     # 9. Practical example: component with scoped logging

@@ -26,7 +26,9 @@ def main():
     client = ActionClient(node, Fibonacci, "fibonacci")
     
     logger.info("Waiting for action server...")
-    if not client.wait_for_server(timeout_sec=10.0):
+    # Wait for DDS discovery between processes
+    time.sleep(2.0)
+    if not client.wait_for_server(timeout_sec=15.0):
         logger.error("Action server not available!")
         node.destroy_node()
         rclpy.shutdown()
@@ -38,14 +40,20 @@ def main():
     logger.info("--- Goal 1: Simple execution ---")
     
     goal = Fibonacci.Goal()
-    goal.order(5)
+    goal.order = 5
     
-    logger.info(f"Sending goal: order={goal.order()}")
+    logger.info(f"Sending goal: order={goal.order}")
     
     # Feedback callback
     def feedback_callback(feedback_msg):
-        seq = feedback_msg.partial_sequence()
-        logger.info(f"  Feedback: {list(seq)}")
+        fb = feedback_msg.feedback
+        if callable(fb):
+            fb = fb()
+        seq = getattr(fb, 'partial_sequence', None) or getattr(fb, 'sequence', None)
+        if seq is not None:
+            if callable(seq):
+                seq = seq()
+            logger.info(f"  Feedback: {list(seq)}")
     
     send_goal_future = client.send_goal_async(goal, feedback_callback)
     
@@ -55,7 +63,7 @@ def main():
     
     goal_handle = send_goal_future.result()
     
-    if not goal_handle.accepted:
+    if not goal_handle or not goal_handle.accepted:
         logger.error("Goal rejected!")
     else:
         logger.info("Goal accepted, waiting for result...")
@@ -66,8 +74,13 @@ def main():
         while not result_future.done():
             rclpy.spin_once(node, timeout_sec=0.1)
         
-        result = result_future.result()
-        sequence = result.sequence()
+        result_msg = result_future.result()
+        result = getattr(result_msg, 'result', result_msg)
+        if callable(result):
+            result = result()
+        sequence = getattr(result, 'sequence', [])
+        if callable(sequence):
+            sequence = sequence()
         logger.info(f"Result: {list(sequence)}")
     
     logger.info("")
@@ -76,9 +89,9 @@ def main():
     logger.info("--- Goal 2: Cancellation ---")
     
     goal2 = Fibonacci.Goal()
-    goal2.order(10)  # Longer computation
+    goal2.order = 10  # Longer computation
     
-    logger.info(f"Sending goal: order={goal2.order()}")
+    logger.info(f"Sending goal: order={goal2.order}")
     
     send_goal_future2 = client.send_goal_async(goal2, feedback_callback)
     
@@ -87,7 +100,7 @@ def main():
     
     goal_handle2 = send_goal_future2.result()
     
-    if goal_handle2.accepted:
+    if goal_handle2 and goal_handle2.accepted:
         logger.info("Goal accepted, waiting briefly then canceling...")
         
         # Wait for some feedback
@@ -118,7 +131,7 @@ def main():
     
     for order in [3, 4, 5]:
         goal = Fibonacci.Goal()
-        goal.order(order)
+        goal.order = order
         
         logger.info(f"Sending goal: order={order}")
         
@@ -127,13 +140,19 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.1)
         
         handle = future.result()
-        if handle.accepted:
+        if handle and handle.accepted:
             result_future = handle.get_result_async()
             while not result_future.done():
                 rclpy.spin_once(node, timeout_sec=0.1)
             
-            result = result_future.result()
-            logger.info(f"  Result: {list(result.sequence())}")
+            result_msg = result_future.result()
+            result = getattr(result_msg, 'result', result_msg)
+            if callable(result):
+                result = result()
+            sequence = getattr(result, 'sequence', [])
+            if callable(sequence):
+                sequence = sequence()
+            logger.info(f"  Result: {list(sequence)}")
     
     logger.info("\n=== Demo Complete ===")
     
