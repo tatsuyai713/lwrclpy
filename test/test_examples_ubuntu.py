@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Ubuntu example test entrypoint."""
 
+import os
+import sys
+
 from examples_test_runner import main
 
 
 if __name__ == "__main__":
-    raise SystemExit(main("Ubuntu"))
+    exit_code = main("Ubuntu")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)

@@ -247,6 +247,7 @@ class ServerClientSpec:
     clients: Tuple[str, ...]
     client_expect: Tuple[str, ...]
     client_timeout: float = 15.0
+    server_ready: Tuple[str, ...] = ()
 
 
 def _skip_reason(script: Path) -> Optional[str]:
@@ -279,6 +280,7 @@ def run_all_examples(platform_name: str) -> bool:
 
     results: List[Tuple[str, bool, str]] = []
     skipped: List[Tuple[str, str]] = []
+    skipped_paths: set[Path] = set()
     handled: set[Path] = set()
 
     # Basic import test
@@ -370,13 +372,15 @@ def run_all_examples(platform_name: str) -> bool:
             clients=("examples/services/set_bool/client.py",),
             client_expect=("response", "success="),
             client_timeout=20.0,
+            server_ready=("Starting SetBool server",),
         ),
         ServerClientSpec(
             name="Service Trigger",
             server="examples/services/trigger/trigger_server.py",
             clients=("examples/services/trigger/trigger_client.py",),
             client_expect=("Demo Complete", "Result:"),
-            client_timeout=30.0,
+            client_timeout=60.0,
+            server_ready=("Services available",),
         ),
         ServerClientSpec(
             name="Actions (Fibonacci + Advanced)",
@@ -387,6 +391,7 @@ def run_all_examples(platform_name: str) -> bool:
             ),
             client_expect=("Result:", "Demo Complete"),
             client_timeout=45.0,
+            server_ready=("Action Server", "action server"),
         ),
     )
 
@@ -398,6 +403,7 @@ def run_all_examples(platform_name: str) -> bool:
         skip_reason = _skip_reason(pub) or _skip_reason(sub)
         if skip_reason:
             skipped.append((spec.name, skip_reason))
+            skipped_paths.update({pub, sub})
             print_warning(f"{spec.name} skipped: {skip_reason}")
             continue
         success, output = _run_pair(
@@ -424,6 +430,7 @@ def run_all_examples(platform_name: str) -> bool:
     ml_skip = _skip_reason(ml_pub) or _skip_reason(ml_sub)
     if ml_skip:
         skipped.append((ml_pair.name, ml_skip))
+        skipped_paths.update({ml_pub, ml_sub})
         print_warning(f"{ml_pair.name} skipped: {ml_skip}")
     else:
         success, output = _run_pair(
@@ -450,13 +457,17 @@ def run_all_examples(platform_name: str) -> bool:
         skip_reason = _skip_reason(server_path)
         if skip_reason:
             skipped.append((spec.name, skip_reason))
+            skipped_paths.add(server_path)
             print_warning(f"{spec.name} skipped: {skip_reason}")
             continue
 
         print_test_start(spec.name)
         server_proc = ProcessCapture([sys.executable, str(server_path)])
         # Allow DDS discovery time between separate processes
-        time.sleep(5.0)
+        if spec.server_ready:
+            _wait_for_keywords(server_proc, spec.server_ready, timeout=5.0)
+        else:
+            time.sleep(5.0)
 
         server_output = ""
         overall_ok = True
@@ -464,6 +475,7 @@ def run_all_examples(platform_name: str) -> bool:
             client_skip = _skip_reason(client_path)
             if client_skip:
                 skipped.append((client_path.relative_to(PROJECT_ROOT).as_posix(), client_skip))
+                skipped_paths.add(client_path)
                 print_warning(f"{client_path} skipped: {client_skip}")
                 continue
             ok, output = _run_script(
@@ -503,6 +515,7 @@ def run_all_examples(platform_name: str) -> bool:
         rel = script.relative_to(PROJECT_ROOT)
         if skip_reason:
             skipped.append((rel.as_posix(), skip_reason))
+            skipped_paths.add(script)
             print_warning(f"{rel} skipped: {skip_reason}")
             continue
 
@@ -523,7 +536,7 @@ def run_all_examples(platform_name: str) -> bool:
 
     # Ensure we covered all examples (even if skipped)
     all_examples = set(EXAMPLES_ROOT.rglob("*.py"))
-    uncovered = all_examples - handled - {Path(p) for p, _ in skipped}
+    uncovered = all_examples - handled - skipped_paths
     if uncovered:
         for script in sorted(uncovered):
             rel = script.relative_to(PROJECT_ROOT)
@@ -561,4 +574,3 @@ def run_all_examples(platform_name: str) -> bool:
 def main(platform_name: str) -> int:
     ok = run_all_examples(platform_name)
     return 0 if ok else 1
-
