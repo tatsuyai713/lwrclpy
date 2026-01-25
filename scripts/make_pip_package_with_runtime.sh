@@ -54,7 +54,7 @@ need patchelf
 [[ -d "${BUILD_ROOT}/src" ]] || { echo "[FATAL] BUILD_ROOT/src not found: ${BUILD_ROOT}/src"; exit 1; }
 [[ -d "${PREFIX_V3}/lib" ]] || { echo "[FATAL] ${PREFIX_V3}/lib not found"; exit 1; }
 
-rm -rf "${STAGING_ROOT}" "${DIST_DIR}"
+rm -rf "${STAGING_ROOT}"
 mkdir -p "${STAGING_ROOT}" "${DIST_DIR}"
 
 # Determine X.Y of the CURRENT python (for fixed site/dist-packages path)
@@ -124,7 +124,7 @@ mkdir -p "${VEN_LIB_DIR}"
 # Copy unversioned and versioned variants to satisfy dynamic loaders (no symlinks)
 copy_lib_variants(){
   local stem="$1"  # e.g., libfastdds.so
-  local src_dir="${PREFIX_V3}/lib"
+  local src_dir="${2:-${PREFIX_V3}/lib}"
   shopt -s nullglob
   local copied=0
   for f in "${src_dir}/${stem}" "${src_dir}/${stem}."*; do
@@ -142,6 +142,46 @@ copy_lib_variants(){
 }
 copy_lib_variants "libfastcdr.so"
 copy_lib_variants "libfastdds.so"
+
+# Some shared deps (e.g., tinyxml2) are not in PREFIX_V3/lib; vendor them too.
+find_sys_lib_dir(){
+  local stem="$1"
+  # 1) Try ldconfig for the canonical path (best effort)
+  if command -v ldconfig >/dev/null 2>&1; then
+    local hit
+    hit="$(ldconfig -p 2>/dev/null | awk -v s="${stem}.so" '$1 ~ s {print $NF}' | head -n1)"
+    if [[ -n "${hit}" && -f "${hit}" ]]; then
+      dirname "${hit}"
+      return 0
+    fi
+  fi
+
+  # 2) Fall back to common system lib dirs
+  local arch
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m || true)"
+  local dirs=(
+    "/usr/lib/${arch}-linux-gnu"
+    "/lib/${arch}-linux-gnu"
+    "/usr/lib"
+    "/lib"
+  )
+  for d in "${dirs[@]}"; do
+    if [[ -d "${d}" ]] && ls "${d}/${stem}.so."* >/dev/null 2>&1; then
+      echo "${d}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+tinyxml_dir="$(find_sys_lib_dir libtinyxml2 || true)"
+if [[ -n "${tinyxml_dir}" ]]; then
+  copy_lib_variants "libtinyxml2.so" "${tinyxml_dir}"
+else
+  echo "[FATAL] libtinyxml2.so.* not found in system lib dirs." >&2
+  echo "        Please install: libtinyxml2-9 (or libtinyxml2-dev) before building the wheel." >&2
+  exit 2
+fi
 
 # ========= 4) Vendor the ENTIRE fastdds package (no search) =========
 echo "[INFO] Vendoring fastdds package directory:"
@@ -287,6 +327,12 @@ while IFS= read -r so; do
   esac
   patchelf --force-rpath --set-rpath "${PATCHED_RPATH}" "$so" || true
 done < <(find "${STAGING_ROOT}" -type f -name '*.so' | sort)
+
+# Vendor libs should resolve their own dependencies from the same dir.
+VENDOR_RPATH='$ORIGIN'
+while IFS= read -r so; do
+  patchelf --force-rpath --set-rpath "${VENDOR_RPATH}" "$so" || true
+done < <(find "${STAGING_ROOT}/lwrclpy/_vendor/lib" -type f -name '*.so*' | sort)
 
 # ========= 6.5) Patch action/srv __init__.py to expose wrapper classes =========
 if [[ -f "${SCRIPTS_DIR}/patch_action_types.py" ]]; then

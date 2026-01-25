@@ -41,7 +41,6 @@ sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential git pkg-config \
   "${PYBIN%-*}-venv" "${PYBIN%-*}-dev" \
-  "${PYBIN%-*}-setuptools" "${PYBIN%-*}-wheel" \
   unzip wget curl \
   libasio-dev libtinyxml2-dev libssl-dev \
   cmake ninja-build python3-dev python3-pip \
@@ -98,7 +97,7 @@ log "Creating venv (.venv) with ${PYBIN}…"
 "${PYBIN}" -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
-python -m pip install -U pip wheel
+python -m pip install -U pip setuptools wheel
 python -m pip install -U colcon-common-extensions vcstool empy
 
 # ===== Fetch repos (vcstool) =====
