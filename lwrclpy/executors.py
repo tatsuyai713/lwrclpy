@@ -41,8 +41,11 @@ class Executor:
             return list(self._nodes)
 
     def spin(self):
-        while ok() and not self._is_stopped():
-            self.spin_once(0.01)
+        try:
+            while ok() and not self._is_stopped():
+                self.spin_once(0.01)
+        except KeyboardInterrupt:
+            pass  # Graceful shutdown on SIGINT
         # Gracefully exit when shutdown() was called; do not raise.
 
     def spin_once(self, timeout_sec: Optional[float] = None):
@@ -136,6 +139,8 @@ class MultiThreadedExecutor(Executor):
                 time.sleep(0.01)
             if not ok() and not self._is_stopped():
                 raise ExternalShutdownException()
+        except KeyboardInterrupt:
+            pass  # Graceful shutdown on SIGINT
         finally:
             self.shutdown()
 
@@ -162,6 +167,8 @@ def spin(node, executor: Optional[Executor] = None):
         executor.add_node(node)
         try:
             executor.spin()
+        except KeyboardInterrupt:
+            pass  # Graceful shutdown on SIGINT
         finally:
             executor.remove_node(node)
             executor.shutdown()
@@ -172,6 +179,8 @@ def spin(node, executor: Optional[Executor] = None):
             added = True
         try:
             executor.spin()
+        except KeyboardInterrupt:
+            pass  # Graceful shutdown on SIGINT
         finally:
             if added:
                 executor.remove_node(node)
@@ -204,6 +213,8 @@ def spin_until_future_complete(node, future, timeout_sec: Optional[float] = None
             exec_obj.spin_once(0.01)
             if timeout_sec is not None and (time.monotonic() - start) >= timeout_sec:
                 return False
+    except KeyboardInterrupt:
+        return False  # Graceful shutdown on SIGINT
     finally:
         if added:
             exec_obj.remove_node(node)
