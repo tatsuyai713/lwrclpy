@@ -22,6 +22,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 EXAMPLES_ROOT = PROJECT_ROOT / "examples"
+ROS2_EXAMPLES_ROOT = PROJECT_ROOT / "third_party" / "ros2_examples" / "rclpy"
 
 
 class Colors:
@@ -395,6 +396,53 @@ def run_all_examples(platform_name: str) -> bool:
         ),
     )
 
+    # ROS 2 official examples (third_party/ros2_examples)
+    ros2_pair_specs = (
+        PairSpec(
+            name="ROS2 Minimal Pub/Sub (member_function)",
+            publisher="third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_member_function.py",
+            subscriber="third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_member_function.py",
+            subscriber_expect=("I heard:",),
+            publisher_timeout=8.0,
+            subscriber_timeout=8.0,
+        ),
+        PairSpec(
+            name="ROS2 Minimal Pub/Sub (old_school)",
+            publisher="third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_old_school.py",
+            subscriber="third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_old_school.py",
+            subscriber_expect=("I heard:",),
+            publisher_timeout=8.0,
+            subscriber_timeout=8.0,
+        ),
+        PairSpec(
+            name="ROS2 Minimal Pub/Sub (local_function)",
+            publisher="third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_local_function.py",
+            subscriber="third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_lambda.py",
+            subscriber_expect=("I heard:",),
+            publisher_timeout=8.0,
+            subscriber_timeout=8.0,
+        ),
+    )
+
+    ros2_server_client_specs = (
+        ServerClientSpec(
+            name="ROS2 Minimal Service (AddTwoInts)",
+            server="third_party/ros2_examples/rclpy/services/minimal_service/examples_rclpy_minimal_service/service_member_function.py",
+            clients=("third_party/ros2_examples/rclpy/services/minimal_client/examples_rclpy_minimal_client/client_async_member_function.py",),
+            client_expect=("Result of add_two_ints:", "42"),
+            client_timeout=30.0,
+            server_ready=(),
+        ),
+        ServerClientSpec(
+            name="ROS2 Minimal Action (Fibonacci)",
+            server="third_party/ros2_examples/rclpy/actions/minimal_action_server/examples_rclpy_minimal_action_server/server.py",
+            clients=("third_party/ros2_examples/rclpy/actions/minimal_action_client/examples_rclpy_minimal_action_client/client.py",),
+            client_expect=("Goal succeeded!", "Result:"),
+            client_timeout=90.0,
+            server_ready=("Executing goal",),
+        ),
+    )
+
     # Pair tests
     for spec in pair_specs:
         pub = PROJECT_ROOT / spec.publisher
@@ -448,7 +496,81 @@ def run_all_examples(platform_name: str) -> bool:
             print_error(f"{ml_pair.name} - FAILED")
             print(f"  {output}")
 
-    # Server/client tests
+    # ROS 2 official examples - Pair tests
+    print_header("ROS 2 Official Examples (third_party/ros2_examples)")
+    for spec in ros2_pair_specs:
+        pub = PROJECT_ROOT / spec.publisher
+        sub = PROJECT_ROOT / spec.subscriber
+        handled.update({pub, sub})
+        if not pub.exists() or not sub.exists():
+            skipped.append((spec.name, "ROS 2 example files not found"))
+            print_warning(f"{spec.name} skipped: files not found")
+            continue
+        success, output = _run_pair(
+            name=spec.name,
+            publisher=pub,
+            subscriber=sub,
+            subscriber_expect=spec.subscriber_expect,
+            publisher_timeout=spec.publisher_timeout,
+            subscriber_timeout=spec.subscriber_timeout,
+            publisher_args=spec.publisher_args,
+            subscriber_args=spec.subscriber_args,
+        )
+        results.append((spec.name, success, output))
+        if success:
+            print_success(f"{spec.name} - OK")
+        else:
+            print_error(f"{spec.name} - FAILED")
+            print(f"  {output}")
+
+    # ROS 2 official examples - Server/client tests
+    for spec in ros2_server_client_specs:
+        server_path = PROJECT_ROOT / spec.server
+        handled.add(server_path)
+        client_paths = [PROJECT_ROOT / c for c in spec.clients]
+        handled.update(client_paths)
+        if not server_path.exists():
+            skipped.append((spec.name, "ROS 2 server file not found"))
+            print_warning(f"{spec.name} skipped: server not found")
+            continue
+
+        print_test_start(spec.name)
+        server_proc = ProcessCapture([sys.executable, str(server_path)])
+        # Allow DDS discovery time between separate processes
+        if spec.server_ready:
+            _wait_for_keywords(server_proc, spec.server_ready, timeout=10.0)
+        else:
+            time.sleep(5.0)
+
+        server_output = ""
+        overall_ok = True
+        for client_path in client_paths:
+            if not client_path.exists():
+                skipped.append((client_path.relative_to(PROJECT_ROOT).as_posix(), "file not found"))
+                print_warning(f"{client_path} skipped: not found")
+                continue
+            ok, output = _run_script(
+                client_path,
+                timeout=spec.client_timeout,
+                expect_output=spec.client_expect,
+            )
+            if not ok:
+                overall_ok = False
+                server_output = output
+                break
+
+        server_proc.terminate()
+        server_output = (server_output + server_proc.output())[:500]
+        if _contains_error(server_output):
+            overall_ok = False
+        results.append((spec.name, overall_ok, server_output or "OK"))
+        if overall_ok:
+            print_success(f"{spec.name} - OK")
+        else:
+            print_error(f"{spec.name} - FAILED")
+            print(f"  {server_output}")
+
+    # Server/client tests (original lwrclpy examples)
     for spec in server_client_specs:
         server_path = PROJECT_ROOT / spec.server
         handled.add(server_path)
