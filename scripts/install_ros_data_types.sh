@@ -51,6 +51,13 @@ if [[ -f "${PY_ACTION_PATCH}" ]]; then
   sudo python3 "${PY_ACTION_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to patch action types"
 fi
 
+# --- Step 2.3: comprehensive ROS 2-style wrapper patching (handles all srv/action types) ---
+PY_WRAPPER_PATCH="${current_dir}/patch_ros2_type_wrappers.py"
+if [[ -f "${PY_WRAPPER_PATCH}" ]]; then
+  echo "[INFO] Applying comprehensive ROS 2-style wrapper patches..."
+  sudo python3 "${PY_WRAPPER_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to apply ROS 2 type wrappers"
+fi
+
 # --- Step 2.5: collect all lib*.so into a single location (idempotent) ---
 echo "[INFO] Collecting generated lib*.so to /opt/fast-dds-v3-libs/lib ..."
 sudo mkdir -p /opt/fast-dds-v3-libs/lib
