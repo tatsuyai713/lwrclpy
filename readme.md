@@ -37,15 +37,15 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 | **Ubuntu/Linuxサポート** | ✅ 完全対応 | ✅ 完全対応 | 両方問題なし |
 | **Windowsサポート** | 🚧 開発中 | ✅ 対応 | - |
 | **ROS 2との相互運用** | ✅ DDS経由で通信可能 | - | 同じドメインIDで接続 |
-| **Publisher/Subscriber** | ✅ | ✅ | 完全互換 |
-| **Service Server/Client** | ✅ | ✅ | 完全互換 |
-| **Action Server/Client** | ✅ | ✅ | 完全互換 |
+| **Publisher/Subscriber** | ✅ | ✅ | API互換 |
+| **Service Server/Client** | ✅ | ✅ | API互換 |
+| **Action Server/Client** | ✅ | ✅ | API互換 |
 | **Timer** | ✅ | ✅ | OneShot/Periodic対応 |
 | **Parameters** | ✅ | ✅ | 基本機能対応 |
 | **Executor** | ✅ | ✅ | Single/MultiThreaded対応 |
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | スレッド間同期 |
-| **QoS Profiles** | ✅ | ✅ | 全ポリシー対応 |
+| **QoS Profiles** | ✅ | ✅ | 主要ポリシー対応 |
 | **ゼロコピー通信** | ✅ DataSharing/SHM | ✅ | `loan_message()` 対応 |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time対応 |
 | **Logging** | ✅ | ✅ | レベル/スロットリング対応 |
