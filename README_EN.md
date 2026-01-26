@@ -37,15 +37,15 @@ lwrclpy reimplements the "rclpy" API (ROS 2's Python client library) on top of F
 | **Ubuntu/Linux Support** | ✅ Full support | ✅ Full support | Both work fine |
 | **Windows Support** | 🚧 In development | ✅ Supported | - |
 | **ROS 2 Interop** | ✅ Via DDS | - | Same domain ID connects |
-| **Publisher/Subscriber** | ✅ | ✅ | Fully compatible |
-| **Service Server/Client** | ✅ | ✅ | Fully compatible |
-| **Action Server/Client** | ✅ | ✅ | Fully compatible |
+| **Publisher/Subscriber** | ✅ | ✅ | API compatible |
+| **Service Server/Client** | ✅ | ✅ | API compatible |
+| **Action Server/Client** | ✅ | ✅ | API compatible |
 | **Timer** | ✅ | ✅ | OneShot/Periodic supported |
 | **Parameters** | ✅ | ✅ | Basic features supported |
 | **Executor** | ✅ | ✅ | Single/MultiThreaded supported |
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | Thread synchronization |
-| **QoS Profiles** | ✅ | ✅ | All policies supported |
+| **QoS Profiles** | ✅ | ✅ | Major policies supported |
 | **Zero-Copy Communication** | ✅ DataSharing/SHM | ✅ | `loan_message()` supported |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time supported |
 | **Logging** | ✅ | ✅ | Levels/throttling supported |
