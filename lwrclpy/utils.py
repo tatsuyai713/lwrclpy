@@ -1,4 +1,3 @@
-"""ユーティリティ（生成型の解決をモジュール/クラス両対応に）。"""
 import importlib
 import types
 
@@ -131,15 +130,59 @@ def resolve_service_type(obj):
     return req_cls, res_cls, req_pubsub, res_pubsub
 
 
+def _get_cancel_goal_types():
+    """
+    Get CancelGoal Request/Response types from action_msgs.
+    Handles both rclpy-style (CancelGoal.Request) and fastddsgen-style (CancelGoal_Request).
+    """
+    try:
+        import action_msgs.srv.CancelGoal as cg_mod
+        # Try rclpy-style first
+        cancel_goal_srv = getattr(cg_mod, "CancelGoal", None)
+        if cancel_goal_srv is not None:
+            req = getattr(cancel_goal_srv, "Request", None)
+            res = getattr(cancel_goal_srv, "Response", None)
+            if req is not None and res is not None:
+                return req, res
+        # Try fastddsgen-style
+        req = getattr(cg_mod, "CancelGoal_Request", None)
+        res = getattr(cg_mod, "CancelGoal_Response", None)
+        if req is not None and res is not None:
+            return req, res
+    except ImportError:
+        pass
+    return None, None
+
+
 def resolve_action_type(action_type):
     """
     Resolve ROS2-style action generated classes.
-    Expects attributes: Goal, Result, Feedback,
-      SendGoal (with Request/Response),
-      GetResult (with Request/Response),
-      FeedbackMessage,
-      CancelGoal (action_msgs/srv/CancelGoal)
+    Supports both rclpy-style nested classes (Goal, Result, SendGoal.Request) and
+    fastddsgen-style flat classes (<ActionName>_Goal, <ActionName>_SendGoal_Request).
+    
+    For rclpy-style:
+      Expects attributes: Goal, Result, Feedback,
+        SendGoal (with Request/Response),
+        GetResult (with Request/Response),
+        FeedbackMessage,
+        CancelGoal (action_msgs/srv/CancelGoal)
+    
+    For fastddsgen-style:
+      Expects attributes: <ActionName>_Goal, <ActionName>_Result, <ActionName>_Feedback,
+        <ActionName>_SendGoal_Request, <ActionName>_SendGoal_Response,
+        <ActionName>_GetResult_Request, <ActionName>_GetResult_Response,
+        <ActionName>_FeedbackMessage
     """
+    # Determine action name from module or type
+    action_name = None
+    if isinstance(action_type, type):
+        action_name = action_type.__name__
+    elif hasattr(action_type, "__name__"):
+        # Module: extract base name from module path
+        mod_name = action_type.__name__
+        action_name = mod_name.split(".")[-1] if mod_name else None
+    
+    # Try rclpy-style first
     goal_cls = getattr(action_type, "Goal", None)
     result_cls = getattr(action_type, "Result", None)
     feedback_cls = getattr(action_type, "Feedback", None)
@@ -148,35 +191,72 @@ def resolve_action_type(action_type):
     feedback_msg_cls = getattr(action_type, "FeedbackMessage", None)
     cancel_srv = getattr(action_type, "CancelGoal", None)
 
-    if not all([goal_cls, result_cls, feedback_cls, send_goal, get_result, feedback_msg_cls]):
-        raise RuntimeError("Action type missing required nested classes (Goal/Result/Feedback/SendGoal/GetResult/FeedbackMessage)")
-
-    send_goal_req = getattr(send_goal, "Request", None)
-    send_goal_res = getattr(send_goal, "Response", None)
-    get_result_req = getattr(get_result, "Request", None)
-    get_result_res = getattr(get_result, "Response", None)
-    if not all([send_goal_req, send_goal_res, get_result_req, get_result_res]):
-        raise RuntimeError("Action SendGoal/GetResult missing Request/Response")
-
-    if cancel_srv is None:
-        raise RuntimeError("Action type missing CancelGoal definition")
-    cancel_req = getattr(cancel_srv, "Request", None)
-    cancel_res = getattr(cancel_srv, "Response", None)
-    if not all([cancel_req, cancel_res]):
-        raise RuntimeError("CancelGoal missing Request/Response")
-
-    return {
-        "goal": goal_cls,
-        "result": result_cls,
-        "feedback": feedback_cls,
-        "send_goal_req": send_goal_req,
-        "send_goal_res": send_goal_res,
-        "get_result_req": get_result_req,
-        "get_result_res": get_result_res,
-        "feedback_msg": feedback_msg_cls,
-        "cancel_req": cancel_req,
-        "cancel_res": cancel_res,
-    }
+    # If rclpy-style is available
+    if all([goal_cls, result_cls, feedback_cls, send_goal, get_result, feedback_msg_cls]):
+        send_goal_req = getattr(send_goal, "Request", None)
+        send_goal_res = getattr(send_goal, "Response", None)
+        get_result_req = getattr(get_result, "Request", None)
+        get_result_res = getattr(get_result, "Response", None)
+        if all([send_goal_req, send_goal_res, get_result_req, get_result_res]):
+            # Resolve CancelGoal
+            cancel_req = None
+            cancel_res = None
+            if cancel_srv is not None:
+                cancel_req = getattr(cancel_srv, "Request", None)
+                cancel_res = getattr(cancel_srv, "Response", None)
+            # If CancelGoal not found from action type, try action_msgs
+            if cancel_req is None or cancel_res is None:
+                cancel_req, cancel_res = _get_cancel_goal_types()
+            if cancel_req is None or cancel_res is None:
+                raise RuntimeError("CancelGoal Request/Response not found")
+            return {
+                "goal": goal_cls,
+                "result": result_cls,
+                "feedback": feedback_cls,
+                "send_goal_req": send_goal_req,
+                "send_goal_res": send_goal_res,
+                "get_result_req": get_result_req,
+                "get_result_res": get_result_res,
+                "feedback_msg": feedback_msg_cls,
+                "cancel_req": cancel_req,
+                "cancel_res": cancel_res,
+            }
+    
+    # Try fastddsgen-style (flat class names)
+    if action_name:
+        goal_cls = getattr(action_type, f"{action_name}_Goal", None)
+        result_cls = getattr(action_type, f"{action_name}_Result", None)
+        feedback_cls = getattr(action_type, f"{action_name}_Feedback", None)
+        feedback_msg_cls = getattr(action_type, f"{action_name}_FeedbackMessage", None)
+        send_goal_req = getattr(action_type, f"{action_name}_SendGoal_Request", None)
+        send_goal_res = getattr(action_type, f"{action_name}_SendGoal_Response", None)
+        get_result_req = getattr(action_type, f"{action_name}_GetResult_Request", None)
+        get_result_res = getattr(action_type, f"{action_name}_GetResult_Response", None)
+        
+        if all([goal_cls, result_cls, feedback_cls, feedback_msg_cls,
+                send_goal_req, send_goal_res, get_result_req, get_result_res]):
+            # Get CancelGoal from action_msgs
+            cancel_req, cancel_res = _get_cancel_goal_types()
+            if cancel_req is None or cancel_res is None:
+                raise RuntimeError("CancelGoal Request/Response not found in action_msgs")
+            return {
+                "goal": goal_cls,
+                "result": result_cls,
+                "feedback": feedback_cls,
+                "send_goal_req": send_goal_req,
+                "send_goal_res": send_goal_res,
+                "get_result_req": get_result_req,
+                "get_result_res": get_result_res,
+                "feedback_msg": feedback_msg_cls,
+                "cancel_req": cancel_req,
+                "cancel_res": cancel_res,
+            }
+    
+    raise RuntimeError(
+        f"Action type missing required classes. "
+        f"Expected rclpy-style (Goal/Result/Feedback/SendGoal/GetResult/FeedbackMessage) or "
+        f"fastddsgen-style ({action_name}_Goal/{action_name}_Result/etc)"
+    )
 
 
 def _find_first_pubsub(mod, prefer: str | None = None):
