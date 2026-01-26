@@ -62,6 +62,13 @@ examples/
 │   ├── wall_timer.py
 │   ├── oneshot_and_periodic.py
 │   └── timer_features_demo.py
+├── launch/               # ROS 2 Launchシステム
+│   ├── basic_launch.py
+│   ├── substitutions_launch.py
+│   ├── conditional_launch.py
+│   ├── environment_launch.py
+│   ├── opaque_function_launch.py
+│   └── node_launch.py
 └── video/                # ビデオストリーミング
 ```
 
@@ -98,6 +105,7 @@ python examples/<category>/<example_name>.py
 | Action | `actions/` | フィードバック付き長時間実行タスク |
 | Parameter | `parameters/` | ノードパラメータの宣言とアクセス |
 | Guard Condition | `guard_condition/` | スレッド間シグナリングと同期 |
+| Launch | `launch/` | ROS 2互換のLaunchシステム |
 
 ### ノードパターン
 

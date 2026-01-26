@@ -162,7 +162,50 @@ PY
 
 add_all_service_shims
 
-# ========= Add shims for actions (Goal/Result/Feedback/SendGoal/GetResult/FeedbackMessage) =========
+# ========= Patch single-file services (e.g., CancelGoal.py containing CancelGoal_Request/Response) =========
+patch_single_file_services(){
+  # Handle services where Request and Response are in a single .py file (like CancelGoal.py)
+  while IFS= read -r srvdir; do
+    # Find .py files that contain both _Request and _Response classes
+    while IFS= read -r pyfile; do
+      local basename_py=$(basename "${pyfile}" .py)
+      # Skip files that are already *_Request.py or *_Response.py
+      [[ "${basename_py}" == *_Request ]] && continue
+      [[ "${basename_py}" == *_Response ]] && continue
+      [[ "${basename_py}" == __init__ ]] && continue
+      
+      # Check if file contains both Request and Response classes
+      local req_class="${basename_py}_Request"
+      local res_class="${basename_py}_Response"
+      if grep -q "class ${req_class}" "${pyfile}" && grep -q "class ${res_class}" "${pyfile}"; then
+        # Check if wrapper class already exists
+        if ! grep -q "^class ${basename_py}:" "${pyfile}"; then
+          log "[PATCH] Single-file service: ${pyfile}"
+          cat >> "${pyfile}" <<PY
+
+# ROS 2-style service wrapper (auto-generated)
+class ${basename_py}:
+    """ROS 2-style service type for ${basename_py}."""
+    Request = ${req_class}
+    Response = ${res_class}
+PY
+        fi
+        # Update __init__.py to export the wrapper class
+        local init="${srvdir}/__init__.py"
+        # Fix broken import if it exists
+        if grep -q "from .${basename_py} import ${basename_py} as ${basename_py}" "${init}"; then
+          log "[INFO] ${basename_py} already exported in __init__.py"
+        else
+          echo "from .${basename_py} import ${basename_py} as ${basename_py}" >> "${init}"
+        fi
+      fi
+    done < <(find "${srvdir}" -maxdepth 1 -type f -name "*.py" 2>/dev/null)
+  done < <(find "${INSTALL_ROOT}" -type d -path "*/srv")
+}
+
+patch_single_file_services
+
+# ========= Add shims for actions (Goal/Result/Feedback/SendGoal/GetResult/FeedbackMessage/CancelGoal) =========
 add_all_action_shims(){
   # Find all action dirs and create ROS 2-style action class wrappers
   while IFS= read -r actiondir; do
@@ -198,14 +241,18 @@ from .${feedback} import ${feedback} as Feedback
 try:
     from .${sendgoal_req} import ${sendgoal_req} as _SendGoal_Request
     from .${sendgoal_res} import ${sendgoal_res} as _SendGoal_Response
-    SendGoal = type('SendGoal', (), {'Request': _SendGoal_Request, 'Response': _SendGoal_Response})
+    class SendGoal:
+        Request = _SendGoal_Request
+        Response = _SendGoal_Response
 except ImportError:
     SendGoal = None
 
 try:
     from .${getresult_req} import ${getresult_req} as _GetResult_Request
     from .${getresult_res} import ${getresult_res} as _GetResult_Response
-    GetResult = type('GetResult', (), {'Request': _GetResult_Request, 'Response': _GetResult_Response})
+    class GetResult:
+        Request = _GetResult_Request
+        Response = _GetResult_Response
 except ImportError:
     GetResult = None
 
@@ -213,6 +260,12 @@ try:
     from .${feedback_msg} import ${feedback_msg} as FeedbackMessage
 except ImportError:
     FeedbackMessage = None
+
+# CancelGoal service from action_msgs (standard for all ROS 2 actions)
+try:
+    from action_msgs.srv import CancelGoal
+except ImportError:
+    CancelGoal = None
 
 class ${action_name}:
     """ROS 2-style action type for ${action_name}."""
@@ -222,6 +275,7 @@ class ${action_name}:
     SendGoal = SendGoal
     GetResult = GetResult
     FeedbackMessage = FeedbackMessage
+    CancelGoal = CancelGoal
 PY
       
       # Add to __init__.py

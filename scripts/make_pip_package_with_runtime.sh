@@ -35,7 +35,7 @@ command -v patchelf >/dev/null 2>&1 || {
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
-PKG_VERSION="${PKG_VERSION:-0.2.0}"
+PKG_VERSION="0.3.0"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"   # prebuilt DataTypes
 PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"                          # fixed Fast-DDS prefix
@@ -105,6 +105,12 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/lwrclpy/" "${ST
 
 echo "[INFO] Staging 'rclpy' compatibility shim…"
 rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/rclpy/" "${STAGING_ROOT}/rclpy/"
+
+echo "[INFO] Staging 'launch' package…"
+rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/launch/" "${STAGING_ROOT}/launch/"
+
+echo "[INFO] Staging 'launch_ros' package…"
+rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/launch_ros/" "${STAGING_ROOT}/launch_ros/"
 
 SENSORMSGS_PY_DIR="${REPO_ROOT}/third_party/common_interfaces/sensor_msgs_py/sensor_msgs_py"
 if [[ -d "${SENSORMSGS_PY_DIR}" ]]; then
@@ -411,6 +417,8 @@ packages = find:
 python_requires = >=3.8
 include_package_data = True
 zip_safe = False
+install_requires =
+    pyyaml
 
 [options.data_files]
 . = lwrclpy_vendor_loader.pth, sitecustomize.py
@@ -438,16 +446,18 @@ if __name__ == "__main__":
     setup(distclass=BinaryDistribution)
 PYSETUP
 
-echo "[INFO] Ensuring 'build' module…"
-python3 - <<'PY'
-import sys, subprocess
-try:
-    import build  # noqa
-except Exception:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "build"])
-PY
+echo "[INFO] Building wheel directly with setup.py bdist_wheel..."
+# Note: FastDDS may cause "double free or corruption" on Python exit during cleanup.
+# This is a known issue with the native library and does not affect the wheel build.
+# We ignore the exit code and verify success by checking if the wheel was created.
+( cd "${STAGING_ROOT}" && python3 setup.py bdist_wheel --dist-dir "${DIST_DIR}" ) || true
 
-( cd "${STAGING_ROOT}" && python3 -m build --wheel --outdir "${DIST_DIR}" )
+# Verify wheel was created successfully
+WHEEL_FILE=$(ls -1 "${DIST_DIR}"/${PKG_NAME}-${PKG_VERSION}-*.whl 2>/dev/null | head -n1)
+if [[ -z "$WHEEL_FILE" || ! -f "$WHEEL_FILE" ]]; then
+  echo "[FATAL] Wheel build failed - no wheel file found in ${DIST_DIR}"
+  exit 1
+fi
 
 echo
 echo "========== Bundled summary =========="

@@ -37,19 +37,20 @@ lwrclpy reimplements the "rclpy" API (ROS 2's Python client library) on top of F
 | **Ubuntu/Linux Support** | ✅ Full support | ✅ Full support | Both work fine |
 | **Windows Support** | 🚧 In development | ✅ Supported | - |
 | **ROS 2 Interop** | ✅ Via DDS | - | Same domain ID connects |
-| **Publisher/Subscriber** | ✅ | ✅ | Fully compatible |
-| **Service Server/Client** | ✅ | ✅ | Fully compatible |
-| **Action Server/Client** | ✅ | ✅ | Fully compatible |
+| **Publisher/Subscriber** | ✅ | ✅ | API compatible |
+| **Service Server/Client** | ✅ | ✅ | API compatible |
+| **Action Server/Client** | ✅ | ✅ | API compatible |
 | **Timer** | ✅ | ✅ | OneShot/Periodic supported |
 | **Parameters** | ✅ | ✅ | Basic features supported |
 | **Executor** | ✅ | ✅ | Single/MultiThreaded supported |
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | Thread synchronization |
-| **QoS Profiles** | ✅ | ✅ | All policies supported |
+| **QoS Profiles** | ✅ | ✅ | Major policies supported |
 | **Zero-Copy Communication** | ✅ DataSharing/SHM | ✅ | `loan_message()` supported |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time supported |
 | **Logging** | ✅ | ✅ | Levels/throttling supported |
 | **Context/Domain ID** | ✅ | ✅ | Multiple contexts supported |
+| **Launch System** | ✅ | ✅ | launch/launch_ros API compatible |
 | **Lifecycle Nodes** | ❌ Not supported | ✅ | Planned for future |
 | **Component Nodes** | ❌ Not supported | ✅ | Planned for future |
 | **ros2 CLI** | ❌ Not needed | ✅ | lwrclpy doesn't require CLI |
@@ -349,6 +350,60 @@ rclpy.init(context=context, domain_id=42)
 node = rclpy.create_node('isolated_node', context=context)
 ```
 
+### Launch System
+
+Use the same Launch API as ROS 2 to start multiple processes and nodes.
+
+```python
+#!/usr/bin/env python3
+# my_launch.py
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        # Declare arguments
+        DeclareLaunchArgument('verbose', default_value='true'),
+        
+        # Conditional log output
+        LogInfo(
+            condition=IfCondition(LaunchConfiguration('verbose')),
+            msg='Starting application...'
+        ),
+        
+        # Launch publisher node
+        Node(
+            executable='examples/pubsub/string/talker.py',
+            name='talker',
+            parameters=[{'rate': 1.0}],
+        ),
+        
+        # Launch subscriber node
+        Node(
+            executable='examples/pubsub/string/listener.py',
+            name='listener',
+        ),
+    ])
+
+if __name__ == '__main__':
+    from launch import LaunchService
+    ls = LaunchService()
+    ls.include_launch_description(generate_launch_description())
+    ls.run()
+```
+
+**Running:**
+```bash
+# Basic execution
+python3 my_launch.py
+
+# With arguments
+python3 my_launch.py verbose:=false
+```
+
 ---
 
 ## 🔗 ROS 2 Interoperability
@@ -397,6 +452,7 @@ See [examples/README.md](examples/README.md) for details.
 | **Executor** | `executor/` | Single/MultiThreaded |
 | **QoS** | `qos/` | Various QoS profiles |
 | **Parameters** | `parameters/` | Node parameters |
+| **Launch** | `launch/` | ROS 2 compatible Launch system |
 | **Logging** | `logging/` | Log level settings |
 | **Clock** | `clock/` | ROS Time/Sim Time |
 | **Context** | `context/` | Domain ID settings |

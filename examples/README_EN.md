@@ -62,6 +62,13 @@ examples/
 │   ├── wall_timer.py
 │   ├── oneshot_and_periodic.py
 │   └── timer_features_demo.py
+├── launch/               # ROS 2 Launch system
+│   ├── basic_launch.py
+│   ├── substitutions_launch.py
+│   ├── conditional_launch.py
+│   ├── environment_launch.py
+│   ├── opaque_function_launch.py
+│   └── node_launch.py
 └── video/                # Video streaming
 ```
 
@@ -98,6 +105,7 @@ Many examples require two terminals (Publisher/Subscriber, Server/Client, etc.).
 | Action | `actions/` | Long-running tasks with feedback |
 | Parameters | `parameters/` | Node parameter declaration and access |
 | Guard Condition | `guard_condition/` | Thread signaling and synchronization |
+| Launch | `launch/` | ROS 2 compatible Launch system |
 
 ### Node Patterns
 

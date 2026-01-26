@@ -37,19 +37,20 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 | **Ubuntu/Linuxサポート** | ✅ 完全対応 | ✅ 完全対応 | 両方問題なし |
 | **Windowsサポート** | 🚧 開発中 | ✅ 対応 | - |
 | **ROS 2との相互運用** | ✅ DDS経由で通信可能 | - | 同じドメインIDで接続 |
-| **Publisher/Subscriber** | ✅ | ✅ | 完全互換 |
-| **Service Server/Client** | ✅ | ✅ | 完全互換 |
-| **Action Server/Client** | ✅ | ✅ | 完全互換 |
+| **Publisher/Subscriber** | ✅ | ✅ | API互換 |
+| **Service Server/Client** | ✅ | ✅ | API互換 |
+| **Action Server/Client** | ✅ | ✅ | API互換 |
 | **Timer** | ✅ | ✅ | OneShot/Periodic対応 |
 | **Parameters** | ✅ | ✅ | 基本機能対応 |
 | **Executor** | ✅ | ✅ | Single/MultiThreaded対応 |
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | スレッド間同期 |
-| **QoS Profiles** | ✅ | ✅ | 全ポリシー対応 |
+| **QoS Profiles** | ✅ | ✅ | 主要ポリシー対応 |
 | **ゼロコピー通信** | ✅ DataSharing/SHM | ✅ | `loan_message()` 対応 |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time対応 |
 | **Logging** | ✅ | ✅ | レベル/スロットリング対応 |
 | **Context/Domain ID** | ✅ | ✅ | 複数コンテキスト対応 |
+| **Launch System** | ✅ | ✅ | launch/launch_ros API互換 |
 | **Lifecycle Nodes** | ❌ 未対応 | ✅ | 将来対応予定 |
 | **Component Nodes** | ❌ 未対応 | ✅ | 将来対応予定 |
 | **ros2 CLI** | ❌ 不要 | ✅ | lwrclpyはCLI不要 |
@@ -349,6 +350,60 @@ rclpy.init(context=context, domain_id=42)
 node = rclpy.create_node('isolated_node', context=context)
 ```
 
+### Launch システム
+
+ROS 2と同じLaunch APIを使用して、複数のプロセスやノードを起動できます。
+
+```python
+#!/usr/bin/env python3
+# my_launch.py
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        # 引数の宣言
+        DeclareLaunchArgument('verbose', default_value='true'),
+        
+        # 条件付きログ出力
+        LogInfo(
+            condition=IfCondition(LaunchConfiguration('verbose')),
+            msg='Starting application...'
+        ),
+        
+        # Publisherノードの起動
+        Node(
+            executable='examples/pubsub/string/talker.py',
+            name='talker',
+            parameters=[{'rate': 1.0}],
+        ),
+        
+        # Subscriberノードの起動
+        Node(
+            executable='examples/pubsub/string/listener.py',
+            name='listener',
+        ),
+    ])
+
+if __name__ == '__main__':
+    from launch import LaunchService
+    ls = LaunchService()
+    ls.include_launch_description(generate_launch_description())
+    ls.run()
+```
+
+**実行方法:**
+```bash
+# 基本実行
+python3 my_launch.py
+
+# 引数を指定して実行
+python3 my_launch.py verbose:=false
+```
+
 ---
 
 ## 🔗 ROS 2との相互運用
@@ -397,6 +452,7 @@ python3 examples/pubsub/string/talker.py
 | **Executor** | `executor/` | Single/MultiThreaded |
 | **QoS** | `qos/` | 各種QoSプロファイル |
 | **Parameters** | `parameters/` | ノードパラメータ |
+| **Launch** | `launch/` | ROS 2互換Launchシステム |
 | **Logging** | `logging/` | ログレベル設定 |
 | **Clock** | `clock/` | ROS Time/Sim Time |
 | **Context** | `context/` | Domain ID設定 |
