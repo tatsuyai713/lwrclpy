@@ -354,6 +354,10 @@ node = rclpy.create_node('isolated_node', context=context)
 
 ROS 2と同じLaunch APIを使用して、複数のプロセスやノードを起動できます。
 
+**探索ディレクトリについて（重要）**  
+`launch_ros.actions.Node` は **カレントディレクトリ配下のみ** を探索します。  
+`executable` は相対パス/絶対パスで指定するか、起動時のカレントを調整してください。
+
 ```python
 #!/usr/bin/env python3
 # my_launch.py
@@ -376,14 +380,16 @@ def generate_launch_description():
         
         # Publisherノードの起動
         Node(
-            executable='examples/pubsub/string/talker.py',
+            package='pubsub/string',
+            executable='talker',
             name='talker',
             parameters=[{'rate': 1.0}],
         ),
-        
+
         # Subscriberノードの起動
         Node(
-            executable='examples/pubsub/string/listener.py',
+            package='pubsub/string',
+            executable='listener',
             name='listener',
         ),
     ])
@@ -397,7 +403,7 @@ if __name__ == '__main__':
 
 **実行方法:**
 ```bash
-# 基本実行
+# 基本実行（カレントディレクトリ配下から探索）
 python3 my_launch.py
 
 # 引数を指定して実行

@@ -31,7 +31,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package='pubsub.string',
+            package='pubsub/string',
             executable='talker',
             name='talker',
             namespace=LaunchConfiguration('namespace'),
@@ -42,7 +42,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package='pubsub.string',
+            package='pubsub/string',
             executable='listener',
             name='listener',
             namespace=LaunchConfiguration('namespace'),

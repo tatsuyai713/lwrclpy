@@ -177,26 +177,16 @@ class Node(ExecuteProcess):
             add_path(os.path.join(cwd, package, 'scripts', executable))
             add_path(os.path.join(cwd, package, executable))
             
-            # lwrclpy examples layout: examples/<package_as_category>/<executable>
-            # e.g., package='pubsub', executable='talker' -> examples/pubsub/talker.py
-            add_path(os.path.join(cwd, 'examples', package, executable))
-            add_path(os.path.join(cwd, 'examples', package, 'string', executable))
-            
-            # Also try: package='pubsub.string', executable='talker'
+            # Support dotted package names under the current directory (e.g., pubsub.string -> pubsub/string)
             pkg_parts = package.replace('.', os.sep)
-            add_path(os.path.join(cwd, 'examples', pkg_parts, executable))
+            add_path(os.path.join(cwd, pkg_parts, executable))
 
         # Direct path (always try)
         add_path(executable)
         add_path(os.path.abspath(executable))
         add_path(os.path.join(cwd, executable))
 
-        # Common example locations
-        add_path(os.path.join(cwd, 'examples', executable))
-        add_path(os.path.join(cwd, 'examples', 'pubsub', executable))
-        add_path(os.path.join(cwd, 'examples', 'pubsub', 'string', executable))
-        add_path(os.path.join(cwd, 'examples', 'services', executable))
-        add_path(os.path.join(cwd, 'examples', 'actions', executable))
+        # Do not search examples/; restrict to cwd and standard locations only.
 
         # Find the executable
         for path in search_paths:

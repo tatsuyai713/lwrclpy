@@ -24,7 +24,7 @@ def generate_launch_description():
         LogInfo(msg='Launching talker immediately...'),
         
         Node(
-            package='pubsub.string',
+            package='pubsub/string',
             executable='talker',
             name='talker',
             output='screen',
@@ -42,7 +42,7 @@ def generate_launch_description():
             actions=[
                 LogInfo(msg='Timer fired! Starting listener...'),
                 Node(
-                    package='pubsub.string',
+                    package='pubsub/string',
                     executable='listener',
                     name='listener',
                     output='screen',

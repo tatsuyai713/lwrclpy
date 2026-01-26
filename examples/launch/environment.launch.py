@@ -43,7 +43,7 @@ def generate_launch_description():
 
         # Node with environment (ROS 2 style)
         Node(
-            package='pubsub.string',
+            package='pubsub/string',
             executable='talker',
             name='talker',
             output='screen',

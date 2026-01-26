@@ -30,9 +30,9 @@ def generate_launch_description():
         ),
 
         # ROS 2 style: package + executable
-        # In lwrclpy, package='pubsub.string' maps to examples/pubsub/string/
+        # In lwrclpy, package='pubsub/string' maps to examples/pubsub/string/
         Node(
-            package='pubsub.string',
+            package='pubsub/string',
             executable='talker',
             name='talker',
             remappings=[('/chatter', LaunchConfiguration('topic'))],
@@ -40,7 +40,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package='pubsub.string',
+            package='pubsub/string',
             executable='listener',
             name='listener',
             remappings=[('/chatter', LaunchConfiguration('topic'))],

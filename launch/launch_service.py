@@ -153,7 +153,7 @@ class LaunchService:
     def run(
         self,
         *,
-        shutdown_when_idle: bool = True,
+        shutdown_when_idle: bool = False,
     ) -> int:
         """
         Run the launch service.

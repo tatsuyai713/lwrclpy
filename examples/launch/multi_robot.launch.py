@@ -28,7 +28,7 @@ def generate_robots(context, *args, **kwargs):
         actions.extend([
             LogInfo(msg=f'Launching robot in namespace: {ns}'),
             Node(
-                package='pubsub.string',
+                package='pubsub/string',
                 executable='talker',
                 name='talker',
                 namespace=ns,
@@ -36,7 +36,7 @@ def generate_robots(context, *args, **kwargs):
                 output='screen',
             ),
             Node(
-                package='pubsub.string',
+                package='pubsub/string',
                 executable='listener',
                 name='listener',
                 namespace=ns,

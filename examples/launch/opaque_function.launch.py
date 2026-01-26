@@ -34,7 +34,7 @@ def launch_setup(context, *args, **kwargs):
         node_name = f'{robot_name}_{i}'
         actions.append(
             Node(
-                package='pubsub.string',
+                package='pubsub/string',
                 executable='talker',
                 name=node_name,
                 parameters=[{'robot_id': i}],

@@ -37,7 +37,7 @@ def generate_launch_description():
             actions=[
                 LogInfo(msg='Running in SIMULATION mode'),
                 Node(
-                    package='pubsub.string',
+                    package='pubsub/string',
                     executable='talker',
                     name='sim_talker',
                     parameters=[{'sim_mode': True}],
@@ -52,7 +52,7 @@ def generate_launch_description():
             actions=[
                 LogInfo(msg='Running in REAL mode'),
                 Node(
-                    package='pubsub.string',
+                    package='pubsub/string',
                     executable='talker',
                     name='real_talker',
                     parameters=[{'sim_mode': False}],
@@ -69,7 +69,7 @@ def generate_launch_description():
             actions=[
                 LogInfo(msg='Launching additional listener'),
                 Node(
-                    package='pubsub.string',
+                    package='pubsub/string',
                     executable='listener',
                     name='listener',
                     output='screen',

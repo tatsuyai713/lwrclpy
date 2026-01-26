@@ -354,6 +354,10 @@ node = rclpy.create_node('isolated_node', context=context)
 
 Use the same Launch API as ROS 2 to start multiple processes and nodes.
 
+**Search directories (important)**  
+`launch_ros.actions.Node` searches **only under the current working directory**.  
+Provide `executable` as a relative/absolute path or adjust the current directory before запуск.
+
 ```python
 #!/usr/bin/env python3
 # my_launch.py
@@ -376,14 +380,16 @@ def generate_launch_description():
         
         # Launch publisher node
         Node(
-            executable='examples/pubsub/string/talker.py',
+            package='pubsub/string',
+            executable='talker',
             name='talker',
             parameters=[{'rate': 1.0}],
         ),
-        
+
         # Launch subscriber node
         Node(
-            executable='examples/pubsub/string/listener.py',
+            package='pubsub/string',
+            executable='listener',
             name='listener',
         ),
     ])
@@ -397,7 +403,7 @@ if __name__ == '__main__':
 
 **Running:**
 ```bash
-# Basic execution
+# Basic execution (searches under current working directory)
 python3 my_launch.py
 
 # With arguments
