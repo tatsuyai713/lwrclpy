@@ -91,6 +91,17 @@ if [[ -f "${PY_ACTION_PATCH}" ]]; then
   fi
 fi
 
+# --- 3.1.3) comprehensive ROS 2-style wrapper patching (handles all srv/action types) ---
+PY_WRAPPER_PATCH="${ROOT_DIR}/scripts/patch_ros2_type_wrappers.py"
+if [[ -f "${PY_WRAPPER_PATCH}" ]]; then
+  echo "[INFO] Applying comprehensive ROS 2-style wrapper patches..."
+  if [[ -w /opt/fast-dds-v3-libs/python/src ]]; then
+    python3 "${PY_WRAPPER_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to apply ROS 2 type wrappers"
+  else
+    sudo python3 "${PY_WRAPPER_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to apply ROS 2 type wrappers"
+  fi
+fi
+
 # --- 3.2) Ensure fastdds Python module is importable (macOS default builds emit .dylib) ---
 ensure_fastdds_python_so() {
   local fastdds_root="$1"

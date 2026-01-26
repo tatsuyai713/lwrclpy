@@ -17,7 +17,7 @@ python3 -m pip install --upgrade pip setuptools wheel delocate || true
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
-PKG_VERSION="${PKG_VERSION:-0.2.0}"
+PKG_VERSION="${PKG_VERSION:-0.3.0}"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"           # prebuilt DataTypes tree
 PY_INSTALL_ROOT="${PY_INSTALL_ROOT:-}"                                     # optional: already-installed DataTypes
@@ -91,6 +91,12 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/lwrclpy/" "${ST
 echo "[INFO] Staging rclpy compatibility shim"
 rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/rclpy/" "${STAGING_ROOT}/rclpy/"
 
+echo "[INFO] Staging 'launch' package…"
+rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/launch/" "${STAGING_ROOT}/launch/"
+
+echo "[INFO] Staging 'launch_ros' package…"
+rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/launch_ros/" "${STAGING_ROOT}/launch_ros/"
+
 SENSORMSGS_PY_DIR="${REPO_ROOT}/third_party/common_interfaces/sensor_msgs_py/sensor_msgs_py"
 if [[ -d "${SENSORMSGS_PY_DIR}" ]]; then
   echo "[INFO] Staging sensor_msgs_py utilities"
@@ -114,10 +120,20 @@ VEN_FASTDDS_DIR="${VEN_FASTDDS_PARENT}/fastdds"
 mkdir -p "${VEN_FASTDDS_PARENT}"
 rsync -a "${FASTDDS_PKG_SRC}/" "${VEN_FASTDDS_DIR}/"
 
+# Ensure Python can import the fastdds extension on macOS (.so expected)
+if [[ -f "${VEN_FASTDDS_DIR}/_fastdds_python.dylib" && ! -f "${VEN_FASTDDS_DIR}/_fastdds_python.so" ]]; then
+  echo "[INFO] Creating _fastdds_python.so from .dylib in vendored fastdds"
+  /bin/cp -p "${VEN_FASTDDS_DIR}/_fastdds_python.dylib" "${VEN_FASTDDS_DIR}/_fastdds_python.so"
+fi
+
 # Also copy fastdds to site-packages root so std_msgs etc can import it directly
 echo "[INFO] Copying fastdds to site-packages root for direct import"
 FASTDDS_ROOT_DIR="${STAGING_ROOT}/fastdds"
 rsync -a "${FASTDDS_PKG_SRC}/" "${FASTDDS_ROOT_DIR}/"
+if [[ -f "${FASTDDS_ROOT_DIR}/_fastdds_python.dylib" && ! -f "${FASTDDS_ROOT_DIR}/_fastdds_python.so" ]]; then
+  echo "[INFO] Creating _fastdds_python.so from .dylib in root fastdds"
+  /bin/cp -p "${FASTDDS_ROOT_DIR}/_fastdds_python.dylib" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"
+fi
 
 echo "[INFO] Writing bootstrap loader"
 LWRCLPY_INIT="${STAGING_ROOT}/lwrclpy/__init__.py"

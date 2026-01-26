@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ubuntu example test entrypoint."""
+"""Example test entrypoint."""
 
 import os
 import sys
@@ -8,7 +8,8 @@ from examples_test_runner import main
 
 
 if __name__ == "__main__":
-    exit_code = main("Ubuntu")
+    platform_name = os.environ.get("LWRCLPY_TEST_PLATFORM", "Generic")
+    exit_code = main(platform_name)
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(exit_code)

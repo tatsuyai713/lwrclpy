@@ -68,6 +68,8 @@ def _module_available(module_name: str) -> bool:
 def _env_with_project() -> dict:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    if env.get("LWRCLPY_TEST_USE_INSTALLED") == "1":
+        return env
     pythonpath = env.get("PYTHONPATH", "")
     project_path = str(PROJECT_ROOT)
     if project_path not in pythonpath.split(os.pathsep):
