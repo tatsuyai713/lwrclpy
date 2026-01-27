@@ -78,7 +78,9 @@ def _env_with_project() -> dict:
 
 
 class ProcessCapture:
-    def __init__(self, command: Sequence[str], cwd: str = "/tmp") -> None:
+    def __init__(self, command: Sequence[str], cwd: Optional[str] = None) -> None:
+        if cwd is None:
+            cwd = str(EXAMPLES_ROOT)
         self.proc = subprocess.Popen(
             list(command),
             stdout=subprocess.PIPE,
