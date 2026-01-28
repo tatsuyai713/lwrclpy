@@ -1,47 +1,102 @@
 #!/usr/bin/env python3
 """
 Patch action type files to add ROS 2-style wrapper classes.
-For actions like Fibonacci, this adds a top-level Fibonacci class that wraps
-Fibonacci_Goal, Fibonacci_Result, etc.
+
+This script automatically adds ROS 2-compatible wrapper classes to SWIG-generated
+action type files. For each action (e.g., Fibonacci), it creates a wrapper class
+that provides:
+- Goal, Result, Feedback message proxies
+- SendGoal, GetResult service interfaces
+- FeedbackMessage type
+- CancelGoal service reference (from action_msgs)
+
+The script is designed to be:
+- Idempotent: Can be run multiple times safely
+- Generic: Works with any ROS 2 action definition
+- Automatic: Detects action components and generates appropriate wrappers
+
+Usage:
+    python patch_action_types.py <install_root>
+
+Example:
+    python patch_action_types.py /opt/fast-dds-v3-libs/python/src
 """
 import os
 import sys
 import re
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional
 
-def patch_action_file(action_file):
+def validate_action_components(content: str, action_name: str) -> Tuple[bool, List[str]]:
     """
-    Add ROS 2-style wrapper class to an action file.
-    E.g., add 'class Fibonacci' that references Fibonacci_Goal, Fibonacci_Result, etc.
+    Validate that all required action components exist in the file.
+    Returns (is_valid, missing_components).
     """
-    with open(action_file, 'r') as f:
-        content = f.read()
+    required_components = [
+        f'{action_name}_Goal',
+        f'{action_name}_Result',
+        f'{action_name}_Feedback',
+        f'{action_name}_SendGoal_Request',
+        f'{action_name}_SendGoal_Response',
+        f'{action_name}_GetResult_Request',
+        f'{action_name}_GetResult_Response',
+        f'{action_name}_FeedbackMessage',
+    ]
     
-    # Extract action name from file path
-    # e.g., /path/to/example_interfaces/action/Fibonacci.py -> Fibonacci
-    action_name = os.path.basename(action_file).replace('.py', '')
+    missing = []
+    for component in required_components:
+        if f'class {component}' not in content:
+            missing.append(component)
     
-    # Check if wrapper class already exists
-    if f'class {action_name}:' in content or f'class {action_name}(' in content:
-        print(f"[SKIP] {action_file}: wrapper class already exists")
-        return False
-    
-    # Check if required component classes exist
-    goal_class = f'{action_name}_Goal'
-    result_class = f'{action_name}_Result'
-    feedback_class = f'{action_name}_Feedback'
-    
-    if not (f'class {goal_class}' in content):
-        print(f"[SKIP] {action_file}: {goal_class} not found")
-        return False
-    
-    # Detect package name from file path to make imports relative and generic
-    # e.g., /path/to/example_interfaces/action/Fibonacci.py -> example_interfaces
+    return len(missing) == 0, missing
+
+
+def extract_package_name(action_file: str) -> str:
+    """Extract package name from action file path."""
     parts = action_file.split(os.sep)
     try:
         action_idx = parts.index('action')
-        package_name = parts[action_idx - 1] if action_idx > 0 else 'unknown'
+        return parts[action_idx - 1] if action_idx > 0 else 'unknown'
     except (ValueError, IndexError):
-        package_name = 'unknown'
+        return 'unknown'
+
+
+def patch_action_file(action_file: str, verbose: bool = True) -> bool:
+    """
+    Add ROS 2-style wrapper class to an action file.
+    
+    Args:
+        action_file: Path to the action Python file
+        verbose: Whether to print detailed progress messages
+    
+    Returns:
+        True if file was patched, False if skipped
+    """
+    action_path = Path(action_file)
+    
+    if not action_path.exists():
+        if verbose:
+            print(f"[ERROR] {action_file}: file does not exist")
+        return False
+    
+    content = action_path.read_text()
+    action_name = action_path.stem
+    
+    # Check if wrapper class already exists
+    if f'class {action_name}:' in content or f'class {action_name}(' in content:
+        if verbose:
+            print(f"  [SKIP] {action_path.relative_to(action_path.parents[2])}: wrapper already exists")
+        return False
+    
+    # Validate action components
+    is_valid, missing = validate_action_components(content, action_name)
+    if not is_valid:
+        if verbose:
+            print(f"  [SKIP] {action_path.relative_to(action_path.parents[2])}: missing components: {', '.join(missing[:3])}")
+        return False
+    
+    # Detect package name
+    package_name = extract_package_name(action_file)
     
     # Create wrapper class with property-based proxy for Goal/Result/Feedback
     wrapper_code = f'''
@@ -135,9 +190,9 @@ class _MessageProxyInstance:
 
 class {action_name}:
     """ROS 2-style action type for {action_name} (package: {package_name})."""
-    Goal = _MessageProxy({goal_class})
-    Result = _MessageProxy({result_class})
-    Feedback = _MessageProxy({feedback_class})
+    Goal = _MessageProxy({action_name}_Goal)
+    Result = _MessageProxy({action_name}_Result)
+    Feedback = _MessageProxy({action_name}_Feedback)
     
     # SendGoal service
     class SendGoal:
@@ -162,44 +217,80 @@ class {action_name}:
         CancelGoal = None
 '''
     
-    # Append to file
-    with open(action_file, 'a') as f:
-        f.write(wrapper_code)
+    # Append wrapper code to file
+    action_path.write_text(content + wrapper_code)
     
-    print(f"[PATCHED] {action_file}: added {action_name} wrapper class")
+    if verbose:
+        print(f"  [PATCH] {action_path.relative_to(action_path.parents[2])}: added {action_name} wrapper")
+    
     return True
+
+
+def find_action_files(root_dir: Path) -> List[Path]:
+    """Find all action Python files in the install root."""
+    action_files = []
+    
+    # Find all action/ directories
+    for action_dir in root_dir.rglob('action'):
+        if not action_dir.is_dir():
+            continue
+        
+        # Find action .py files (exclude internal/wrapper files)
+        for py_file in action_dir.glob('*.py'):
+            # Skip wrapper files, library files, and package init
+            if py_file.name.startswith('_') or \
+               py_file.name.startswith('lib') or \
+               py_file.name == '__init__.py':
+                continue
+            
+            # Must contain action component classes
+            content = py_file.read_text()
+            action_name = py_file.stem
+            if f'class {action_name}_Goal' in content:
+                action_files.append(py_file)
+    
+    return sorted(action_files)
+
 
 def main():
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <root_dir>")
-        print(f"  Patches all action .py files under <root_dir>/**/action/")
+        print(__doc__)
         sys.exit(1)
     
-    root_dir = sys.argv[1]
-    if not os.path.isdir(root_dir):
-        print(f"Error: {root_dir} is not a directory")
+    root_dir = Path(sys.argv[1])
+    
+    if not root_dir.exists() or not root_dir.is_dir():
+        print(f"[ERROR] Install root does not exist or is not a directory: {root_dir}")
         sys.exit(1)
+    
+    print(f"[INFO] Scanning for action files in {root_dir}")
+    action_files = find_action_files(root_dir)
+    
+    if not action_files:
+        print("[INFO] No action files found")
+        return 0
+    
+    print(f"[INFO] Found {len(action_files)} action files")
     
     patched_count = 0
+    skipped_count = 0
     
-    # Find all action directories
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        if not dirpath.endswith('/action'):
-            continue
-        
-        # Find action .py files (not _*Wrapper.py, not __init__.py)
-        for filename in filenames:
-            if not filename.endswith('.py'):
-                continue
-            if filename.startswith('_') or filename.startswith('lib') or filename == '__init__.py':
-                continue
-            
-            action_file = os.path.join(dirpath, filename)
-            if patch_action_file(action_file):
-                patched_count += 1
+    for action_file in action_files:
+        if patch_action_file(str(action_file), verbose=True):
+            patched_count += 1
+        else:
+            skipped_count += 1
     
-    print(f"\n[DONE] Patched {patched_count} action files")
-    return 0 if patched_count > 0 else 1
+    print(f"\n[INFO] Patched {patched_count}/{len(action_files)} action files")
+    if skipped_count > 0:
+        print(f"[INFO] Skipped {skipped_count} files (already patched or incomplete)")
+    
+    if patched_count > 0:
+        print("[INFO] ROS 2-style action wrappers applied successfully")
+    
+    return 0
+
 
 if __name__ == '__main__':
     sys.exit(main())
+

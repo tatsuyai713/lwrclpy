@@ -102,6 +102,17 @@ if [[ -f "${PY_WRAPPER_PATCH}" ]]; then
   fi
 fi
 
+# --- 3.1.4) patch message/action/service dependencies for correct library preloading ---
+PY_DEPS_PATCH="${ROOT_DIR}/scripts/patch_message_dependencies.py"
+if [[ -f "${PY_DEPS_PATCH}" ]]; then
+  echo "[INFO] Patching message/action/service files to preload dependent libraries..."
+  if [[ -w /opt/fast-dds-v3-libs/python/src ]]; then
+    python3 "${PY_DEPS_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to patch message dependencies"
+  else
+    sudo python3 "${PY_DEPS_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to patch message dependencies"
+  fi
+fi
+
 # --- 3.2) Ensure fastdds Python module is importable (macOS default builds emit .dylib) ---
 ensure_fastdds_python_so() {
   local fastdds_root="$1"

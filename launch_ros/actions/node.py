@@ -138,6 +138,29 @@ class Node(ExecuteProcess):
         """Get the node namespace."""
         return self._node_namespace
 
+    def _resolve_cmd(self, context: 'LaunchContext') -> List[str]:
+        """Resolve the command with substitutions.
+        
+        Override ExecuteProcess._resolve_cmd to build the command
+        from package and executable specifications.
+        """
+        # Since we initialized with cmd=[], we need to build it here
+        return self._build_command(context)
+
+    def _resolve_env(self, context: 'LaunchContext') -> Dict[str, str]:
+        """Resolve environment variables.
+        
+        Override ExecuteProcess._resolve_env to add Node-specific
+        environment variables.
+        """
+        # Build the environment with Node-specific variables
+        env = self._build_environment(context)
+        
+        # Also add context environment
+        env.update(context.environment)
+        
+        return env
+
     def _find_executable(self, executable: str, package: Optional[str], context: 'LaunchContext') -> List[str]:
         """
         Find and return the command to execute the script.
@@ -166,27 +189,28 @@ class Node(ExecuteProcess):
 
         # If package is specified, prioritize package-based paths (ROS 2 style)
         if package:
+            # Support both dotted and slash-separated package names
+            # e.g., 'pubsub.string' or 'pubsub/string' -> 'pubsub/string'
+            pkg_parts = package.replace('.', os.sep)
+            
             # Standard ROS 2 workspace layout
-            add_path(os.path.join(cwd, 'install', package, 'lib', package, executable))
-            add_path(os.path.join(cwd, 'install', 'lib', package, executable))
+            add_path(os.path.join(cwd, 'install', pkg_parts, 'lib', pkg_parts, executable))
+            add_path(os.path.join(cwd, 'install', 'lib', pkg_parts, executable))
             
             # Source layout
-            add_path(os.path.join(cwd, 'src', package, package, executable))
-            add_path(os.path.join(cwd, 'src', package, 'scripts', executable))
-            add_path(os.path.join(cwd, 'src', package, executable))
-            add_path(os.path.join(cwd, package, 'scripts', executable))
-            add_path(os.path.join(cwd, package, executable))
-            
-            # Support dotted package names under the current directory (e.g., pubsub.string -> pubsub/string)
-            pkg_parts = package.replace('.', os.sep)
+            add_path(os.path.join(cwd, 'src', pkg_parts, pkg_parts, executable))
+            add_path(os.path.join(cwd, 'src', pkg_parts, 'scripts', executable))
+            add_path(os.path.join(cwd, 'src', pkg_parts, executable))
+            add_path(os.path.join(cwd, pkg_parts, 'scripts', executable))
             add_path(os.path.join(cwd, pkg_parts, executable))
+            
+            # lwrclpy-specific: examples directory
+            add_path(os.path.join(cwd, 'examples', pkg_parts, executable))
 
         # Direct path (always try)
         add_path(executable)
         add_path(os.path.abspath(executable))
         add_path(os.path.join(cwd, executable))
-
-        # Do not search examples/; restrict to cwd and standard locations only.
 
         # Find the executable
         for path in search_paths:
@@ -283,35 +307,6 @@ class Node(ExecuteProcess):
                 env['LWRCLPY_REMAPPINGS'] = ';'.join(remaps)
 
         return env
-
-    def _execute_impl(self, context: 'LaunchContext') -> Optional[List['LaunchDescriptionEntity']]:
-        """Execute the node."""
-        # Build command
-        self._cmd = self._build_command(context)
-
-        # Build environment
-        env = self._build_environment(context)
-
-        # Determine name for logging
-        if self._exec_name:
-            name = context.perform_substitution(self._exec_name)
-        elif self._node_name:
-            name = context.perform_substitution(self._node_name)
-        else:
-            name = 'node'
-
-        # Resolve working directory
-        cwd = None
-        if self._cwd is not None:
-            cwd = context.perform_substitution(self._cwd)
-
-        if self._log_cmd:
-            print(f"[INFO] [{name}] cmd: {' '.join(self._cmd)}")
-
-        # Start the process
-        self._start_process_sync(self._cmd, env, cwd, name, context)
-
-        return None
 
     def describe(self) -> str:
         """Return a description of this action."""

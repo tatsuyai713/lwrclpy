@@ -225,6 +225,7 @@ def _run_pair(
 
     if _contains_error(pub_output) or _contains_error(sub_output):
         return False, (pub_output + sub_output)[:500]
+    print(f"DEBUG: matched={matched}, sub_output={repr(sub_output)}")
     if not matched:
         return False, f"Subscriber output did not include {list(subscriber_expect)}"
     if not pub_done:
@@ -656,7 +657,8 @@ def run_all_examples(platform_name: str) -> bool:
             print_warning(f"{name} skipped: file not found")
             continue
         print_test_start(name)
-        ok, output = _run_script(script, timeout=10.0, expect_output=expect)
+        # Launch files run indefinitely, so use allow_timeout=True
+        ok, output = _run_script(script, timeout=10.0, expect_output=expect, allow_timeout=True)
         results.append((name, ok, output))
         if ok:
             print_success(f"{name} - OK")

@@ -35,7 +35,7 @@ command -v patchelf >/dev/null 2>&1 || {
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
-PKG_VERSION="0.3.0"
+PKG_VERSION="0.3.1"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"   # prebuilt DataTypes
 PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"                          # fixed Fast-DDS prefix
@@ -97,6 +97,12 @@ fi
 if [[ -f "${SCRIPTS_DIR}/patch_service_types.py" ]]; then
   echo "[INFO] Patching service types to add ROS 2-style wrapper classes…"
   python3 "${SCRIPTS_DIR}/patch_service_types.py" "${STAGING_ROOT}"
+fi
+
+# ========= 1.6) Patch message dependencies for correct library preloading =========
+if [[ -f "${SCRIPTS_DIR}/patch_message_dependencies.py" ]]; then
+  echo "[INFO] Patching message files to preload dependent libraries…"
+  python3 "${SCRIPTS_DIR}/patch_message_dependencies.py" "${STAGING_ROOT}"
 fi
 
 # ========= 2) Stage lwrclpy pure-Python sources =========
@@ -447,31 +453,54 @@ if __name__ == "__main__":
 PYSETUP
 
 echo "[INFO] Building wheel directly with setup.py bdist_wheel..."
+echo "[INFO] Note: FastDDS may emit warnings on Python exit - this is expected and can be ignored"
+echo "================================================================"
 # Note: FastDDS may cause "double free or corruption" on Python exit during cleanup.
 # This is a known issue with the native library and does not affect the wheel build.
 # We ignore the exit code and verify success by checking if the wheel was created.
-( cd "${STAGING_ROOT}" && python3 setup.py bdist_wheel --dist-dir "${DIST_DIR}" ) || true
+( cd "${STAGING_ROOT}" && python3 setup.py bdist_wheel --dist-dir "${DIST_DIR}" 2>&1 ) || true
+BUILD_EXIT_CODE=$?
+
+echo "================================================================"
+echo "[INFO] Wheel build process completed (exit code may be non-zero due to FastDDS cleanup)"
 
 # Verify wheel was created successfully
 WHEEL_FILE=$(ls -1 "${DIST_DIR}"/${PKG_NAME}-${PKG_VERSION}-*.whl 2>/dev/null | head -n1)
 if [[ -z "$WHEEL_FILE" || ! -f "$WHEEL_FILE" ]]; then
+  echo "================================================================"
   echo "[FATAL] Wheel build failed - no wheel file found in ${DIST_DIR}"
+  echo "        Expected: ${DIST_DIR}/${PKG_NAME}-${PKG_VERSION}-*.whl"
+  echo "================================================================"
   exit 1
 fi
 
-echo
-echo "========== Bundled summary =========="
-echo "[fastdds core libs]"
-ls -l "${STAGING_ROOT}/lwrclpy/_vendor/lib"/libfastcdr.so "${STAGING_ROOT}/lwrclpy/_vendor/lib"/libfastdds.so
-echo "[vendored fastdds package]"
-ls -l "${STAGING_ROOT}/lwrclpy/_vendor/fastdds"/ | sed 's/^/  /'
-echo "===================================="
+echo "[SUCCESS] Wheel file created: $(basename "$WHEEL_FILE")"
+echo "[SUCCESS] Wheel file created: $(basename "$WHEEL_FILE")"
 
-echo
-echo "✅ Wheel ready under: ${DIST_DIR}"
-ls -1 "${DIST_DIR}"/${PKG_NAME}-*.whl
-echo "Install:"
-echo "  pip install \$(ls -1 ${DIST_DIR}/${PKG_NAME}-*.whl | tail -n1)"
-echo "Run examples:"
-echo "  python3 examples/talker_string.py"
-echo "  python3 examples/listener_string.py"
+echo ""
+echo "================================================================"
+echo "            WHEEL BUILD COMPLETED SUCCESSFULLY"
+echo "================================================================"
+echo ""
+echo "[Bundled summary]"
+echo "[fastdds core libs]"
+ls -l "${STAGING_ROOT}/lwrclpy/_vendor/lib"/libfastcdr.so "${STAGING_ROOT}/lwrclpy/_vendor/lib"/libfastdds.so 2>/dev/null | head -5
+echo ""
+echo "[vendored fastdds package]"
+ls -lh "${STAGING_ROOT}/lwrclpy/_vendor/fastdds"/ 2>/dev/null | head -10 | sed 's/^/  /'
+echo ""
+echo "================================================================"
+echo "✅ SUCCESS: Wheel ready at:"
+echo "   ${WHEEL_FILE}"
+echo ""
+echo "📦 Wheel size: $(du -h "$WHEEL_FILE" | cut -f1)"
+echo ""
+echo "Next steps:"
+echo "  1) Install the wheel:"
+echo "     pip install \"${WHEEL_FILE}\""
+echo ""
+echo "  2) Run examples:"
+echo "     python3 examples/talker_string.py"
+echo "     python3 examples/listener_string.py"
+echo ""
+echo "================================================================"

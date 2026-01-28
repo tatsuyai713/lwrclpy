@@ -17,7 +17,7 @@ python3 -m pip install --upgrade pip setuptools wheel delocate || true
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
-PKG_VERSION="${PKG_VERSION:-0.3.0}"
+PKG_VERSION="${PKG_VERSION:-0.3.1}"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"           # prebuilt DataTypes tree
 PY_INSTALL_ROOT="${PY_INSTALL_ROOT:-}"                                     # optional: already-installed DataTypes
@@ -83,6 +83,13 @@ if [[ -f "${SCRIPTS_DIR}/patch_service_types.py" ]]; then
   python3 "${SCRIPTS_DIR}/patch_service_types.py" "${STAGING_ROOT}"
 else
   echo "[WARN] patch_service_types.py not found, skipping service type patching"
+fi
+
+echo "[INFO] Patching message files to preload dependent libraries"
+if [[ -f "${SCRIPTS_DIR}/patch_message_dependencies.py" ]]; then
+  python3 "${SCRIPTS_DIR}/patch_message_dependencies.py" "${STAGING_ROOT}"
+else
+  echo "[WARN] patch_message_dependencies.py not found, skipping message dependency patching"
 fi
 
 echo "[INFO] Staging lwrclpy sources"

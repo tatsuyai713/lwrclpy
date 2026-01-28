@@ -14,7 +14,9 @@ def main():
     msg = String()
     i = 0
     try:
-        while rclpy.ok() and i < 20:
+        # Publish for longer duration to ensure subscriber has time to connect
+        # sensor_data QoS is volatile, so messages are not retained
+        while rclpy.ok() and i < 100:  # Increased from 20 to 100
             msg.data = f"sensor tick {i}"
             pub.publish(msg)
             print(f"[send] {msg.data}")

@@ -58,6 +58,13 @@ if [[ -f "${PY_WRAPPER_PATCH}" ]]; then
   sudo python3 "${PY_WRAPPER_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to apply ROS 2 type wrappers"
 fi
 
+# --- Step 2.4: patch message dependencies for correct library preloading ---
+PY_DEPS_PATCH="${current_dir}/patch_message_dependencies.py"
+if [[ -f "${PY_DEPS_PATCH}" ]]; then
+  echo "[INFO] Patching message files to preload dependent libraries..."
+  sudo python3 "${PY_DEPS_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to patch message dependencies"
+fi
+
 # --- Step 2.5: collect all lib*.so into a single location (idempotent) ---
 echo "[INFO] Collecting generated lib*.so to /opt/fast-dds-v3-libs/lib ..."
 sudo mkdir -p /opt/fast-dds-v3-libs/lib
