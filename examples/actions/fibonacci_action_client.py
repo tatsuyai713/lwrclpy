@@ -27,7 +27,7 @@ class FibonacciActionClient(Node):
     def send_goal(self, order: int):
         self.get_logger().info("Waiting for action server (DDS discovery)...")
         # Wait for DDS discovery between processes (longer on macOS)
-        time.sleep(3.0)
+        time.sleep(6.0)
 
         goal_msg = Fibonacci.Goal()
         goal_msg.order = order

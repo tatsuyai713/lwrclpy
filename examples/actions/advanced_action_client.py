@@ -27,7 +27,7 @@ def main():
     
     logger.info("Waiting for action server (DDS discovery)...")
     # Wait for DDS discovery between processes (longer on macOS)
-    time.sleep(3.0)
+    time.sleep(6.0)
     
     logger.info("Action server should be available now!\n")
     
