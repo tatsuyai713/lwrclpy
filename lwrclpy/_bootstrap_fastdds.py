@@ -24,11 +24,8 @@ def _prepend_sys_path(path):
         sys.path.insert(0, norm)
 
 def _iter_fastdds_paths():
+    """Iterate over Python site-packages directories where pip installs packages."""
     import site
-    
-    explicit = os.environ.get("FASTDDS_PYTHON")
-    if explicit:
-        yield explicit
     
     # Only check Python site-packages (where pip installs packages)
     user_site = site.getusersitepackages()
@@ -38,15 +35,6 @@ def _iter_fastdds_paths():
     for sp in site.getsitepackages():
         if os.path.isdir(sp):
             yield sp
-    
-    # Only check environment prefix if explicitly set
-    env_prefix = os.environ.get("FASTDDS_PREFIX")
-    if env_prefix:
-        pyxy = _python_xy()
-        for sub in (f"{env_prefix}/lib/python{pyxy}/site-packages",
-                    f"{env_prefix}/lib/python{pyxy}/dist-packages"):
-            if os.path.isdir(sub):
-                yield sub
 
 def _preload_libs(paths):
     for p in paths:
@@ -119,16 +107,18 @@ def _find_message_libs():
             continue
 
 def ensure_fastdds():
-    # 0) Preload message type libraries from Python site-packages
-    # This handles action_msgs UUID/Time dependencies and other message types
-    try:
-        msg_libs = list(_find_message_libs())
-        if msg_libs:
-            _preload_libs(msg_libs)
-    except Exception:
-        pass
+    """
+    Ensure Fast-DDS Python bindings are available.
     
-    # 1) Prefer vendored copy (bundled with lwrclpy)
+    This function:
+    1. Preloads Fast-DDS libraries from lwrclpy's _vendor directory
+    2. Preloads ROS message libraries that depend on Fast-DDS
+    3. Sets up Python paths to find fastdds module
+    
+    Note: All message packages should import lwrclpy first to ensure
+    Fast-DDS is loaded before their native libraries are used.
+    """
+    # 1) Preload vendored Fast-DDS libraries (bundled with lwrclpy)
     try:
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
         vendor_parent = os.path.join(pkg_dir, "_vendor")
@@ -136,27 +126,22 @@ def ensure_fastdds():
         vendor_fastdds = os.path.join(vendor_parent, "fastdds")
         
         if os.path.isdir(vendor_lib):
-            # macOS uses DYLD_LIBRARY_PATH, Linux uses LD_LIBRARY_PATH
+            # Preload Fast-DDS libs in dependency order: fastcdr -> fastdds
             if _is_macos():
-                ld_var = "DYLD_LIBRARY_PATH"
+                # Load libfastcdr first (dependency of libfastdds)
+                cdr_libs = glob.glob(os.path.join(vendor_lib, "libfastcdr*.dylib"))
+                _preload_libs(cdr_libs)
+                # Then load libfastdds
+                dds_libs = glob.glob(os.path.join(vendor_lib, "libfastdds*.dylib"))
+                _preload_libs(dds_libs)
             else:
-                ld_var = "LD_LIBRARY_PATH"
-            
-            ld = os.environ.get(ld_var, "")
-            parts = ld.split(":") if ld else []
-            abs_vendor_lib = os.path.abspath(vendor_lib)
-            if abs_vendor_lib not in parts:
-                os.environ[ld_var] = abs_vendor_lib + (":" + ld if ld else "")
-            
-            # Preload vendor libs first (handle both .so and .dylib)
-            if _is_macos():
-                libs = glob.glob(os.path.join(vendor_lib, "libfast*.dylib"))
-            else:
+                # On Linux, preload all Fast-DDS libraries
                 libs = glob.glob(os.path.join(vendor_lib, "libfast*.so*"))
-            _preload_libs(libs)
+                _preload_libs(libs)
+            
             try:
                 # On Windows/Python>=3.8 this is required; harmless elsewhere
-                os.add_dll_directory(abs_vendor_lib)  # type: ignore[attr-defined]
+                os.add_dll_directory(vendor_lib)  # type: ignore[attr-defined]
             except Exception:
                 pass
         
@@ -164,35 +149,36 @@ def ensure_fastdds():
             _prepend_sys_path(vendor_parent)
     except Exception:
         pass
+    
+    # 2) Preload message type libraries from Python site-packages
+    # This handles dependencies like action_msgs -> unique_identifier_msgs
+    try:
+        msg_libs = list(_find_message_libs())
+        if msg_libs:
+            _preload_libs(msg_libs)
+    except Exception:
+        pass
 
+    # 3) Try to import fastdds module
     try:
         import fastdds  # noqa: F401
         return
     except Exception:
         pass
 
-    # Try to add known locations for fastdds bindings
+    # 4) If not found, search in site-packages directories
     for base in _iter_fastdds_paths():
         fastdds_pkg = os.path.join(base, "fastdds")
         if os.path.isdir(fastdds_pkg):
             _prepend_sys_path(base)
-            # Preload the extension library if present
-            for ext in glob.glob(os.path.join(fastdds_pkg, "_fastdds_python.*")):
-                _preload_libs([ext])
             break
 
-    # Also add generated message root if present
+    # 5) Add site-packages to sys.path for message packages
     import site
-    gen_roots = [os.environ.get("FASTDDS_TYPES_ROOT")]
-    # Add site-packages as potential message root
     user_site = site.getusersitepackages()
-    if user_site:
-        gen_roots.append(user_site)
-    gen_roots.extend(site.getsitepackages())
+    if user_site and os.path.isdir(user_site):
+        _prepend_sys_path(user_site)
     
-    for gen_root in gen_roots:
-        if gen_root and os.path.isdir(gen_root):
-            _prepend_sys_path(gen_root)
-
-    import fastdds  # noqa: F401
-    return fastdds
+    for sp in site.getsitepackages():
+        if os.path.isdir(sp):
+            _prepend_sys_path(sp)

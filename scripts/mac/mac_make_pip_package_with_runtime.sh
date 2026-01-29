@@ -92,6 +92,13 @@ else
   echo "[WARN] patch_message_dependencies.py not found, skipping message dependency patching"
 fi
 
+echo "[INFO] Patching all message packages to preload lwrclpy"
+if [[ -f "${SCRIPTS_DIR}/patch_message_preload.py" ]]; then
+  python3 "${SCRIPTS_DIR}/patch_message_preload.py" "${STAGING_ROOT}"
+else
+  echo "[WARN] patch_message_preload.py not found, skipping message preload patching"
+fi
+
 echo "[INFO] Staging lwrclpy sources"
 rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/lwrclpy/" "${STAGING_ROOT}/lwrclpy/"
 
@@ -121,6 +128,12 @@ mkdir -p "${VEN_LIB_DIR}"
 install -m 0644 "${FASTDDS_PREFIX}/lib/libfastdds.dylib" "${VEN_LIB_DIR}/"
 install -m 0644 "${FASTDDS_PREFIX}/lib/libfastcdr.dylib" "${VEN_LIB_DIR}/"
 
+# Create versioned symlinks for libfastdds and libfastcdr
+echo "[INFO] Creating versioned symlinks for Fast DDS libraries"
+(cd "${VEN_LIB_DIR}" && ln -sf libfastdds.dylib libfastdds.3.2.dylib)
+(cd "${VEN_LIB_DIR}" && ln -sf libfastcdr.dylib libfastcdr.1.1.dylib)
+(cd "${VEN_LIB_DIR}" && ln -sf libfastcdr.dylib libfastcdr.2.dylib)
+
 echo "[INFO] Vendoring fastdds Python package"
 VEN_FASTDDS_PARENT="${STAGING_ROOT}/lwrclpy/_vendor"
 VEN_FASTDDS_DIR="${VEN_FASTDDS_PARENT}/fastdds"
@@ -141,6 +154,26 @@ if [[ -f "${FASTDDS_ROOT_DIR}/_fastdds_python.dylib" && ! -f "${FASTDDS_ROOT_DIR
   echo "[INFO] Creating _fastdds_python.so from .dylib in root fastdds"
   /bin/cp -p "${FASTDDS_ROOT_DIR}/_fastdds_python.dylib" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"
 fi
+
+# Fix @rpath in fastdds Python bindings to point to lwrclpy/_vendor/lib
+echo "[INFO] Fixing @rpath in fastdds Python bindings"
+for FASTDDS_BINDING in "${VEN_FASTDDS_DIR}/_fastdds_python.so" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"; do
+  if [[ -f "${FASTDDS_BINDING}" ]]; then
+    echo "  Patching ${FASTDDS_BINDING}"
+    # Remove old @rpath entries pointing to /opt
+    for OLD_RPATH in $(otool -l "${FASTDDS_BINDING}" | grep -A 2 "LC_RPATH" | grep "path " | grep "/opt/" | awk '{print $2}' | tr -d '()'); do
+      install_name_tool -delete_rpath "${OLD_RPATH}" "${FASTDDS_BINDING}" 2>/dev/null || true
+    done
+    # Add new @rpath pointing to lwrclpy/_vendor/lib (relative path)
+    if [[ "${FASTDDS_BINDING}" == *"/_vendor/"* ]]; then
+      # For vendored binding: @loader_path/../lib
+      install_name_tool -add_rpath "@loader_path/../lib" "${FASTDDS_BINDING}" 2>/dev/null || true
+    else
+      # For root binding: @loader_path/../lwrclpy/_vendor/lib
+      install_name_tool -add_rpath "@loader_path/../lwrclpy/_vendor/lib" "${FASTDDS_BINDING}" 2>/dev/null || true
+    fi
+  fi
+done
 
 echo "[INFO] Writing bootstrap loader"
 LWRCLPY_INIT="${STAGING_ROOT}/lwrclpy/__init__.py"

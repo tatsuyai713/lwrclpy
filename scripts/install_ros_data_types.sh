@@ -65,7 +65,14 @@ if [[ -f "${PY_DEPS_PATCH}" ]]; then
   sudo python3 "${PY_DEPS_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to patch message dependencies"
 fi
 
-# --- Step 2.5: collect all lib*.so into a single location (idempotent) ---
+# --- Step 2.5: patch all message packages to preload lwrclpy (ensures Fast-DDS loads first) ---
+PY_PRELOAD_PATCH="${current_dir}/patch_message_preload.py"
+if [[ -f "${PY_PRELOAD_PATCH}" ]]; then
+  echo "[INFO] Patching all message packages to preload lwrclpy..."
+  sudo python3 "${PY_PRELOAD_PATCH}" /opt/fast-dds-v3-libs/python/src || echo "[WARN] Failed to patch message preload"
+fi
+
+# --- Step 2.6: collect all lib*.so into a single location (idempotent) ---
 echo "[INFO] Collecting generated lib*.so to /opt/fast-dds-v3-libs/lib ..."
 sudo mkdir -p /opt/fast-dds-v3-libs/lib
 # Clean up broken symlinks if any
