@@ -239,6 +239,24 @@ if [[ "$PLATFORM" == "linux" ]]; then
     echo "        Please install: libtinyxml2-9 (or libtinyxml2-dev) before building the wheel." >&2
     exit 2
   fi
+
+  openssl_dir="$(find_sys_lib_dir libssl || true)"
+  if [[ -n "${openssl_dir}" ]]; then
+    copy_lib_variants "libssl.so" "${openssl_dir}"
+  else
+    echo "[FATAL] libssl.so.* not found in system lib dirs." >&2
+    echo "        Please install: libssl3 (or libssl-dev) before building the wheel." >&2
+    exit 2
+  fi
+
+  crypto_dir="$(find_sys_lib_dir libcrypto || true)"
+  if [[ -n "${crypto_dir}" ]]; then
+    copy_lib_variants "libcrypto.so" "${crypto_dir}"
+  else
+    echo "[FATAL] libcrypto.so.* not found in system lib dirs." >&2
+    echo "        Please install: libcrypto3 (or libssl-dev) before building the wheel." >&2
+    exit 2
+  fi
 fi
 
 # ========= 4) Vendor the ENTIRE fastdds package (no search) =========

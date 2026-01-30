@@ -233,6 +233,25 @@ for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
   done
 done
 
+# Ensure vendored OpenSSL dylibs refer to each other via @rpath (avoid Cellar absolute paths)
+echo "[INFO] Rewriting OpenSSL dylib self-references to @rpath (if any)"
+for SSL in "${VEN_LIB_DIR}/libssl"*.dylib; do
+  [[ -f "${SSL}" ]] || continue
+  # Normalize libssl install name
+  install_name_tool -id "@rpath/$(basename "${SSL}")" "${SSL}" 2>/dev/null || true
+  # Rewrite libcrypto dependency inside libssl
+  for DEP in $(otool -L "${SSL}" | awk 'NR>1 {print $1}' | grep 'libcrypto' || true); do
+    base="$(basename "${DEP}")"
+    install_name_tool -change "${DEP}" "@rpath/${base}" "${SSL}" 2>/dev/null || true
+  done
+done
+
+for CRYPTO in "${VEN_LIB_DIR}/libcrypto"*.dylib; do
+  [[ -f "${CRYPTO}" ]] || continue
+  # Normalize libcrypto install name
+  install_name_tool -id "@rpath/$(basename "${CRYPTO}")" "${CRYPTO}" 2>/dev/null || true
+done
+
 echo "[INFO] Writing bootstrap loader"
 LWRCLPY_INIT="${STAGING_ROOT}/lwrclpy/__init__.py"
 [[ -f "${LWRCLPY_INIT}" ]] || echo "# auto-generated" > "${LWRCLPY_INIT}"
