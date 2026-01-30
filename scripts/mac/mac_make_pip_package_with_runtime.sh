@@ -134,6 +134,42 @@ echo "[INFO] Creating versioned symlinks for Fast DDS libraries"
 (cd "${VEN_LIB_DIR}" && ln -sf libfastcdr.dylib libfastcdr.1.1.dylib)
 (cd "${VEN_LIB_DIR}" && ln -sf libfastcdr.dylib libfastcdr.2.dylib)
 
+# Bundle tinyxml2 if present (Homebrew dependency required by Fast DDS)
+echo "[INFO] Vendoring tinyxml2 (if available)"
+TINYXML2_LIB_DIR=""
+for CAND in "/opt/homebrew/opt/tinyxml2/lib" "/usr/local/opt/tinyxml2/lib"; do
+  if [[ -d "${CAND}" ]]; then
+    TINYXML2_LIB_DIR="${CAND}"
+    break
+  fi
+done
+if [[ -n "${TINYXML2_LIB_DIR}" ]]; then
+  for f in "${TINYXML2_LIB_DIR}"/libtinyxml2*.dylib; do
+    [[ -f "${f}" ]] || continue
+    install -m 0644 "${f}" "${VEN_LIB_DIR}/"
+  done
+else
+  echo "[WARN] tinyxml2 not found under /opt/homebrew or /usr/local; continuing without bundling"
+fi
+
+# Bundle OpenSSL 3 if present (Homebrew dependency required by Fast DDS)
+echo "[INFO] Vendoring OpenSSL 3 (if available)"
+OPENSSL_LIB_DIR=""
+for CAND in "/opt/homebrew/opt/openssl@3/lib" "/usr/local/opt/openssl@3/lib"; do
+  if [[ -d "${CAND}" ]]; then
+    OPENSSL_LIB_DIR="${CAND}"
+    break
+  fi
+done
+if [[ -n "${OPENSSL_LIB_DIR}" ]]; then
+  for f in "${OPENSSL_LIB_DIR}"/libssl*.dylib "${OPENSSL_LIB_DIR}"/libcrypto*.dylib; do
+    [[ -f "${f}" ]] || continue
+    install -m 0644 "${f}" "${VEN_LIB_DIR}/"
+  done
+else
+  echo "[WARN] openssl@3 not found under /opt/homebrew or /usr/local; continuing without bundling"
+fi
+
 echo "[INFO] Vendoring fastdds Python package"
 VEN_FASTDDS_PARENT="${STAGING_ROOT}/lwrclpy/_vendor"
 VEN_FASTDDS_DIR="${VEN_FASTDDS_PARENT}/fastdds"
@@ -173,6 +209,28 @@ for FASTDDS_BINDING in "${VEN_FASTDDS_DIR}/_fastdds_python.so" "${FASTDDS_ROOT_D
       install_name_tool -add_rpath "@loader_path/../lwrclpy/_vendor/lib" "${FASTDDS_BINDING}" 2>/dev/null || true
     fi
   fi
+done
+
+# Patch binary deps to load bundled tinyxml2 from @rpath
+echo "[INFO] Rewriting tinyxml2 dylib references to @rpath (if any)"
+for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
+           "${VEN_FASTDDS_DIR}/_fastdds_python.so" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"; do
+  [[ -f "${BIN}" ]] || continue
+  for DEP in $(otool -L "${BIN}" | awk 'NR>1 {print $1}' | grep 'tinyxml2' || true); do
+    base="$(basename "${DEP}")"
+    install_name_tool -change "${DEP}" "@rpath/${base}" "${BIN}" 2>/dev/null || true
+  done
+done
+
+# Patch binary deps to load bundled OpenSSL from @rpath
+echo "[INFO] Rewriting OpenSSL dylib references to @rpath (if any)"
+for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
+           "${VEN_FASTDDS_DIR}/_fastdds_python.so" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"; do
+  [[ -f "${BIN}" ]] || continue
+  for DEP in $(otool -L "${BIN}" | awk 'NR>1 {print $1}' | grep -E 'libssl|libcrypto' || true); do
+    base="$(basename "${DEP}")"
+    install_name_tool -change "${DEP}" "@rpath/${base}" "${BIN}" 2>/dev/null || true
+  done
 done
 
 echo "[INFO] Writing bootstrap loader"
