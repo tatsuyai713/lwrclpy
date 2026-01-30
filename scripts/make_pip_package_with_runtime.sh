@@ -231,6 +231,19 @@ if [[ "$PLATFORM" == "linux" ]]; then
     return 1
   }
 
+  copy_from_ldconfig(){
+    local soname="$1" stem="$2"
+    if command -v ldconfig >/dev/null 2>&1; then
+      local path
+      path="$(ldconfig -p 2>/dev/null | awk -v n="${soname}" '$1 == n {print $NF; exit}')"
+      if [[ -n "${path}" && -f "${path}" ]]; then
+        copy_lib_variants "${stem}" "$(dirname "${path}")"
+        return 0
+      fi
+    fi
+    return 1
+  }
+
   tinyxml_dir="$(find_sys_lib_dir libtinyxml2 || true)"
   if [[ -n "${tinyxml_dir}" ]]; then
     copy_lib_variants "libtinyxml2.so" "${tinyxml_dir}"
@@ -240,21 +253,39 @@ if [[ "$PLATFORM" == "linux" ]]; then
     exit 2
   fi
 
-  openssl_dir="$(find_sys_lib_dir libssl || true)"
-  if [[ -n "${openssl_dir}" ]]; then
-    copy_lib_variants "libssl.so" "${openssl_dir}"
+  if copy_from_ldconfig "libssl.so.3" "libssl.so"; then
+    echo "[INFO] libssl copied from ldconfig path"
   else
-    echo "[FATAL] libssl.so.* not found in system lib dirs." >&2
-    echo "        Please install: libssl3 (or libssl-dev) before building the wheel." >&2
-    exit 2
+    openssl_dir="$(find_sys_lib_dir libssl || true)"
+    if [[ -n "${openssl_dir}" ]]; then
+      copy_lib_variants "libssl.so" "${openssl_dir}"
+    else
+      echo "[FATAL] libssl.so.* not found in system lib dirs." >&2
+      echo "        Please install: libssl3 (or libssl-dev) before building the wheel." >&2
+      exit 2
+    fi
   fi
 
-  crypto_dir="$(find_sys_lib_dir libcrypto || true)"
-  if [[ -n "${crypto_dir}" ]]; then
-    copy_lib_variants "libcrypto.so" "${crypto_dir}"
+  if copy_from_ldconfig "libcrypto.so.3" "libcrypto.so"; then
+    echo "[INFO] libcrypto copied from ldconfig path"
   else
-    echo "[FATAL] libcrypto.so.* not found in system lib dirs." >&2
-    echo "        Please install: libcrypto3 (or libssl-dev) before building the wheel." >&2
+    crypto_dir="$(find_sys_lib_dir libcrypto || true)"
+    if [[ -n "${crypto_dir}" ]]; then
+      copy_lib_variants "libcrypto.so" "${crypto_dir}"
+    else
+      echo "[FATAL] libcrypto.so.* not found in system lib dirs." >&2
+      echo "        Please install: libcrypto3 (or libssl-dev) before building the wheel." >&2
+      exit 2
+    fi
+  fi
+
+  # Validate OpenSSL was staged
+  if ! ls "${VEN_LIB_DIR}/libssl.so."* >/dev/null 2>&1; then
+    echo "[FATAL] libssl.so.* was not staged into ${VEN_LIB_DIR}" >&2
+    exit 2
+  fi
+  if ! ls "${VEN_LIB_DIR}/libcrypto.so."* >/dev/null 2>&1; then
+    echo "[FATAL] libcrypto.so.* was not staged into ${VEN_LIB_DIR}" >&2
     exit 2
   fi
 fi

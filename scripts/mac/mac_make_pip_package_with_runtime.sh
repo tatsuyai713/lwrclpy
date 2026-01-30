@@ -222,6 +222,13 @@ for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
   done
 done
 
+# Normalize tinyxml2 dylib install name to @rpath (avoid absolute Homebrew paths)
+echo "[INFO] Rewriting tinyxml2 dylib install names to @rpath (if any)"
+for TINY in "${VEN_LIB_DIR}/libtinyxml2"*.dylib; do
+  [[ -f "${TINY}" ]] || continue
+  install_name_tool -id "@rpath/$(basename "${TINY}")" "${TINY}" 2>/dev/null || true
+done
+
 # Patch binary deps to load bundled OpenSSL from @rpath
 echo "[INFO] Rewriting OpenSSL dylib references to @rpath (if any)"
 for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
