@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-test-ubuntu-wheels:
+  build-ubuntu-wheels:
     uses: ./.github/workflows/build-ubuntu.yml
 
   test-ubuntu-wheels:
-    needs: build-test-ubuntu-wheels
+    needs: build-ubuntu-wheels
     uses: ./.github/workflows/test-ubuntu.yml
     with:
-      build_run_id: ${{ needs.build-test-ubuntu-wheels.outputs.run_id }}
+      build_run_id: ${{ needs.build-ubuntu-wheels.outputs.run_id }}

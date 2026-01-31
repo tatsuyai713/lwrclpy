@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-test-macos-wheels:
+  build-macos-wheels:
     uses: ./.github/workflows/build-macos.yml
 
   test-macos-wheels:
-    needs: build-test-macos-wheels
+    needs: build-macos-wheels
     uses: ./.github/workflows/test-macos.yml
     with:
-      build_run_id: ${{ needs.build-test-macos-wheels.outputs.run_id }}
+      build_run_id: ${{ needs.build-macos-wheels.outputs.run_id }}
