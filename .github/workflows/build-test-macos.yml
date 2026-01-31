@@ -11,10 +11,26 @@ on:
 
 jobs:
   build:
-    uses: ./.github/workflows/build-macos.yml
+    name: Build macOS Wheel (Python ${{ matrix.python-version }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11']
+    steps:
+      - uses: ./.github/actions/build-macos
+        with:
+          python-version: ${{ matrix.python-version }}
 
   test:
+    name: Test macOS Python ${{ matrix.python-version }}
+    runs-on: macos-15
     needs: build
-    uses: ./.github/workflows/test-macos.yml
-    with:
-      build_run_id: ${{ needs.build.outputs.run_id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11']
+    steps:
+      - uses: ./.github/actions/test-macos
+        with:
+          python-version: ${{ matrix.python-version }}

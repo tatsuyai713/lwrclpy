@@ -11,10 +11,26 @@ on:
 
 jobs:
   build:
-    uses: ./.github/workflows/build-ubuntu.yml
+    name: Build Ubuntu Wheel (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12']
+    steps:
+      - uses: ./.github/actions/build-ubuntu
+        with:
+          python-version: ${{ matrix.python-version }}
 
   test:
+    name: Test Ubuntu Examples (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-22.04
     needs: build
-    uses: ./.github/workflows/test-ubuntu.yml
-    with:
-      build_run_id: ${{ needs.build.outputs.run_id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12']
+    steps:
+      - uses: ./.github/actions/test-ubuntu
+        with:
+          python-version: ${{ matrix.python-version }}
