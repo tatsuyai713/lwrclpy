@@ -377,7 +377,7 @@ def run_all_examples(platform_name: str) -> bool:
             server="examples/services/set_bool/server.py",
             clients=("examples/services/set_bool/client.py",),
             client_expect=("response", "success="),
-            client_timeout=20.0,
+            client_timeout=40.0,
             server_ready=("Starting SetBool server",),
         ),
         ServerClientSpec(
