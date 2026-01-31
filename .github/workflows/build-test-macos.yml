@@ -1,0 +1,20 @@
+name: Build & Test macOS
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-macos.yml
+
+  test:
+    needs: build
+    uses: ./.github/workflows/test-macos.yml
+    with:
+      build_run_id: ${{ needs.build.outputs.run_id }}

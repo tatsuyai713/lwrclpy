@@ -1,9 +1,7 @@
 # lwrclpy — rclpy-Compatible API Without ROS 2 (Fast DDS v3)
 
-[![Test Ubuntu](https://github.com/tatsuyai713/lwrclpy/actions/workflows/test-ubuntu.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/test-ubuntu.yml)
-[![Test macOS](https://github.com/tatsuyai713/lwrclpy/actions/workflows/test-macos.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/test-macos.yml)
-[![Build Ubuntu](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-ubuntu.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-ubuntu.yml)
-[![Build macOS](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-macos.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-macos.yml)
+[![Ubuntu](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-test-ubuntu.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-test-ubuntu.yml)
+[![macOS](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-test-macos.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/build-test-macos.yml)
 
 [English](README_EN.md)
 
