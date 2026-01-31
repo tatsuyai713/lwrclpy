@@ -627,6 +627,13 @@ def run_all_examples(platform_name: str) -> bool:
             print(f"  {server_output}")
 
     # Standalone examples (everything else)
+    platform_key = platform_name.lower()
+    is_macos = platform_key.startswith("mac") or sys.platform == "darwin"
+    standalone_timeouts: dict[Path, float] = {}
+    if is_macos:
+        # macOS can take longer for service discovery in this example.
+        standalone_timeouts[PROJECT_ROOT / "examples/services/trigger_bridge/bridge.py"] = 45.0
+
     long_running = {
         PROJECT_ROOT / "examples/executor/multithreaded_spin.py",
         PROJECT_ROOT / "examples/pubsub/multi_pubsub.py",
@@ -683,7 +690,8 @@ def run_all_examples(platform_name: str) -> bool:
         if script in long_running:
             ok, output = _run_script(script, timeout=6.0, allow_timeout=True)
         else:
-            ok, output = _run_script(script, timeout=20.0)
+            timeout = standalone_timeouts.get(script, 20.0)
+            ok, output = _run_script(script, timeout=timeout)
 
         results.append((rel.as_posix(), ok, output))
         if ok:
