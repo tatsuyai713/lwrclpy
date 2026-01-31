@@ -229,6 +229,22 @@ for TINY in "${VEN_LIB_DIR}/libtinyxml2"*.dylib; do
   install_name_tool -id "@rpath/$(basename "${TINY}")" "${TINY}" 2>/dev/null || true
 done
 
+# Patch all generated wrapper .so files to use vendored tinyxml2 via @rpath
+echo "[INFO] Patching generated wrappers to use vendored tinyxml2"
+while IFS= read -r so; do
+  # Remove any absolute /opt/... rpaths
+  for OLD_RPATH in $(otool -l "${so}" | grep -A 2 "LC_RPATH" | grep "path " | grep "/opt/" | awk '{print $2}' | tr -d '()'); do
+    install_name_tool -delete_rpath "${OLD_RPATH}" "${so}" 2>/dev/null || true
+  done
+  # Ensure rpath points to lwrclpy/_vendor/lib (relative from message packages)
+  install_name_tool -add_rpath "@loader_path/../../lwrclpy/_vendor/lib" "${so}" 2>/dev/null || true
+  # Rewrite tinyxml2 deps to @rpath
+  for DEP in $(otool -L "${so}" | awk 'NR>1 {print $1}' | grep 'tinyxml2' || true); do
+    base="$(basename "${DEP}")"
+    install_name_tool -change "${DEP}" "@rpath/${base}" "${so}" 2>/dev/null || true
+  done
+done < <(find "${STAGING_ROOT}" -type f -name '*.so' ! -path "*/lwrclpy/_vendor/lib/*" | sort)
+
 # Patch binary deps to load bundled OpenSSL from @rpath
 echo "[INFO] Rewriting OpenSSL dylib references to @rpath (if any)"
 for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
@@ -258,6 +274,24 @@ for CRYPTO in "${VEN_LIB_DIR}/libcrypto"*.dylib; do
   # Normalize libcrypto install name
   install_name_tool -id "@rpath/$(basename "${CRYPTO}")" "${CRYPTO}" 2>/dev/null || true
 done
+
+# Normalize all binaries to avoid /opt absolute paths (use @rpath to vendor libs)
+echo "[INFO] Normalizing all binaries to use @rpath (removing /opt references)"
+while IFS= read -r bin; do
+  # Remove any absolute /opt rpaths
+  for OLD_RPATH in $(otool -l "${bin}" | grep -A 2 "LC_RPATH" | grep "path " | grep "/opt/" | awk '{print $2}' | tr -d '()'); do
+    install_name_tool -delete_rpath "${OLD_RPATH}" "${bin}" 2>/dev/null || true
+  done
+  # Add rpaths pointing to vendored libs (relative to most package locations)
+  install_name_tool -add_rpath "@loader_path/../../lwrclpy/_vendor/lib" "${bin}" 2>/dev/null || true
+  install_name_tool -add_rpath "@loader_path/../lwrclpy/_vendor/lib" "${bin}" 2>/dev/null || true
+  install_name_tool -add_rpath "@loader_path/../lib" "${bin}" 2>/dev/null || true
+  # Rewrite any /opt absolute dependency to @rpath/<basename>
+  for DEP in $(otool -L "${bin}" | awk 'NR>1 {print $1}' | grep '^/opt/' || true); do
+    base="$(basename "${DEP}")"
+    install_name_tool -change "${DEP}" "@rpath/${base}" "${bin}" 2>/dev/null || true
+  done
+done < <(find "${STAGING_ROOT}" -type f \( -name '*.so' -o -name '*.dylib' \) ! -path "*/lwrclpy/_vendor/lib/*" | sort)
 
 echo "[INFO] Writing bootstrap loader"
 LWRCLPY_INIT="${STAGING_ROOT}/lwrclpy/__init__.py"
