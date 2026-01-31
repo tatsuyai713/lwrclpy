@@ -18,6 +18,9 @@ jobs:
       matrix:
         python-version: ['3.12']
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: ./.github/actions/build-ubuntu
         with:
           python-version: ${{ matrix.python-version }}
@@ -31,6 +34,9 @@ jobs:
       matrix:
         python-version: ['3.12']
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: ./.github/actions/test-ubuntu
         with:
           python-version: ${{ matrix.python-version }}
