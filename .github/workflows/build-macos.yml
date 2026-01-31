@@ -1,6 +1,7 @@
 name: Build macOS Wheel
 
 on:
+  workflow_dispatch:
   workflow_call:
     outputs:
       run_id:

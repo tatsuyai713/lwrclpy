@@ -1,6 +1,7 @@
 name: Test Ubuntu Wheels
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       build_run_id:
