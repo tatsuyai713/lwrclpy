@@ -20,16 +20,20 @@ set -euo pipefail
 # ----- Ensure build dependencies -----
 echo "[INFO] Ensuring build dependencies..."
 python3 -m pip install --upgrade pip setuptools wheel || true
-command -v patchelf >/dev/null 2>&1 || {
-  echo "[WARN] patchelf not found, attempting to install..."
-  if command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive sudo apt-get update -qq && \
-    DEBIAN_FRONTEND=noninteractive sudo apt-get install -qq -y patchelf
-  else
-    echo "[ERROR] Please install patchelf manually"
-    exit 1
-  fi
-}
+
+# patchelf is only needed on Linux
+if [[ "$OSTYPE" != "darwin"* ]]; then
+  command -v patchelf >/dev/null 2>&1 || {
+    echo "[WARN] patchelf not found, attempting to install..."
+    if command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive sudo apt-get update -qq && \
+      DEBIAN_FRONTEND=noninteractive sudo apt-get install -qq -y patchelf
+    else
+      echo "[ERROR] Please install patchelf manually"
+      exit 1
+    fi
+  }
+fi
 
 # ----- Fixed inputs (no search) -----
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,7 +51,10 @@ DIST_DIR="${REPO_ROOT}/dist"
 need(){ command -v "$1" >/dev/null 2>&1 || { echo "[FATAL] '$1' not found" >&2; exit 1; }; }
 need python3
 need rsync
-need patchelf
+# patchelf only needed on Linux
+if [[ "$OSTYPE" != "darwin"* ]]; then
+  need patchelf
+fi
 
 [[ -d "${REPO_ROOT}/lwrclpy" ]] || { echo "[FATAL] lwrclpy/ folder not found"; exit 1; }
 [[ -x "${SCRIPTS_DIR}/install_python_types.sh" ]] || { echo "[FATAL] scripts/install_python_types.sh not found or not executable"; exit 1; }
@@ -105,6 +112,12 @@ if [[ -f "${SCRIPTS_DIR}/patch_message_dependencies.py" ]]; then
   python3 "${SCRIPTS_DIR}/patch_message_dependencies.py" "${STAGING_ROOT}"
 fi
 
+# ========= 1.7) Patch all message packages to preload lwrclpy (ensures Fast-DDS loads first) =========
+if [[ -f "${SCRIPTS_DIR}/patch_message_preload.py" ]]; then
+  echo "[INFO] Patching all message packages to preload lwrclpy…"
+  python3 "${SCRIPTS_DIR}/patch_message_preload.py" "${STAGING_ROOT}"
+fi
+
 # ========= 2) Stage lwrclpy pure-Python sources =========
 echo "[INFO] Staging 'lwrclpy' sources…"
 rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/lwrclpy/" "${STAGING_ROOT}/lwrclpy/"
@@ -133,66 +146,148 @@ fi
 echo "[INFO] Vendoring native libs → lwrclpy/_vendor/lib"
 VEN_LIB_DIR="${STAGING_ROOT}/lwrclpy/_vendor/lib"
 mkdir -p "${VEN_LIB_DIR}"
+
+# Detect platform
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  PLATFORM="macos"
+  LIB_EXT="dylib"
+else
+  PLATFORM="linux"
+  LIB_EXT="so"
+fi
+
 # Copy unversioned and versioned variants to satisfy dynamic loaders (no symlinks)
 copy_lib_variants(){
-  local stem="$1"  # e.g., libfastdds.so
+  local stem="$1"  # e.g., libfastdds.so or libfastdds.dylib
   local src_dir="${2:-${PREFIX_V3}/lib}"
   shopt -s nullglob
   local copied=0
-  for f in "${src_dir}/${stem}" "${src_dir}/${stem}."*; do
-    [[ -f "$f" ]] || continue
-    local bn="$(basename "$f")"
-    echo "[INFO]   staging ${bn}"
-    cp -pL "$f" "${VEN_LIB_DIR}/${bn}"
-    copied=1
-  done
+  
+  if [[ "$PLATFORM" == "macos" ]]; then
+    # On macOS, copy .dylib files
+    for f in "${src_dir}/${stem}."* "${src_dir}/${stem}"; do
+      [[ -f "$f" ]] || continue
+      [[ "$f" == *.dylib ]] || continue
+      local bn="$(basename "$f")"
+      echo "[INFO]   staging ${bn}"
+      cp -pL "$f" "${VEN_LIB_DIR}/${bn}"
+      copied=1
+    done
+  else
+    # On Linux, copy .so files
+    for f in "${src_dir}/${stem}" "${src_dir}/${stem}."*; do
+      [[ -f "$f" ]] || continue
+      local bn="$(basename "$f")"
+      echo "[INFO]   staging ${bn}"
+      cp -pL "$f" "${VEN_LIB_DIR}/${bn}"
+      copied=1
+    done
+  fi
+  
   shopt -u nullglob
   if [[ $copied -eq 0 ]]; then
     echo "[FATAL] ${stem}* not found under ${src_dir}" >&2
     exit 2
   fi
 }
-copy_lib_variants "libfastcdr.so"
-copy_lib_variants "libfastdds.so"
 
-# Some shared deps (e.g., tinyxml2) are not in PREFIX_V3/lib; vendor them too.
-find_sys_lib_dir(){
-  local stem="$1"
-  # 1) Try ldconfig for the canonical path (best effort)
-  if command -v ldconfig >/dev/null 2>&1; then
-    local hit
-    hit="$(ldconfig -p 2>/dev/null | awk -v s="${stem}.so" '$1 ~ s {print $NF}' | head -n1)"
-    if [[ -n "${hit}" && -f "${hit}" ]]; then
-      dirname "${hit}"
-      return 0
+if [[ "$PLATFORM" == "macos" ]]; then
+  copy_lib_variants "libfastcdr.dylib"
+  copy_lib_variants "libfastdds.dylib"
+else
+  copy_lib_variants "libfastcdr.so"
+  copy_lib_variants "libfastdds.so"
+fi
+
+# Some shared deps (e.g., tinyxml2) are not in PREFIX_V3/lib; vendor them too (Linux only).
+if [[ "$PLATFORM" == "linux" ]]; then
+  find_sys_lib_dir(){
+    local stem="$1"
+    # 1) Try ldconfig for the canonical path (best effort)
+    if command -v ldconfig >/dev/null 2>&1; then
+      local hit
+      hit="$(ldconfig -p 2>/dev/null | awk -v s="${stem}.so" '$1 ~ s {print $NF}' | head -n1)"
+      if [[ -n "${hit}" && -f "${hit}" ]]; then
+        dirname "${hit}"
+        return 0
+      fi
+    fi
+
+    # 2) Fall back to common system lib dirs
+    local arch
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m || true)"
+    local dirs=(
+      "/usr/lib/${arch}-linux-gnu"
+      "/lib/${arch}-linux-gnu"
+      "/usr/lib"
+      "/lib"
+    )
+    for d in "${dirs[@]}"; do
+      if [[ -d "${d}" ]] && ls "${d}/${stem}.so."* >/dev/null 2>&1; then
+        echo "${d}"
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  copy_from_ldconfig(){
+    local soname="$1" stem="$2"
+    if command -v ldconfig >/dev/null 2>&1; then
+      local path
+      path="$(ldconfig -p 2>/dev/null | awk -v n="${soname}" '$1 == n {print $NF; exit}')"
+      if [[ -n "${path}" && -f "${path}" ]]; then
+        copy_lib_variants "${stem}" "$(dirname "${path}")"
+        return 0
+      fi
+    fi
+    return 1
+  }
+
+  tinyxml_dir="$(find_sys_lib_dir libtinyxml2 || true)"
+  if [[ -n "${tinyxml_dir}" ]]; then
+    copy_lib_variants "libtinyxml2.so" "${tinyxml_dir}"
+  else
+    echo "[FATAL] libtinyxml2.so.* not found in system lib dirs." >&2
+    echo "        Please install: libtinyxml2-9 (or libtinyxml2-dev) before building the wheel." >&2
+    exit 2
+  fi
+
+  if copy_from_ldconfig "libssl.so.3" "libssl.so"; then
+    echo "[INFO] libssl copied from ldconfig path"
+  else
+    openssl_dir="$(find_sys_lib_dir libssl || true)"
+    if [[ -n "${openssl_dir}" ]]; then
+      copy_lib_variants "libssl.so" "${openssl_dir}"
+    else
+      echo "[FATAL] libssl.so.* not found in system lib dirs." >&2
+      echo "        Please install: libssl3 (or libssl-dev) before building the wheel." >&2
+      exit 2
     fi
   fi
 
-  # 2) Fall back to common system lib dirs
-  local arch
-  arch="$(dpkg --print-architecture 2>/dev/null || uname -m || true)"
-  local dirs=(
-    "/usr/lib/${arch}-linux-gnu"
-    "/lib/${arch}-linux-gnu"
-    "/usr/lib"
-    "/lib"
-  )
-  for d in "${dirs[@]}"; do
-    if [[ -d "${d}" ]] && ls "${d}/${stem}.so."* >/dev/null 2>&1; then
-      echo "${d}"
-      return 0
+  if copy_from_ldconfig "libcrypto.so.3" "libcrypto.so"; then
+    echo "[INFO] libcrypto copied from ldconfig path"
+  else
+    crypto_dir="$(find_sys_lib_dir libcrypto || true)"
+    if [[ -n "${crypto_dir}" ]]; then
+      copy_lib_variants "libcrypto.so" "${crypto_dir}"
+    else
+      echo "[FATAL] libcrypto.so.* not found in system lib dirs." >&2
+      echo "        Please install: libcrypto3 (or libssl-dev) before building the wheel." >&2
+      exit 2
     fi
-  done
-  return 1
-}
+  fi
 
-tinyxml_dir="$(find_sys_lib_dir libtinyxml2 || true)"
-if [[ -n "${tinyxml_dir}" ]]; then
-  copy_lib_variants "libtinyxml2.so" "${tinyxml_dir}"
-else
-  echo "[FATAL] libtinyxml2.so.* not found in system lib dirs." >&2
-  echo "        Please install: libtinyxml2-9 (or libtinyxml2-dev) before building the wheel." >&2
-  exit 2
+  # Validate OpenSSL was staged
+  if ! ls "${VEN_LIB_DIR}/libssl.so."* >/dev/null 2>&1; then
+    echo "[FATAL] libssl.so.* was not staged into ${VEN_LIB_DIR}" >&2
+    exit 2
+  fi
+  if ! ls "${VEN_LIB_DIR}/libcrypto.so."* >/dev/null 2>&1; then
+    echo "[FATAL] libcrypto.so.* was not staged into ${VEN_LIB_DIR}" >&2
+    exit 2
+  fi
 fi
 
 # ========= 4) Vendor the ENTIRE fastdds package (no search) =========
@@ -235,6 +330,31 @@ PY
 
 echo "[INFO] Vendor lib contents:"
 ls -l "${VEN_LIB_DIR}" || true
+
+# ========= 4.5) macOS-specific: Create versioned symlinks and patch @rpath =========
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  echo "[INFO] macOS detected - creating versioned library symlinks…"
+  
+  # Create versioned symlinks for libfastdds and libfastcdr
+  cd "${VEN_LIB_DIR}"
+  if [[ -f "libfastdds.dylib" ]]; then
+    ln -sf libfastdds.dylib libfastdds.3.2.dylib
+    echo "[INFO]   Created libfastdds.3.2.dylib -> libfastdds.dylib"
+  fi
+  if [[ -f "libfastcdr.dylib" ]]; then
+    ln -sf libfastcdr.dylib libfastcdr.2.dylib
+    ln -sf libfastcdr.dylib libfastcdr.1.1.dylib
+    echo "[INFO]   Created libfastcdr.2.dylib -> libfastcdr.dylib"
+    echo "[INFO]   Created libfastcdr.1.1.dylib -> libfastcdr.dylib"
+  fi
+  cd - > /dev/null
+  
+  # Patch Fast-DDS Python bindings @rpath to use lwrclpy's vendored libraries
+  if [[ -f "${SCRIPTS_DIR}/patch_fastdds_rpath.py" ]]; then
+    echo "[INFO] Patching Fast-DDS Python bindings @rpath for macOS…"
+    python3 "${SCRIPTS_DIR}/patch_fastdds_rpath.py" "${STAGING_ROOT}"
+  fi
+fi
 
 # ========= 5) Bootstrap: import vendored fastdds package deterministically =========
 echo "[INFO] Injecting bootstrap…"
@@ -330,21 +450,51 @@ if ! grep -q 'ensure_fastdds()' "${LWRCLPY_INIT}"; then
   mv -f "${tmp}" "${LWRCLPY_INIT}"
 fi
 
-# ========= 6) Set RPATH with patchelf (minimal) =========
-echo "[INFO] Setting RPATH via patchelf…"
-PATCHED_RPATH='$ORIGIN:$ORIGIN/../../lwrclpy/_vendor/lib'
-while IFS= read -r so; do
-  case "${so}" in
-    */lwrclpy/_vendor/lib/*) continue ;;
-  esac
-  patchelf --force-rpath --set-rpath "${PATCHED_RPATH}" "$so" || true
-done < <(find "${STAGING_ROOT}" -type f -name '*.so' | sort)
+# ========= 6) Set RPATH with patchelf (Linux) or install_name_tool (macOS) =========
+echo "[INFO] Setting RPATH…"
 
-# Vendor libs should resolve their own dependencies from the same dir.
-VENDOR_RPATH='$ORIGIN'
-while IFS= read -r so; do
-  patchelf --force-rpath --set-rpath "${VENDOR_RPATH}" "$so" || true
-done < <(find "${STAGING_ROOT}/lwrclpy/_vendor/lib" -type f -name '*.so*' | sort)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  # macOS: use install_name_tool
+  echo "[INFO] macOS detected - using install_name_tool for RPATH"
+  PATCHED_RPATH='@loader_path:@loader_path/../../lwrclpy/_vendor/lib'
+  
+  while IFS= read -r so; do
+    case "${so}" in
+      */lwrclpy/_vendor/lib/*) continue ;;
+    esac
+    # Clear existing rpaths and add new one
+    otool -l "$so" 2>/dev/null | grep -A2 LC_RPATH | grep path | awk '{print $2}' | while read rpath; do
+      install_name_tool -delete_rpath "$rpath" "$so" 2>/dev/null || true
+    done
+    install_name_tool -add_rpath '@loader_path' "$so" 2>/dev/null || true
+    install_name_tool -add_rpath '@loader_path/../../lwrclpy/_vendor/lib' "$so" 2>/dev/null || true
+  done < <(find "${STAGING_ROOT}" -type f \( -name '*.so' -o -name '*.dylib' \) ! -path "*/lwrclpy/_vendor/lib/*" | sort)
+  
+  # Vendor libs should resolve their own dependencies from the same dir.
+  VENDOR_RPATH='@loader_path'
+  while IFS= read -r so; do
+    otool -l "$so" 2>/dev/null | grep -A2 LC_RPATH | grep path | awk '{print $2}' | while read rpath; do
+      install_name_tool -delete_rpath "$rpath" "$so" 2>/dev/null || true
+    done
+    install_name_tool -add_rpath '@loader_path' "$so" 2>/dev/null || true
+  done < <(find "${STAGING_ROOT}/lwrclpy/_vendor/lib" -type f \( -name '*.so' -o -name '*.dylib' \) | sort)
+else
+  # Linux: use patchelf
+  echo "[INFO] Linux detected - using patchelf for RPATH"
+  PATCHED_RPATH='$ORIGIN:$ORIGIN/../../lwrclpy/_vendor/lib'
+  while IFS= read -r so; do
+    case "${so}" in
+      */lwrclpy/_vendor/lib/*) continue ;;
+    esac
+    patchelf --force-rpath --set-rpath "${PATCHED_RPATH}" "$so" || true
+  done < <(find "${STAGING_ROOT}" -type f -name '*.so' | sort)
+
+  # Vendor libs should resolve their own dependencies from the same dir.
+  VENDOR_RPATH='$ORIGIN'
+  while IFS= read -r so; do
+    patchelf --force-rpath --set-rpath "${VENDOR_RPATH}" "$so" || true
+  done < <(find "${STAGING_ROOT}/lwrclpy/_vendor/lib" -type f -name '*.so*' | sort)
+fi
 
 # ========= 6.5) Patch action/srv __init__.py to expose wrapper classes =========
 if [[ -f "${SCRIPTS_DIR}/patch_action_types.py" ]]; then

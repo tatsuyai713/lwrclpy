@@ -1,0 +1,18 @@
+name: Build & Test Ubuntu
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-ubuntu-wheels:
+    uses: ./.github/workflows/build-ubuntu.yml
+
+  test-ubuntu-wheels:
+    needs: build-ubuntu-wheels
+    uses: ./.github/workflows/test-ubuntu.yml
+    with:
+      build_run_id: ${{ needs.build-ubuntu-wheels.outputs.run_id }}

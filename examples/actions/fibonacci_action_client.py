@@ -15,17 +15,25 @@ class FibonacciActionClient(Node):
     def __init__(self):
         super().__init__("fibonacci_action_client")
         self._action_client = ActionClient(self, Fibonacci, "fibonacci")
+        self._send_time = None
+        self._timeout_sec = 30.0
+        self._timer = self.create_timer(1.0, self._check_timeout)
+
+    def _check_timeout(self):
+        if self._send_time and (time.time() - self._send_time) > self._timeout_sec:
+            self.get_logger().error(f"Action timed out after {self._timeout_sec}s")
+            rclpy.shutdown()
 
     def send_goal(self, order: int):
-        self.get_logger().info("Waiting for action server...")
-        # Wait for DDS discovery between processes
-        time.sleep(2.0)
-        self._action_client.wait_for_server(timeout_sec=10.0)
+        self.get_logger().info("Waiting for action server (DDS discovery)...")
+        # Wait for DDS discovery between processes (longer on macOS)
+        time.sleep(6.0)
 
         goal_msg = Fibonacci.Goal()
         goal_msg.order = order
         self.get_logger().info(f"Sending goal request order={order}")
 
+        self._send_time = time.time()
         send_goal_future = self._action_client.send_goal_async(
             goal_msg,
             feedback_callback=self.feedback_callback,
@@ -33,13 +41,18 @@ class FibonacciActionClient(Node):
         send_goal_future.add_done_callback(self.goal_response_callback)
 
     def goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle or not goal_handle.accepted:
-            self.get_logger().error("Goal rejected :(")
-            return
-        self.get_logger().info("Goal accepted :)")
-        get_result_future = goal_handle.get_result_async()
-        get_result_future.add_done_callback(self.get_result_callback)
+        try:
+            goal_handle = future.result()
+            if not goal_handle or not goal_handle.accepted:
+                self.get_logger().error("Goal rejected :(")
+                rclpy.shutdown()
+                return
+            self.get_logger().info("Goal accepted :)")
+            get_result_future = goal_handle.get_result_async()
+            get_result_future.add_done_callback(self.get_result_callback)
+        except Exception as e:
+            self.get_logger().error(f"Goal response error: {e}")
+            rclpy.shutdown()
 
     def feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
@@ -57,13 +70,22 @@ class FibonacciActionClient(Node):
 
 
 def main(args=None):
+    rclpy.init(args=args)
     try:
-        with rclpy.init(args=args):
-            action_client = FibonacciActionClient()
-            action_client.send_goal(order=10)
-            rclpy.spin(action_client)
+        action_client = FibonacciActionClient()
+        action_client.send_goal(order=10)
+        rclpy.spin(action_client)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    finally:
+        try:
+            action_client.destroy_node()
+        except:
+            pass
+        try:
+            rclpy.shutdown()
+        except:
+            pass
 
 
 if __name__ == "__main__":

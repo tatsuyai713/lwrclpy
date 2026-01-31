@@ -25,16 +25,11 @@ def main():
     from lwrclpy.action import ActionClient
     client = ActionClient(node, Fibonacci, "fibonacci")
     
-    logger.info("Waiting for action server...")
-    # Wait for DDS discovery between processes
-    time.sleep(2.0)
-    if not client.wait_for_server(timeout_sec=15.0):
-        logger.error("Action server not available!")
-        node.destroy_node()
-        rclpy.shutdown()
-        return
+    logger.info("Waiting for action server (DDS discovery)...")
+    # Wait for DDS discovery between processes (longer on macOS)
+    time.sleep(6.0)
     
-    logger.info("Action server found!\n")
+    logger.info("Action server should be available now!\n")
     
     # 1. Simple goal with result
     logger.info("--- Goal 1: Simple execution ---")
@@ -57,8 +52,15 @@ def main():
     
     send_goal_future = client.send_goal_async(goal, feedback_callback)
     
-    # Wait for goal acceptance
+    # Wait for goal acceptance with timeout
+    timeout_start = time.time()
+    timeout_sec = 10.0
     while not send_goal_future.done():
+        if time.time() - timeout_start > timeout_sec:
+            logger.error(f"Goal acceptance timed out after {timeout_sec}s")
+            node.destroy_node()
+            rclpy.shutdown()
+            return
         rclpy.spin_once(node, timeout_sec=0.1)
     
     goal_handle = send_goal_future.result()
@@ -68,10 +70,15 @@ def main():
     else:
         logger.info("Goal accepted, waiting for result...")
         
-        # Wait for result
+        # Wait for result with timeout
         result_future = goal_handle.get_result_async()
         
+        timeout_start = time.time()
+        timeout_sec = 15.0
         while not result_future.done():
+            if time.time() - timeout_start > timeout_sec:
+                logger.error(f"Result timeout after {timeout_sec}s")
+                break
             rclpy.spin_once(node, timeout_sec=0.1)
         
         result_msg = result_future.result()
@@ -95,7 +102,11 @@ def main():
     
     send_goal_future2 = client.send_goal_async(goal2, feedback_callback)
     
+    timeout_start = time.time()
     while not send_goal_future2.done():
+        if time.time() - timeout_start > 10.0:
+            logger.error("Goal 2 acceptance timeout")
+            break
         rclpy.spin_once(node, timeout_sec=0.1)
     
     goal_handle2 = send_goal_future2.result()
@@ -118,7 +129,11 @@ def main():
         
         # Check status
         result_future2 = goal_handle2.get_result_async()
+        timeout_start = time.time()
         while not result_future2.done():
+            if time.time() - timeout_start > 10.0:
+                logger.error("Goal 2 result timeout")
+                break
             rclpy.spin_once(node, timeout_sec=0.1)
         
         result2 = result_future2.result()
@@ -136,13 +151,21 @@ def main():
         logger.info(f"Sending goal: order={order}")
         
         future = client.send_goal_async(goal)
+        timeout_start = time.time()
         while not future.done():
+            if time.time() - timeout_start > 10.0:
+                logger.error(f"Goal order={order} acceptance timeout")
+                break
             rclpy.spin_once(node, timeout_sec=0.1)
         
         handle = future.result()
         if handle and handle.accepted:
             result_future = handle.get_result_async()
+            timeout_start = time.time()
             while not result_future.done():
+                if time.time() - timeout_start > 10.0:
+                    logger.error(f"Goal order={order} result timeout")
+                    break
                 rclpy.spin_once(node, timeout_sec=0.1)
             
             result_msg = result_future.result()
