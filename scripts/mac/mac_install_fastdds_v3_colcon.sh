@@ -42,8 +42,7 @@ BREW_PREFIX="$(brew --prefix)"
 
 log "Installing build deps via Homebrew…"
 brew update
-# NOTE: skip standalone 'asio' (newer APIs break legacy Fast DDS usage)
-brew install cmake ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3
+brew install cmake ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio
 
 # Ensure Python build dependencies
 "${PYBIN}" -m pip install --upgrade pip setuptools wheel || true

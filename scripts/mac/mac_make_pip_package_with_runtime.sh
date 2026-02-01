@@ -353,6 +353,16 @@ if ! grep -q 'ensure_fastdds()' "${LWRCLPY_INIT}"; then
   mv -f "${tmp}" "${LWRCLPY_INIT}"
 fi
 
+# Re-sign native binaries after any install_name_tool/rpath edits to avoid
+# "Code Signature Invalid" on macOS.
+if command -v /usr/bin/codesign >/dev/null 2>&1; then
+  echo "[INFO] Re-signing staged native libraries (.so/.dylib)"
+  find "${STAGING_ROOT}" -type f \( -name "*.so" -o -name "*.dylib" \) -print0 \
+    | xargs -0 /usr/bin/codesign --force --sign - --timestamp=none
+else
+  echo "[WARN] codesign not found; skipping re-signing of native libraries"
+fi
+
 cat > "${STAGING_ROOT}/pyproject.toml" <<'PYPROJECT'
 [build-system]
 requires = ["setuptools>=64", "wheel"]
