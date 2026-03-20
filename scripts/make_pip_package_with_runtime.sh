@@ -39,7 +39,7 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
-PKG_VERSION="0.3.1"
+PKG_VERSION="0.3.2"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"   # prebuilt DataTypes
 PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"                          # fixed Fast-DDS prefix

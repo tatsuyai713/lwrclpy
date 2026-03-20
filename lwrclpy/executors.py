@@ -13,7 +13,7 @@ class ExternalShutdownException(RuntimeError):
 
 class Executor:
     """Base executor compatible with rclpy's Executor surface.
-    
+
     Thread-safe implementation with proper locking for concurrent access.
     """
 
@@ -28,12 +28,16 @@ class Executor:
         with self._nodes_lock:
             if node not in self._nodes:
                 self._nodes.append(node)
+                # Give the node a reference to our wake event so that
+                # _enqueue_callback can wake us immediately.
+                node._executor_wake_event = self._wake_event
                 self._wake_event.set()
 
     def remove_node(self, node):
         with self._nodes_lock:
             if node in self._nodes:
                 self._nodes.remove(node)
+                node._executor_wake_event = None
 
     def get_nodes(self) -> List:
         """Return a copy of the nodes list (thread-safe)."""
@@ -70,6 +74,10 @@ class Executor:
         with self._stopped_lock:
             self._stopped = True
         self._wake_event.set()
+        # Disconnect wake events from nodes
+        with self._nodes_lock:
+            for node in self._nodes:
+                node._executor_wake_event = None
 
     def _is_stopped(self) -> bool:
         with self._stopped_lock:
@@ -133,7 +141,7 @@ class MultiThreadedExecutor(Executor):
                 nodes = self.get_nodes()
                 if not any(getattr(n, "_has_pending_work", lambda: True)() for n in nodes):
                     # Wait for wake event or timeout
-                    self._wake_event.wait(timeout=0.01)
+                    self._wake_event.wait(timeout=0.05)
                     self._wake_event.clear()
                     continue
                 time.sleep(0.01)
@@ -147,7 +155,7 @@ class MultiThreadedExecutor(Executor):
     def _worker(self):
         while ok() and not self._is_stopped():
             nodes = self.get_nodes()
-            item = _pop_any_callback(nodes, 0.01, self._is_stopped, self._wake_event)
+            item = _pop_any_callback(nodes, 0.05, self._is_stopped, self._wake_event)
             if item:
                 cb, msg, _node = item
                 with self._callback_lock:
@@ -242,36 +250,49 @@ def _invoke_callback(cb, msg):
 
 
 def _pop_any_callback(nodes: Iterable, timeout_sec: Optional[float], is_stopped_fn, wake_event: Optional[threading.Event] = None):
-    """Pop a callback from any node's queue, with proper timeout handling."""
+    """Pop a callback from any node's queue, with event-driven waking.
+
+    Instead of busy-polling with 1ms sleeps, we wait on the wake_event
+    which is set by Node._enqueue_callback when new work arrives.
+    """
     start = time.monotonic()
-    while ok() and not (is_stopped_fn() if callable(is_stopped_fn) else is_stopped_fn):
-        for node in list(nodes):
+
+    # Cache the stopped check callable
+    _check_stopped = is_stopped_fn if callable(is_stopped_fn) else (lambda: is_stopped_fn)
+
+    if not ok() or _check_stopped():
+        return None
+
+    while True:
+        # Check all nodes for ready callbacks
+        for node in nodes:
             try:
                 item = node._pop_callback()
             except Exception:
-                item = None
+                continue
             if item:
                 cb, msg = item
                 return (cb, msg, node)
-        
-        # Check timeout
-        if timeout_sec is None:
-            if wake_event:
-                wake_event.wait(0.001)
-                wake_event.clear()
-            else:
-                time.sleep(0.001)
-            continue
-        
-        elapsed = time.monotonic() - start
-        if elapsed >= max(timeout_sec, 0):
+
+        # Check stop conditions before sleeping
+        if not ok() or _check_stopped():
             return None
-        
-        # Wait with event or sleep
-        remaining = max(0.001, timeout_sec - elapsed)
+
+        # Check timeout
+        if timeout_sec is not None:
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout_sec:
+                return None
+            remaining = timeout_sec - elapsed
+        else:
+            remaining = 0.05  # 50ms default poll interval when no timeout
+
+        # Wait for wake event with up to 50ms cap.
+        # The key change from original: no 1ms floor.  The wake_event is set
+        # by Node._enqueue_callback, so we wake up immediately when work arrives.
+        wait_time = min(remaining, 0.05)
         if wake_event:
-            wake_event.wait(min(remaining, 0.001))
+            wake_event.wait(wait_time)
             wake_event.clear()
         else:
-            time.sleep(min(remaining, 0.001))
-    return None
+            time.sleep(wait_time)

@@ -42,7 +42,27 @@ BREW_PREFIX="$(brew --prefix)"
 
 log "Installing build deps via Homebrew…"
 brew update
-brew install cmake ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio
+brew install ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio
+
+# ===== cmake 3.x (avoid 4.x series) =====
+# Pin cmake to the latest 3.x to avoid incompatibilities with Fast DDS build scripts.
+_install_cmake3_mac() {
+  local cur_ver
+  cur_ver="$(cmake --version 2>/dev/null | head -1 | awk '{print $3}' || true)"
+  if [[ "${cur_ver}" == 3.* ]]; then
+    log "cmake ${cur_ver} (3.x) already installed."
+    return 0
+  fi
+  # Try to install cmake@3 formula (Homebrew may provide versioned taps)
+  if brew install cmake@3 2>/dev/null; then
+    brew link --overwrite cmake@3 2>/dev/null || true
+    return 0
+  fi
+  # Fallback: install via pip (pinned to <4)
+  log "cmake 3.x not available via Homebrew; installing via pip…"
+  pip install 'cmake>=3.16,<4'
+}
+_install_cmake3_mac
 
 # Ensure Python build dependencies
 "${PYBIN}" -m pip install --upgrade pip setuptools wheel || true

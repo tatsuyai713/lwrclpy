@@ -10,13 +10,26 @@ import fastdds  # type: ignore
 import os
 from typing import Optional, TypeVar, Generic, TYPE_CHECKING
 from .qos import QoSProfile
-from .message_utils import clone_message
+from .message_utils import clone_message, _ValueProxy
 from .duration import Duration
 
 if TYPE_CHECKING:
     from typing import Type
 
 T = TypeVar('T')
+
+
+def _has_proxy_attributes(msg) -> bool:
+    """Check if any instance __dict__ entries are _ValueProxy objects.
+
+    If the user received a message via subscription (which wraps fields in
+    _ValueProxy) and re-publishes it, we need to clone to unwrap.
+    If the user created a fresh message and set fields directly, no proxy exists.
+    """
+    inst_dict = getattr(msg, "__dict__", None)
+    if not inst_dict:
+        return False
+    return any(isinstance(v, _ValueProxy) for v in inst_dict.values())
 
 
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> None:
@@ -100,12 +113,18 @@ class Publisher:
 
     def publish(self, msg) -> None:
         """Publish a message instance generated from the SWIG type."""
-        try:
-            target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
-            to_send = clone_message(msg, target_ctor)
-        except Exception:
-            to_send = msg  # fall back to original on failure
-        self._writer.write(to_send)
+        target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
+
+        # Fast path: if msg is already the correct SWIG type and has no
+        # _ValueProxy-wrapped attributes, skip the full clone_message.
+        if isinstance(msg, target_ctor) and not _has_proxy_attributes(msg):
+            self._writer.write(msg)
+        else:
+            try:
+                to_send = clone_message(msg, target_ctor)
+            except Exception:
+                to_send = msg  # fall back to original on failure
+            self._writer.write(to_send)
         self._publish_count += 1
 
     def loan_message(self) -> LoanedMessage:

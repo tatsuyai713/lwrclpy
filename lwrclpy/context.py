@@ -117,15 +117,21 @@ def try_shutdown():
 
 
 def ok() -> bool:
-    """Return True if context is initialized and not shutting down."""
-    with _lock:
-        return _initialized and not _shutdown_flag
+    """Return True if context is initialized and not shutting down.
+
+    Lock-free fast path: reads the global flags without lock acquisition.
+    This is safe because both _initialized and _shutdown_flag are only
+    set under lock and Python bool reads are atomic on CPython (GIL).
+    """
+    return _initialized and not _shutdown_flag
 
 
 def is_shutdown() -> bool:
-    """Return True if context is shutting down or has shutdown."""
-    with _lock:
-        return _shutdown_flag
+    """Return True if context is shutting down or has shutdown.
+
+    Lock-free for the same reason as ok().
+    """
+    return _shutdown_flag
 
 
 def get_participant():

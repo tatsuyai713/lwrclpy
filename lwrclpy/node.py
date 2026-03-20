@@ -262,7 +262,8 @@ class Node:
         self._timers: List[Any] = []
         self._guard_conditions: List[GuardCondition] = []
         self._callback_queue: deque = deque()
-        self._callback_lock = threading.Lock()
+        self._callback_lock = threading.Lock()  # only used by _drain_callbacks
+        self._executor_wake_event = None  # set by Executor.add_node()
         self._type_cache = {}  # key: message classの完全修飾名 / module名
         self._parameters: dict[str, Parameter] = {}
         self._parameters_lock = threading.Lock()
@@ -560,10 +561,15 @@ class Node:
             return existing
         return get_or_create_topic(self._participant, name, type_name)
 
-    # ---- executor enqueue/dequeue (thread-safe) -----------------------------------
+    # ---- executor enqueue/dequeue -------------------------------------------------
+    # deque.append / popleft are atomic under CPython's GIL, so most operations
+    # are lock-free.  Only _drain_callbacks uses the lock (swap-and-clear).
     def _enqueue_callback(self, cb, msg):
-        with self._callback_lock:
-            self._callback_queue.append((cb, msg))
+        self._callback_queue.append((cb, msg))
+        # Wake the executor immediately after enqueuing
+        wake = self._executor_wake_event
+        if wake is not None:
+            wake.set()
 
     def _drain_callbacks(self):
         with self._callback_lock:
@@ -572,16 +578,15 @@ class Node:
         return queue
 
     def _pop_callback(self):
-        with self._callback_lock:
-            if not self._callback_queue:
-                return None
+        try:
             return self._callback_queue.popleft()
+        except IndexError:
+            return None
 
     def _has_pending_work(self) -> bool:
         """Internal: check if callbacks are queued or timers are still active."""
-        with self._callback_lock:
-            if self._callback_queue:
-                return True
+        if self._callback_queue:
+            return True
         for t in self._timers:
             try:
                 if not t.is_canceled():

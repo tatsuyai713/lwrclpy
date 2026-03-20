@@ -40,6 +40,20 @@ def _patch_message_class(cls):
     if not simple_fields:
         return
 
+    # Pre-warm message_utils field name caches so that clone_message /
+    # expose_callable_fields never need to call dir() for this class.
+    try:
+        from .message_utils import _callable_fields_cache, _field_names_cache, _SKIP_FIELDS
+        _callable_fields_cache[cls] = tuple(simple_fields)
+        if cls not in _field_names_cache:
+            all_fields = tuple(
+                n for n in dir(inst)
+                if not n.startswith("_") and n not in _SKIP_FIELDS
+            )
+            _field_names_cache[cls] = all_fields
+    except Exception:
+        pass
+
     def __getattr__(self, name):
         if name in simple_fields:
             try:

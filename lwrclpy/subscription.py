@@ -8,7 +8,7 @@ from typing import Optional, Callable, List, Tuple, Any
 import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
-from .message_utils import clone_message
+from .message_utils import clone_message, expose_callable_fields
 
 
 def _retcode_is_ok(rc) -> bool:
@@ -86,6 +86,8 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._user_cb = user_cb
         self._msg_ctor = msg_ctor
         self._raw_mode = raw_mode
+        # Cache the import once at construction time instead of every callback
+        self._expose_fn = None if raw_mode else expose_callable_fields
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
@@ -106,13 +108,13 @@ class _ReaderListener(fastdds.DataReaderListener):
         if getattr(info, "valid_data", True) and _retcode_is_ok(rc):
             # Enqueue the callback to be run by the executor.
             # Prefer delivering the received instance directly to avoid extra copies.
-            if not self._raw_mode:
+            expose_fn = self._expose_fn
+            if expose_fn is not None:
                 try:
-                    from .message_utils import expose_callable_fields
-                    expose_callable_fields(data)
+                    expose_fn(data)
                 except Exception:
                     pass
-            
+
             if isinstance(data, self._msg_ctor):
                 self._enqueue_cb(self._user_cb, data)
             else:
@@ -192,7 +194,6 @@ class Subscription:
             
             if not self._raw_mode:
                 try:
-                    from .message_utils import expose_callable_fields
                     expose_callable_fields(data)
                 except Exception:
                     pass

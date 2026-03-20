@@ -7,7 +7,7 @@ from .subscription import Subscription
 from .qos import QoSProfile
 from .typesupport import RegisteredType
 from .utils import resolve_service_type, SERVICE_REQUEST_PREFIX, SERVICE_RESPONSE_PREFIX
-from .context import get_participant, ok, track_entity, untrack_entity
+from .context import get_participant, track_entity, untrack_entity
 from .utils import get_or_create_topic
 from .future import Future
 
@@ -75,36 +75,21 @@ class Client:
 
     def call(self, request, timeout: Optional[float] = None):
         """Send request and block for one response.
-        
-        Note: This implementation busy-waits because lwrclpy callbacks are enqueued
-        but not automatically processed. For proper behavior, use with an executor
-        or call from within a spin() context.
+
+        Waits on the Future's internal event directly instead of busy-polling.
         """
         future = self.call_async(request)
-        start_time = time.monotonic() if timeout is not None else None
-        
-        # Busy wait for response (callbacks are enqueued via enqueue_cb)
-        while ok() and not future.done():
-            time.sleep(0.001)  # Small sleep to avoid busy spin
-            
-            # Check timeout
-            if timeout is not None:
-                elapsed = time.monotonic() - start_time
-                if elapsed >= timeout:
-                    # Timeout - clear pending future to allow next request
-                    with self._lock:
-                        if self._pending_future is future:
-                            self._pending_future = None
-                    future.cancel()
-                    return None
-        
-        # Get result if available
-        if future.done():
-            try:
-                return future.result(0.0)
-            except Exception:
-                return None
-        return None
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            # Timeout -- clear pending future to allow next request
+            with self._lock:
+                if self._pending_future is future:
+                    self._pending_future = None
+            future.cancel()
+            return None
+        except Exception:
+            return None
 
     def call_async(self, request) -> Future:
         """Send request asynchronously, returning a Future resolved with the response."""

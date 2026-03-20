@@ -2,6 +2,11 @@
 # Helpers for copying Fast-DDS-generated Python messages.
 # Keeps compatibility with fastddsgen getter/setter style while honoring
 # rclpy-like attribute assignment (msg.field = value).
+#
+# Performance notes:
+# - Field names are cached per message class to avoid repeated dir() calls.
+# - _copy_val / _get_value / _assign are module-level to avoid closure re-creation.
+# - SWIG sub-messages are recursively cloned instead of using copy.deepcopy().
 
 from __future__ import annotations
 import copy
@@ -9,6 +14,74 @@ import copy
 # Fields injected by SWIG that should never be copied onto new instances.
 _SKIP_FIELDS = {"this", "thisown"}
 
+# ---- Module-level caches -------------------------------------------------------
+# msg_class -> tuple of relevant field names (excluding _ prefixed and SWIG internals)
+_field_names_cache: dict[type, tuple[str, ...]] = {}
+# msg_class -> tuple of callable zero-arg field names (getter/setter style)
+_callable_fields_cache: dict[type, tuple[str, ...]] = {}
+
+
+def _get_field_names(msg_cls) -> tuple[str, ...]:
+    """Return cacheable field names for a SWIG-generated message class.
+
+    Computes field names once by creating a temporary instance, calling dir(),
+    filtering out private/skip fields, and caching the result.
+    """
+    cached = _field_names_cache.get(msg_cls)
+    if cached is not None:
+        return cached
+
+    try:
+        inst = msg_cls()
+    except Exception:
+        return ()
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in dir(inst):
+        if name.startswith("_") or name in _SKIP_FIELDS or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+
+    result = tuple(names)
+    _field_names_cache[msg_cls] = result
+    return result
+
+
+def _get_callable_fields(msg_cls) -> tuple[str, ...]:
+    """Return the names of zero-arg callable fields for a message class (cached)."""
+    cached = _callable_fields_cache.get(msg_cls)
+    if cached is not None:
+        return cached
+
+    try:
+        inst = msg_cls()
+    except Exception:
+        return ()
+
+    callable_names: list[str] = []
+    for name in _get_field_names(msg_cls):
+        try:
+            attr = getattr(inst, name)
+        except Exception:
+            continue
+        if not callable(attr):
+            continue
+        try:
+            attr()  # test zero-arg call succeeds
+            callable_names.append(name)
+        except TypeError:
+            continue
+        except Exception:
+            continue
+
+    result = tuple(callable_names)
+    _callable_fields_cache[msg_cls] = result
+    return result
+
+
+# ---- _ValueProxy ---------------------------------------------------------------
 
 class _ValueProxy:
     """Callable wrapper so attribute access works like rclpy while keeping msg.field() usable."""
@@ -105,20 +178,152 @@ class _ValueProxy:
             return NotImplemented
 
 
+# ---- Module-level helpers used by clone_message --------------------------------
+
+def _get_value(src, name):
+    """Extract a field value from *src* using fastddsgen conventions."""
+    if name in _SKIP_FIELDS or name.startswith("_"):
+        return None
+    try:
+        v = getattr(src, name)
+    except Exception:
+        return None
+    # Instance attribute wins (rclpy-style msg.foo = val)
+    if not callable(v):
+        return v
+    # Prefer zero-arg getter
+    try:
+        return v()
+    except TypeError:
+        pass
+    except Exception:
+        return None
+    getter = f"get_{name}"
+    try:
+        gv = getattr(src, getter)
+        if callable(gv):
+            return gv()
+    except Exception:
+        pass
+    return None
+
+
+def _assign(target, name, val) -> bool:
+    """Assign *val* to *name* on *target* using fastddsgen conventions."""
+    if name in _SKIP_FIELDS or name.startswith("_"):
+        return False
+    try:
+        setter = getattr(target, name, None)
+        if callable(setter):
+            try:
+                setter(val)
+            except Exception:
+                pass
+            # Expose rclpy-style attribute access while keeping callable behavior.
+            try:
+                setattr(target, name, _ValueProxy(val))
+            except Exception:
+                try:
+                    object.__setattr__(target, name, _ValueProxy(val))
+                except Exception:
+                    pass
+            return True
+    except Exception:
+        pass
+    # Fallback: explicit special-case for common fields present in __dict__ only
+    if name == "data" and isinstance(val, (bytes, bytearray, memoryview)):
+        try:
+            target.data(val)
+            return True
+        except Exception:
+            pass
+    try:
+        setattr(target, name, val)
+        return True
+    except Exception:
+        try:
+            object.__setattr__(target, name, val)
+            return True
+        except Exception:
+            return False
+
+
+def _copy_val(val):
+    """Copy a field value. Optimised for SWIG-generated types."""
+    # Fast path for immutable primitives
+    if isinstance(val, (str, int, float, bool, type(None))):
+        return val
+
+    # Bytes / bytearray / memoryview
+    if isinstance(val, (bytes, bytearray)):
+        return bytes(val)
+    if isinstance(val, memoryview):
+        return bytes(val)
+
+    # Buffer protocol fallback (e.g. numpy arrays exposed as buffer)
+    if not isinstance(val, (list, tuple, set, dict)) and not callable(val):
+        try:
+            return bytes(val)
+        except Exception:
+            pass
+
+    # Collections
+    if isinstance(val, list):
+        return [_copy_val(v) for v in val]
+    if isinstance(val, tuple):
+        return tuple(_copy_val(v) for v in val)
+    if isinstance(val, set):
+        return {_copy_val(v) for v in val}
+    if isinstance(val, dict):
+        return {k: _copy_val(v) for k, v in val.items()}
+
+    # Callable (SWIG getter) -- call it to get the actual value
+    if callable(val):
+        try:
+            return _copy_val(val())
+        except Exception:
+            return val
+
+    # SWIG-generated sub-messages: recursive clone instead of deepcopy
+    if hasattr(val, "this"):
+        try:
+            sub_cls = type(val)
+            sub_clone = sub_cls()
+            for fname in _get_field_names(sub_cls):
+                sub_val = _get_value(val, fname)
+                if sub_val is not None:
+                    _assign(sub_clone, fname, _copy_val(sub_val))
+            return sub_clone
+        except Exception:
+            pass
+
+    # Last resort (should rarely be reached now)
+    try:
+        return copy.deepcopy(val)
+    except Exception:
+        return val
+
+
+# ---- Public API ----------------------------------------------------------------
+
 def expose_callable_fields(msg):
     """
     For a SWIG-generated message instance, expose callable zero-arg fields as
     attributes containing their current value (wrapped in _ValueProxy). This
     improves repr/debugging without cloning the whole message.
+
+    Uses cached callable-field names to avoid re-computing dir() per message.
     """
-    for name in dir(msg):
-        if name.startswith("_"):
-            continue
+    msg_cls = type(msg)
+    callable_names = _get_callable_fields(msg_cls)
+
+    for name in callable_names:
         try:
             attr = getattr(msg, name)
         except Exception:
             continue
         if not callable(attr):
+            # Already replaced (e.g., by __setattr__ patch) -- skip
             continue
         try:
             val = attr()
@@ -149,120 +354,41 @@ def clone_message(msg, msg_ctor):
       - getter/setter share the same name (foo() / foo(value))
       - getter fallback: get_foo()
     Also propagates plain attributes to support rclpy-style `msg.foo = x`.
+
+    Uses cached field names to avoid repeated dir() calls.
     """
-
-    def _copy_val(val):
-        if isinstance(val, (str, int, float, bool, type(None))):
-            return val
-        if isinstance(val, (bytes, bytearray, memoryview)):
-            try:
-                return bytes(val)
-            except Exception:
-                pass
-        # Buffer protocol fallback
-        try:
-            return bytes(val)
-        except Exception:
-            pass
-        if isinstance(val, list):
-            return [_copy_val(v) for v in val]
-        if isinstance(val, tuple):
-            return tuple(_copy_val(v) for v in val)
-        if isinstance(val, set):
-            return {_copy_val(v) for v in val}
-        if isinstance(val, dict):
-            return {k: _copy_val(v) for k, v in val.items()}
-        if callable(val):
-            try:
-                return _copy_val(val())
-            except Exception:
-                return val
-        try:
-            return copy.deepcopy(val)
-        except Exception:
-            return val
-
-    def _get_value(src, name):
-        if name in _SKIP_FIELDS or name.startswith("_"):
-            return None
-        try:
-            v = getattr(src, name)
-        except Exception:
-            return None
-        # Instance attribute wins (rclpy-style msg.foo = val)
-        if not callable(v):
-            return v
-        # Prefer zero-arg getter
-        try:
-            return v()
-        except TypeError:
-            pass
-        except Exception:
-            return None
-        getter = f"get_{name}"
-        try:
-            gv = getattr(src, getter)
-            if callable(gv):
-                return gv()
-        except Exception:
-            pass
-        return None
-
-    def _assign(target, name, val) -> bool:
-        if name in _SKIP_FIELDS or name.startswith("_"):
-            return False
-        try:
-            setter = getattr(target, name, None)
-            if callable(setter):
-                try:
-                    setter(val)
-                except Exception:
-                    pass
-                # Expose rclpy-style attribute access while keeping callable behavior.
-                try:
-                    setattr(target, name, _ValueProxy(val))
-                except Exception:
-                    try:
-                        object.__setattr__(target, name, _ValueProxy(val))
-                    except Exception:
-                        pass
-                return True
-        except Exception:
-            pass
-        # Fallback: explicit special-case for common fields present in __dict__ only
-        if name == "data" and isinstance(val, (bytes, bytearray, memoryview)):
-            try:
-                target.data(val)
-                return True
-            except Exception:
-                pass
-        try:
-            setattr(target, name, val)
-            return True
-        except Exception:
-            try:
-                object.__setattr__(target, name, val)
-                return True
-            except Exception:
-                return False
-
     clone = msg_ctor()
 
-    field_names = []
-    # Values explicitly set on the instance (rclpy-like attribute assignment)
-    if hasattr(msg, "__dict__"):
-        field_names.extend(n for n in msg.__dict__ if not n.startswith("_"))
-    field_names.extend(n for n in dir(msg) if not n.startswith("_"))
-    field_names.extend(n for n in dir(clone) if not n.startswith("_"))
+    # Use cached field names from the message constructor type
+    field_names = _get_field_names(msg_ctor)
 
-    seen = set()
+    # Collect extra instance __dict__ attributes (rclpy-style msg.foo = val)
+    extra_names: tuple[str, ...] = ()
+    msg_dict = getattr(msg, "__dict__", None)
+    if msg_dict:
+        extra_names = tuple(
+            n for n in msg_dict
+            if not n.startswith("_") and n not in _SKIP_FIELDS
+        )
+
+    # Process cached fields
     for name in field_names:
-        if name in seen:
-            continue
-        seen.add(name)
         val = _get_value(msg, name)
         if val is None:
             continue
         copied = _copy_val(val)
         _assign(clone, name, copied)
+
+    # Handle extra instance attributes not in the SWIG class definition
+    if extra_names:
+        field_set = frozenset(field_names)
+        for name in extra_names:
+            if name in field_set:
+                continue  # already processed
+            val = _get_value(msg, name)
+            if val is None:
+                continue
+            copied = _copy_val(val)
+            _assign(clone, name, copied)
+
     return clone

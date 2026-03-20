@@ -43,13 +43,32 @@ sudo apt-get install -y --no-install-recommends \
   "${PYBIN%-*}-venv" "${PYBIN%-*}-dev" \
   unzip wget curl \
   libasio-dev libtinyxml2-dev libssl-dev \
-  cmake ninja-build python3-dev python3-pip \
+  ninja-build python3-dev python3-pip \
   patchelf \
   ca-certificates
 
 # Some toolchains on arm64 sometimes need these (harmless on amd64)
 sudo apt-get install -y --no-install-recommends \
   libatomic1 || true
+
+# ===== cmake 3.x (avoid 4.x series) =====
+# Newer distros / Kitware APT repos may ship cmake 4.x which is not yet
+# compatible with all Fast DDS build scripts.  Pin to the latest 3.x.
+_install_cmake3() {
+  # First try: find the latest 3.x available in apt
+  local ver
+  ver="$(apt-cache madison cmake 2>/dev/null \
+         | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' \
+         | grep -E '^3\.' | sort -V | tail -n1 || true)"
+  if [[ -n "${ver}" ]]; then
+    log "Installing cmake 3.x from apt (${ver})…"
+    sudo apt-get install -y --no-install-recommends "cmake=${ver}" && return 0
+  fi
+  # Fallback: install via pip inside the build venv (pinned to <4)
+  log "cmake 3.x not available in apt; installing via pip…"
+  pip install 'cmake>=3.16,<4'
+}
+_install_cmake3
 
 # Java is required to build Fast-DDS-Gen (gradle)
 # Prefer OpenJDK 11 for widest compatibility with older Gradle wrappers.
