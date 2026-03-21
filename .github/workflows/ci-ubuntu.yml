@@ -2,6 +2,8 @@ name: Build & Test Ubuntu
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   pull_request:
