@@ -117,7 +117,7 @@ class _MessageProxyInstance:
     """Instance proxy that wraps SWIG message instances for ROS 2-style attribute access."""
     def __init__(self, swig_instance):
         object.__setattr__(self, '_instance', swig_instance)
-    
+
     def __getattribute__(self, name):
         if name == '_instance':
             return object.__getattribute__(self, '_instance')
@@ -131,11 +131,19 @@ class _MessageProxyInstance:
         # If it's a zero-arg callable (SWIG getter), call it
         if callable(attr):
             try:
-                return attr()
+                val = attr()
+                # Convert SWIG vectors to Python lists for usability
+                if (hasattr(val, '__iter__') and hasattr(val, 'size')
+                        and not isinstance(val, (str, bytes))):
+                    try:
+                        return list(val)
+                    except Exception:
+                        pass
+                return val
             except TypeError:
                 return attr
         return attr
-    
+
     def __setattr__(self, name, value):
         instance = object.__getattribute__(self, '_instance')
         # Try name first, then name_ (SWIG trailing underscore convention)
@@ -159,32 +167,31 @@ class _MessageProxyInstance:
                 return
             except (TypeError, AttributeError):
                 pass
-        # For SWIG vectors, convert Python list to vector
-        if isinstance(value, list) and attr is not None and hasattr(attr, 'append'):
-            try:
-                # Get the vector and clear it
-                vec = attr() if callable(attr) else attr
-                if hasattr(vec, 'clear'):
-                    vec.clear()
-                    for item in value:
-                        vec.push_back(item)
-                    return
-            except Exception:
-                pass
+            # For Python list -> SWIG vector: get the vector, clear, push_back
+            if isinstance(value, (list, tuple)):
+                try:
+                    vec = attr()  # Call getter to get the SWIG vector
+                    if hasattr(vec, 'clear') and hasattr(vec, 'push_back'):
+                        vec.clear()
+                        for item in value:
+                            vec.push_back(item)
+                        return
+                except Exception:
+                    pass
         # Fall back to direct attribute assignment
         try:
             setattr(instance, actual_name, value)
         except AttributeError:
             object.__setattr__(instance, actual_name, value)
-    
+
     def __getattr__(self, name):
         instance = object.__getattribute__(self, '_instance')
         return getattr(instance, name)
-    
+
     # Return the wrapped SWIG instance to support passing to C++ code
     def __repr__(self):
         return repr(object.__getattribute__(self, '_instance'))
-    
+
     def __str__(self):
         return str(object.__getattribute__(self, '_instance'))
 

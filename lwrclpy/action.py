@@ -45,11 +45,55 @@ _STATUS_CANCELED = 5
 _STATUS_ABORTED = 6
 
 
+def _swig_set(target, name, value):
+    """Set a field on a (possibly SWIG) object using the method-based setter pattern.
+
+    Raw SWIG objects use methods as getter/setter (e.g. obj.field() / obj.field(val))
+    instead of Python properties, so plain setattr() only creates a Python attribute
+    and never touches the underlying C++ data.  This helper calls the SWIG setter
+    method when one exists, falling back to setattr() for plain Python objects.
+
+    _MessageProxyInstance values are automatically unwrapped before calling the
+    SWIG setter so that the C++ layer receives the raw SWIG instance.
+    """
+    # Unwrap _MessageProxyInstance to get raw SWIG instance
+    raw_value = value
+    if hasattr(value, '_instance'):
+        raw_value = object.__getattribute__(value, '_instance')
+
+    # Try SWIG setter: target.name(value)  or  target.name_(value)
+    for n in (name, name + '_'):
+        m = getattr(target, n, None)
+        if m is not None and callable(m):
+            try:
+                m(raw_value)
+                return
+            except (TypeError, AttributeError):
+                pass
+            # For list → SWIG vector: get the vector, clear, push_back each item
+            if isinstance(raw_value, (list, tuple)):
+                try:
+                    vec = m()  # getter returns the SWIG vector
+                    if hasattr(vec, 'clear') and hasattr(vec, 'push_back'):
+                        vec.clear()
+                        for item in raw_value:
+                            vec.push_back(item)
+                        return
+                except Exception:
+                    pass
+
+    # Fallback for plain Python objects
+    try:
+        setattr(target, name, raw_value)
+    except Exception:
+        pass
+
+
 def _set_uuid(field, uid: uuid.UUID):
     data = list(uid.bytes)
     if hasattr(field, "uuid"):
         try:
-            setattr(field, "uuid", data)
+            _swig_set(field, "uuid", data)
             return
         except Exception:
             pass
@@ -88,7 +132,7 @@ def _copy_goal_id(goal_id_field):
             # If uuid is a method, call it
             if callable(uuid_data):
                 uuid_data = uuid_data()
-            setattr(new_field, "uuid", list(uuid_data))
+            _swig_set(new_field, "uuid", list(uuid_data))
             return new_field
         except Exception:
             pass
@@ -103,13 +147,18 @@ def _copy_goal_id(goal_id_field):
 def _zero_stamp(msg):
     for attr in ("stamp", "goal_info", "goal_id"):
         target = getattr(msg, attr, None)
+        if callable(target):
+            try:
+                target = target()
+            except TypeError:
+                pass
         if target is None:
             continue
         for sec_name, nsec_name in (("sec", "nanosec"), ("seconds", "nanoseconds")):
             if hasattr(target, sec_name) and hasattr(target, nsec_name):
                 try:
-                    setattr(target, sec_name, 0)
-                    setattr(target, nsec_name, 0)
+                    _swig_set(target, sec_name, 0)
+                    _swig_set(target, nsec_name, 0)
                 except Exception:
                     pass
                 return
@@ -335,7 +384,7 @@ class ActionServer:
 
         response = self._send_goal_res_cls()
         try:
-            setattr(response, "accepted", bool(accepted))
+            _swig_set(response, "accepted", bool(accepted))
         except Exception:
             pass
         _zero_stamp(response)
@@ -384,7 +433,7 @@ class ActionServer:
             handle._set_cancel_requested()
         try:
             if hasattr(response, "return_code"):
-                setattr(response, "return_code", CancelResponse.ACCEPT.value if allowed else CancelResponse.REJECT.value)
+                _swig_set(response, "return_code", CancelResponse.ACCEPT.value if allowed else CancelResponse.REJECT.value)
         except Exception:
             pass
         self._cancel_res_pub.publish(response)
@@ -422,9 +471,9 @@ class ActionServer:
         msg = self._feedback_msg_cls()
         try:
             if hasattr(msg, "goal_id"):
-                setattr(msg, "goal_id", _copy_goal_id(goal_id))
+                _swig_set(msg, "goal_id", _copy_goal_id(goal_id))
             if feedback_msg is not None:
-                setattr(msg, "feedback", feedback_msg)
+                _swig_set(msg, "feedback", feedback_msg)
         except Exception:
             pass
         self._feedback_pub.publish(msg)
@@ -433,15 +482,15 @@ class ActionServer:
         """Build result object from provided result, copying attributes."""
         result_obj = self._result_cls()
         if result is not None:
-            for attr in dir(result):
-                if attr.startswith("_"):
+            for attr_name in dir(result):
+                if attr_name.startswith("_"):
                     continue
                 try:
-                    val = getattr(result, attr)
+                    val = getattr(result, attr_name)
                     # Skip methods and callables except for SWIG getters
                     if callable(val) and not hasattr(val, '__self__'):
                         continue
-                    setattr(result_obj, attr, val)
+                    _swig_set(result_obj, attr_name, val)
                 except Exception:
                     pass
         return result_obj
@@ -470,11 +519,11 @@ class ActionServer:
         res_msg = self._get_result_res_cls()
         try:
             if hasattr(res_msg, "status"):
-                setattr(res_msg, "status", status)
+                _swig_set(res_msg, "status", status)
             if hasattr(res_msg, "result") and result_obj is not None:
-                setattr(res_msg, "result", result_obj)
+                _swig_set(res_msg, "result", result_obj)
             if hasattr(res_msg, "goal_id"):
-                setattr(res_msg, "goal_id", _copy_goal_id(goal_id_copy))
+                _swig_set(res_msg, "goal_id", _copy_goal_id(goal_id_copy))
         except Exception:
             pass
         self._get_result_res_pub.publish(res_msg)
@@ -519,17 +568,19 @@ class ActionServer:
                 continue
             try:
                 goal_info = getattr(status_msg, "goal_info", None)
+                if callable(goal_info):
+                    goal_info = goal_info()
                 if goal_info is not None and hasattr(goal_info, "goal_id"):
-                    setattr(goal_info, "goal_id", _copy_goal_id(goal_id_copy))
+                    _swig_set(goal_info, "goal_id", _copy_goal_id(goal_id_copy))
                 elif hasattr(status_msg, "goal_id"):
-                    setattr(status_msg, "goal_id", _copy_goal_id(goal_id_copy))
+                    _swig_set(status_msg, "goal_id", _copy_goal_id(goal_id_copy))
                 if hasattr(status_msg, "status"):
-                    setattr(status_msg, "status", status_code)
+                    _swig_set(status_msg, "status", status_code)
             except Exception:
                 pass
             status_list.append(status_msg)
         try:
-            setattr(msg, "status_list", status_list)
+            _swig_set(msg, "status_list", status_list)
         except Exception:
             pass
         self._status_pub.publish(msg)
@@ -816,10 +867,13 @@ class ActionClient:
         """
         request = self._send_goal_req_cls()
         goal_id = getattr(request, "goal_id", None)
+        # goal_id may be a SWIG getter method
+        if callable(goal_id):
+            goal_id = goal_id()
         if goal_id is None:
             try:
                 goal_id = type("GoalID", (), {})()
-                setattr(request, "goal_id", goal_id)
+                _swig_set(request, "goal_id", goal_id)
             except Exception:
                 pass
         # Use provided goal_uuid or generate a new one
@@ -839,7 +893,7 @@ class ActionClient:
         if goal_id is not None:
             _set_uuid(goal_id, uid)
         try:
-            setattr(request, "goal", goal_msg)
+            _swig_set(request, "goal", goal_msg)
         except Exception:
             pass
         key = _uuid_bytes(goal_id)
@@ -881,7 +935,7 @@ class ActionClient:
             self._pending_result_keys.append(key)
         request = self._get_result_req_cls()
         try:
-            setattr(request, "goal_id", _copy_goal_id(goal_id))
+            _swig_set(request, "goal_id", _copy_goal_id(goal_id))
         except Exception:
             pass
         self._get_result_pub.publish(request)
@@ -923,14 +977,16 @@ class ActionClient:
             self._cancel_futures[key] = future
         request = self._cancel_req_cls()
         goal_info = getattr(request, "goal_info", None)
+        if callable(goal_info):
+            goal_info = goal_info()
         if goal_info is not None:
             try:
-                setattr(goal_info, "goal_id", _copy_goal_id(goal_id))
+                _swig_set(goal_info, "goal_id", _copy_goal_id(goal_id))
             except Exception:
                 pass
         else:
             try:
-                setattr(request, "goal_id", _copy_goal_id(goal_id))
+                _swig_set(request, "goal_id", _copy_goal_id(goal_id))
             except Exception:
                 pass
         self._cancel_pub.publish(request)
