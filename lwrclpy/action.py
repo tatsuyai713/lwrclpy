@@ -480,19 +480,21 @@ class ActionServer:
 
     def _build_result_obj(self, result):
         """Build result object from provided result, copying attributes."""
+        # Unwrap _MessageProxyInstance to access raw SWIG fields via dir()
+        raw_result = result
+        if hasattr(result, '_instance'):
+            raw_result = object.__getattribute__(result, '_instance')
         result_obj = self._result_cls()
-        if result is not None:
-            for attr_name in dir(result):
-                if attr_name.startswith("_"):
-                    continue
-                try:
-                    val = getattr(result, attr_name)
-                    # Skip methods and callables except for SWIG getters
-                    if callable(val) and not hasattr(val, '__self__'):
-                        continue
-                    _swig_set(result_obj, attr_name, val)
-                except Exception:
-                    pass
+        # Also unwrap result_obj for direct SWIG setter access
+        raw_result_obj = result_obj
+        if hasattr(result_obj, '_instance'):
+            raw_result_obj = object.__getattribute__(result_obj, '_instance')
+        if raw_result is not None:
+            from .message_utils import _get_field_names, _get_value, _copy_val, _assign
+            for name in _get_field_names(type(raw_result)):
+                val = _get_value(raw_result, name)
+                if val is not None:
+                    _assign(raw_result_obj, name, _copy_val(val))
         return result_obj
 
     def _complete_goal(self, goal_id, result, status_code):

@@ -131,15 +131,7 @@ class _MessageProxyInstance:
         # If it's a zero-arg callable (SWIG getter), call it
         if callable(attr):
             try:
-                val = attr()
-                # Convert SWIG vectors to Python lists for usability
-                if (hasattr(val, '__iter__') and hasattr(val, 'size')
-                        and not isinstance(val, (str, bytes))):
-                    try:
-                        return list(val)
-                    except Exception:
-                        pass
-                return val
+                return attr()
             except TypeError:
                 return attr
         return attr
