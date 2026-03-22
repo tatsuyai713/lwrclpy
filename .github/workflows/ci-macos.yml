@@ -9,6 +9,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-macos-wheels:
     uses: ./.github/workflows/build-macos.yml

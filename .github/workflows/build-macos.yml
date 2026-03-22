@@ -68,6 +68,8 @@ jobs:
   post-build:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       run_id: ${{ steps.run_id.outputs.run_id }}
     steps:
@@ -81,15 +83,25 @@ jobs:
       - name: List wheels
         run: ls -la all-wheels/
 
-      - name: Create Release
+      - name: Upload wheels to Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: all-wheels/*.whl
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Tag: $TAG"
+          # Create release if it does not exist yet
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Creating release $TAG ..."
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --generate-notes
+          else
+            echo "Release $TAG already exists."
+          fi
+          # Upload wheels (--clobber replaces files with the same name)
+          echo "Uploading macOS wheels ..."
+          gh release upload "$TAG" all-wheels/*.whl \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Export run id
         id: run_id
