@@ -147,9 +147,7 @@ The default timeout is 3 seconds. You can adjust the `timeout` parameter in the 
 
 These test scripts are used in GitHub Actions CI/CD pipeline:
 
-- **Ubuntu CI**: Runs `test_examples_ubuntu.py` on Ubuntu 20.04/22.04
-- **macOS CI**: Runs `test_examples_mac.py` on macOS latest
-- **Build CI**: Creates wheel packages for both platforms after tests pass
+- **Build, Test & Release Wheels**: Builds wheels for Ubuntu and macOS, runs platform-specific example tests, and publishes release assets after tests pass
 
 See `.github/workflows/` directory for CI configuration details.
 

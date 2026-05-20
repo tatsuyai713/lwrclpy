@@ -1,7 +1,6 @@
 # lwrclpy — rclpy-Compatible API Without ROS 2 (Fast DDS v3)
 
-[![Ubuntu](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci-ubuntu.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci-ubuntu.yml)
-[![macOS](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci-macos.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci-macos.yml)
+[![CI](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci.yml)
 
 [日本語](README.md)
 

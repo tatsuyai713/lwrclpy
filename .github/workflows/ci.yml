@@ -1,0 +1,94 @@
+name: Build, Test & Release Wheels
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to create or replace"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build-ubuntu-wheels:
+    uses: ./.github/workflows/build-ubuntu.yml
+
+  build-macos-wheels:
+    uses: ./.github/workflows/build-macos.yml
+
+  test-ubuntu-wheels:
+    needs: build-ubuntu-wheels
+    uses: ./.github/workflows/test-ubuntu.yml
+    with:
+      build_run_id: ${{ needs.build-ubuntu-wheels.outputs.run_id }}
+
+  test-macos-wheels:
+    needs: build-macos-wheels
+    uses: ./.github/workflows/test-macos.yml
+    with:
+      build_run_id: ${{ needs.build-macos-wheels.outputs.run_id }}
+
+  release-wheels:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
+    needs:
+      - test-ubuntu-wheels
+      - test-macos-wheels
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: all-wheels/
+          merge-multiple: true
+
+      - name: List wheels
+        run: ls -la all-wheels/
+
+      - name: Create or replace release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            TAG="$RELEASE_TAG"
+            IS_LATEST="false"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            IS_LATEST="false"
+          else
+            TAG="latest"
+            IS_LATEST="true"
+          fi
+          echo "Release tag: $TAG"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Deleting existing release $TAG ..."
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag=false
+          fi
+
+          echo "Creating release $TAG ..."
+          if [ "$IS_LATEST" = "true" ]; then
+            gh release create "$TAG" all-wheels/*.whl \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Latest Build" \
+              --prerelease \
+              --notes "Automated build from \`main\` branch ($(date -u +%Y-%m-%d\ %H:%M\ UTC))"
+          else
+            gh release create "$TAG" all-wheels/*.whl \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --generate-notes
+          fi
