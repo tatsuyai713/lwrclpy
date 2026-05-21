@@ -10,20 +10,7 @@ import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
 from .message_utils import clone_message, expose_callable_fields
-
-
-def _retcode_is_ok(rc) -> bool:
-    """Return True if 'rc' represents RETCODE_OK (v2/v3 tolerant)."""
-    ok_const = getattr(fastdds, "RETCODE_OK", 0)  # v3: module-level; v2: often 0-like
-    try:
-        if rc == ok_const:
-            return True
-    except Exception:
-        pass
-    try:
-        return int(rc) == int(ok_const)
-    except Exception:
-        return bool(rc) is True
+from .utils import _retcode_is_ok
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:

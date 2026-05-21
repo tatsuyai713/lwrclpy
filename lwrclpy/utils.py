@@ -1,11 +1,35 @@
 import importlib
 import types
+import fastdds  # type: ignore
 
 
 TOPIC_PREFIX = "rt/"
 SERVICE_REQUEST_PREFIX = "rq/"
 SERVICE_RESPONSE_PREFIX = "rr/"
 ACTION_PREFIX = "ra/"
+
+
+def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
+    """Return True if 'rc' represents RETCODE_OK across Fast DDS bindings."""
+    if rc is None:
+        return none_is_ok
+    if rc is True:
+        return True
+    ok_const = getattr(fastdds, "RETCODE_OK", 0)
+    try:
+        if rc == ok_const:
+            return True
+    except Exception:
+        pass
+    try:
+        rc_int = int(rc)
+    except Exception:
+        return False
+    try:
+        ok_int = int(ok_const)
+    except Exception:
+        ok_int = 0
+    return rc_int == ok_int
 
 
 def _normalize_namespace(ns: str) -> str:

@@ -11,31 +11,9 @@ from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _ValueProxy
 from .duration import Duration
+from .utils import _retcode_is_ok
 
 T = TypeVar('T')
-
-
-def _retcode_is_ok(rc) -> bool:
-    """Return True if 'rc' represents RETCODE_OK across Fast DDS bindings."""
-    if rc is None:
-        return True
-    if rc is True:
-        return True
-    ok_const = getattr(fastdds, "RETCODE_OK", 0)
-    try:
-        if rc == ok_const:
-            return True
-    except Exception:
-        pass
-    try:
-        rc_int = int(rc)
-    except Exception:
-        return False
-    try:
-        ok_int = int(ok_const)
-    except Exception:
-        ok_int = 0
-    return rc_int == ok_int
 
 
 def _has_proxy_attributes(msg) -> bool:
@@ -198,7 +176,7 @@ class Publisher:
                 except TypeError:
                     candidate = self._msg_ctor()
                     rc = self._writer.loan_sample(candidate)
-                    if _retcode_is_ok(rc):
+                    if _retcode_is_ok(rc, none_is_ok=True):
                         loaned_msg = candidate
                         from_middleware = True
         except Exception:
