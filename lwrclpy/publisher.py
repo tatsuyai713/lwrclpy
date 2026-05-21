@@ -50,33 +50,51 @@ def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> None:
 
 
 class LoanedMessage(Generic[T]):
-    """Context manager for loaned messages enabling zero-copy publishing.
-    
-    Usage:
-        with publisher.loan_message() as msg:
-            msg.data = "Hello"
-        # Message is automatically published when exiting the context
+    """Message-like wrapper for a DataWriter loaned sample.
+
+    The wrapper forwards field access to the underlying message, so callers can
+    use it like a normal message and pass it to ``publish()``.  It also supports
+    the existing context-manager examples, publishing on successful exit.
     """
-    
-    __slots__ = ("_publisher", "_msg", "_published")
-    
-    def __init__(self, publisher: "Publisher", msg: T):
-        self._publisher = publisher
-        self._msg = msg
-        self._published = False
+
+    __slots__ = ("_publisher", "_msg", "_from_middleware", "_published")
+
+    def __init__(self, publisher: "Publisher", msg: T, from_middleware: bool):
+        object.__setattr__(self, "_publisher", publisher)
+        object.__setattr__(self, "_msg", msg)
+        object.__setattr__(self, "_from_middleware", from_middleware)
+        object.__setattr__(self, "_published", False)
+
+    def __getattr__(self, name):
+        return getattr(self._msg, name)
+
+    def __setattr__(self, name, value):
+        if name in self.__slots__:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._msg, name, value)
     
     @property
     def msg(self) -> T:
         """Access the loaned message."""
         return self._msg
+
+    @property
+    def __class__(self):
+        return self._msg.__class__
+
+    def __repr__(self):
+        return repr(self._msg)
+
+    def __str__(self):
+        return str(self._msg)
     
     def __enter__(self) -> T:
-        return self._msg
+        return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not self._published and exc_type is None:
-            self._publisher._publish_loaned(self._msg)
-            self._published = True
+            self._publisher.publish(self)
         return False
 
 
@@ -113,6 +131,10 @@ class Publisher:
 
     def publish(self, msg) -> None:
         """Publish a message instance generated from the SWIG type."""
+        if isinstance(msg, LoanedMessage):
+            self._publish_loaned(msg)
+            return
+
         target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
 
         # Fast path: if msg is already the correct SWIG type and has no
@@ -127,43 +149,57 @@ class Publisher:
             self._writer.write(to_send)
         self._publish_count += 1
 
+    @property
+    def can_loan_messages(self) -> bool:
+        """Return whether this publisher exposes a middleware loan API."""
+        return hasattr(self._writer, "loan_sample") and (
+            hasattr(self._writer, "write_loaned") or hasattr(self._writer, "write")
+        )
+
     def loan_message(self) -> LoanedMessage:
-        """Loan a message from the middleware for zero-copy publishing.
-        
-        Returns a LoanedMessage context manager. The message is published
-        automatically when exiting the context (unless an exception occurred).
-        
-        Note: Fast DDS loan support depends on the data type and QoS settings.
-        If loaning fails, a regular message instance is created instead.
+        """Borrow a message for efficient publishing.
+
+        Returns a message-like object that can be passed to ``publish()``.  When
+        Fast DDS exposes sample loaning for this type, publish uses the loaned
+        write path.  Otherwise the object falls back to a normal message while
+        preserving the same public API.
         """
         if self._msg_ctor is None:
             raise RuntimeError("Cannot loan message: message constructor not available")
-        
-        # Try to use Fast DDS loan API if available
+
         loaned_msg = None
+        from_middleware = False
         try:
             if hasattr(self._writer, "loan_sample"):
-                loaned_msg = self._writer.loan_sample()
+                try:
+                    loaned_msg = self._writer.loan_sample()
+                    from_middleware = loaned_msg is not None
+                except TypeError:
+                    candidate = self._msg_ctor()
+                    rc = self._writer.loan_sample(candidate)
+                    if rc is None or rc == 0 or rc is True:
+                        loaned_msg = candidate
+                        from_middleware = True
         except Exception:
             pass
-        
-        # Fall back to creating a regular message if loaning not supported
+
         if loaned_msg is None:
             loaned_msg = self._msg_ctor()
-        
-        return LoanedMessage(self, loaned_msg)
 
-    def _publish_loaned(self, msg) -> None:
+        return LoanedMessage(self, loaned_msg, from_middleware)
+
+    def _publish_loaned(self, loaned: LoanedMessage) -> None:
         """Publish a loaned message. Called by LoanedMessage context manager."""
+        msg = loaned._msg
         try:
-            # Try to use discard_loan if available (for true loaned messages)
-            if hasattr(self._writer, "write_loaned"):
+            if loaned._from_middleware and hasattr(self._writer, "write_loaned"):
                 self._writer.write_loaned(msg)
             else:
                 self._writer.write(msg)
         except Exception:
             # Fallback to regular write
             self._writer.write(msg)
+        loaned._published = True
         self._publish_count += 1
 
     def get_subscription_count(self) -> int:

@@ -3,7 +3,7 @@
 
 This example shows:
 - Using loan_message() for efficient zero-copy publishing
-- Context manager pattern for automatic message publishing
+- rclpy-style publish(loaned_message) usage
 - Comparison with regular publish
 """
 
@@ -30,12 +30,11 @@ def main():
     
     try:
         while rclpy.ok() and count < 10:
-            # Method 1: Using loan_message() with context manager
-            # The message is automatically published when exiting the context
-            with pub.loan_message() as msg:
-                msg.data = f"Loaned message {count}"
-                logger.info(f"[loan_message] Sending: {msg.data}")
-            # Message is published here automatically
+            # Method 1: Borrow a message and publish it explicitly
+            msg = pub.loan_message()
+            msg.data = f"Loaned message {count}"
+            logger.info(f"[loan_message] Sending: {msg.data}")
+            pub.publish(msg)
             
             count += 1
             
@@ -49,8 +48,8 @@ def main():
             rate.sleep()
         
         logger.info("\n=== Publishing Complete ===")
-        logger.info("Note: loan_message() enables zero-copy when Fast DDS")
-        logger.info("data sharing is available, reducing memory copies.")
+        logger.info("Note: loan_message() uses Fast DDS sample loaning when")
+        logger.info("available; otherwise it falls back to a normal message.")
         
     except KeyboardInterrupt:
         pass

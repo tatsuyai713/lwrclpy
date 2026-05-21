@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 from typing import Optional, Callable, List, Tuple, Any
+import inspect
 import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
@@ -88,6 +89,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._raw_mode = raw_mode
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
+        self._with_message_info = _callback_accepts_message_info(user_cb)
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
@@ -115,11 +117,27 @@ class _ReaderListener(fastdds.DataReaderListener):
                 except Exception:
                     pass
 
-            if isinstance(data, self._msg_ctor):
-                self._enqueue_cb(self._user_cb, data)
+            msg = data if isinstance(data, self._msg_ctor) else clone_message(data, self._msg_ctor)
+            if self._with_message_info:
+                msg_info = MessageInfo(info)
+                self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), msg)
             else:
-                cloned = clone_message(data, self._msg_ctor)
-                self._enqueue_cb(self._user_cb, cloned)
+                self._enqueue_cb(self._user_cb, msg)
+
+
+def _callback_accepts_message_info(callback) -> bool:
+    try:
+        sig = inspect.signature(callback)
+    except Exception:
+        return False
+    positional = [
+        param for param in sig.parameters.values()
+        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+    ]
+    if any(param.kind == param.VAR_POSITIONAL for param in sig.parameters.values()):
+        return True
+    required = [param for param in positional if param.default is inspect._empty]
+    return len(required) >= 2
 
 
 class Subscription:

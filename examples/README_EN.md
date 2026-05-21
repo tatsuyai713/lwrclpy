@@ -160,9 +160,9 @@ Custom QoS options:
 Use `loan_message()` to avoid copying for large messages:
 
 ```python
-with publisher.loan_message() as loaned_msg:
-    loaned_msg.data = large_data
-    # Message is auto-published on context exit
+loaned_msg = publisher.loan_message()
+loaned_msg.data = large_data
+publisher.publish(loaned_msg)
 ```
 
 ---

@@ -275,7 +275,7 @@ CMAKE_COMMON_ARGS=(
   -Dfastcdr_DIR="${FASTCDR_DIR}"
   -DCMAKE_MACOSX_RPATH=ON
   # Key point: prioritize legacy Asio headers
-  -DCMAKE_CXX_FLAGS="-I${ASIO_DIR}/include"
+  -DCMAKE_CXX_FLAGS="-I${ASIO_DIR}/include -Wno-error=nonnull"
   -DCMAKE_C_FLAGS="-I${ASIO_DIR}/include"
   -DFASTDDS_SHM_TRANSPORT_DEFAULT=OFF
 )
