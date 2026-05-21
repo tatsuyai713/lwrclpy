@@ -210,7 +210,11 @@ class Publisher:
         return LoanedMessage(self, loaned_msg, from_middleware)
 
     def _publish_loaned(self, loaned: LoanedMessage) -> None:
-        """Publish a loaned message. Called by LoanedMessage context manager."""
+        """Publish a loaned message through the appropriate writer path.
+
+        Used by ``Publisher.publish()`` for explicit loaned publishing and by
+        the ``LoanedMessage`` context manager on successful exit.
+        """
         msg = loaned._msg
         try:
             if loaned._from_middleware and hasattr(self._writer, "write_loaned"):

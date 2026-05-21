@@ -109,7 +109,9 @@ class Client:
     def wait_for_service(self, timeout_sec: Optional[float] = None) -> bool:
         """Wait for the service to become available (rclpy compatible).
         
-        This waits until the service's subscription is matched with our publisher.
+        This waits until both service directions are matched: our request
+        publisher has a subscriber, and our response subscription has a
+        publisher.
         
         :param timeout_sec: Maximum time to wait. If None, waits forever.
         :return: True if service is available, False if timeout.
@@ -130,7 +132,8 @@ class Client:
     def service_is_ready(self) -> bool:
         """Check if the service is ready (rclpy compatible).
         
-        Returns True if we have matched subscribers for our request publisher.
+        Returns True when the request publisher has matched subscribers and
+        the response subscription has matched publishers.
         """
         try:
             return (
