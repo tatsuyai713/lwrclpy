@@ -296,9 +296,9 @@ Efficiently send large messages (images, point clouds, etc.):
 
 ```python
 # Send message with zero-copy
-with publisher.loan_message() as loaned_msg:
-    loaned_msg.data = large_data
-    # Auto-published on context exit
+loaned_msg = publisher.loan_message()
+loaned_msg.data = large_data
+publisher.publish(loaned_msg)
 ```
 
 ### QoS Profiles

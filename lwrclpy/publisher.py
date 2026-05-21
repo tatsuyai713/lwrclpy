@@ -5,18 +5,37 @@
 # - Support loan_message() for true zero-copy publishing.
 
 from __future__ import annotations
-from contextlib import contextmanager
 import fastdds  # type: ignore
 import os
-from typing import Optional, TypeVar, Generic, TYPE_CHECKING
+from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _ValueProxy
 from .duration import Duration
 
-if TYPE_CHECKING:
-    from typing import Type
-
 T = TypeVar('T')
+
+
+def _retcode_is_ok(rc) -> bool:
+    """Return True if 'rc' represents RETCODE_OK across Fast DDS bindings."""
+    if rc is None:
+        return True
+    if rc is True:
+        return True
+    ok_const = getattr(fastdds, "RETCODE_OK", 0)
+    try:
+        if rc == ok_const:
+            return True
+    except Exception:
+        pass
+    try:
+        rc_int = int(rc)
+    except Exception:
+        return False
+    try:
+        ok_int = int(ok_const)
+    except Exception:
+        ok_int = 0
+    return rc_int == ok_int
 
 
 def _has_proxy_attributes(msg) -> bool:
@@ -78,10 +97,6 @@ class LoanedMessage(Generic[T]):
     def msg(self) -> T:
         """Access the loaned message."""
         return self._msg
-
-    @property
-    def __class__(self):
-        return self._msg.__class__
 
     def __repr__(self):
         return repr(self._msg)
@@ -183,7 +198,7 @@ class Publisher:
                 except TypeError:
                     candidate = self._msg_ctor()
                     rc = self._writer.loan_sample(candidate)
-                    if rc is None or rc == 0 or rc is True:
+                    if _retcode_is_ok(rc):
                         loaned_msg = candidate
                         from_middleware = True
         except Exception:
