@@ -90,7 +90,7 @@ class LoanedMessage(Generic[T]):
         return str(self._msg)
     
     def __enter__(self) -> T:
-        return self
+        return self._msg
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not self._published and exc_type is None:
@@ -132,6 +132,12 @@ class Publisher:
     def publish(self, msg) -> None:
         """Publish a message instance generated from the SWIG type."""
         if isinstance(msg, LoanedMessage):
+            if msg._publisher is not self:
+                raise ValueError(
+                    "Cannot publish a LoanedMessage created by a different "
+                    "publisher; publish loaned messages only with their "
+                    "originating publisher."
+                )
             self._publish_loaned(msg)
             return
 

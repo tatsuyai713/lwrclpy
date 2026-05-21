@@ -130,14 +130,14 @@ def _callback_accepts_message_info(callback) -> bool:
         sig = inspect.signature(callback)
     except Exception:
         return False
+    params = list(sig.parameters.values())
+    if any(param.kind == param.VAR_POSITIONAL for param in params):
+        return True
     positional = [
-        param for param in sig.parameters.values()
+        param for param in params
         if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
     ]
-    if any(param.kind == param.VAR_POSITIONAL for param in sig.parameters.values()):
-        return True
-    required = [param for param in positional if param.default is inspect._empty]
-    return len(required) >= 2
+    return len(positional) >= 2
 
 
 class Subscription:
