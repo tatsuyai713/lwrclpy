@@ -10,7 +10,7 @@ import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
 from .message_utils import expose_callable_fields
-from .utils import _retcode_is_ok
+from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
@@ -215,16 +215,16 @@ class Subscription:
 
     def get_publisher_count(self) -> int:
         """Return the number of publishers matched to this subscription."""
-        try:
-            if hasattr(self._reader, "get_matched_publications"):
-                matches = self._reader.get_matched_publications()
-                return len(matches) if hasattr(matches, "__len__") else 0
-            # Alternative API
-            if hasattr(self._reader, "get_subscription_matched_status"):
-                status = self._reader.get_subscription_matched_status()
-                return getattr(status, "current_count", 0)
-        except Exception:
-            pass
+        status_method = getattr(self._reader, "get_subscription_matched_status", None)
+        if status_method is not None:
+            count = _matched_status_count(status_method, getattr(fastdds, "SubscriptionMatchedStatus", None))
+            if count is not None:
+                return count
+        handles_method = getattr(self._reader, "get_matched_publications", None)
+        if handles_method is not None:
+            count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
+            if count is not None:
+                return count
         return 0
 
     def destroy(self) -> None:

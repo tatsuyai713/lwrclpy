@@ -11,7 +11,7 @@ from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _assign
 from .duration import Duration
-from .utils import _retcode_is_ok
+from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 T = TypeVar('T')
 
@@ -234,16 +234,16 @@ class Publisher:
 
     def get_subscription_count(self) -> int:
         """Return the number of subscriptions matched to this publisher."""
-        try:
-            if hasattr(self._writer, "get_matched_subscriptions"):
-                matches = self._writer.get_matched_subscriptions()
-                return len(matches) if hasattr(matches, "__len__") else 0
-            # Alternative API
-            if hasattr(self._writer, "get_publication_matched_status"):
-                status = self._writer.get_publication_matched_status()
-                return getattr(status, "current_count", 0)
-        except Exception:
-            pass
+        status_method = getattr(self._writer, "get_publication_matched_status", None)
+        if status_method is not None:
+            count = _matched_status_count(status_method, getattr(fastdds, "PublicationMatchedStatus", None))
+            if count is not None:
+                return count
+        handles_method = getattr(self._writer, "get_matched_subscriptions", None)
+        if handles_method is not None:
+            count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
+            if count is not None:
+                return count
         return 0
 
     def assert_liveliness(self) -> bool:

@@ -45,6 +45,62 @@ def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
     return rc_int == ok_int
 
 
+def _count_value(value) -> int | None:
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _matched_status_count(method, status_factory=None) -> int | None:
+    """Read a Fast DDS matched status count across return-value/output-param bindings."""
+    try:
+        status = method()
+        if hasattr(status, "current_count"):
+            return _count_value(getattr(status, "current_count"))
+    except TypeError:
+        pass
+    except Exception:
+        return None
+
+    if status_factory is not None:
+        try:
+            status = status_factory()
+            rc = method(status)
+            if _retcode_is_ok(rc, none_is_ok=True) and hasattr(status, "current_count"):
+                return _count_value(getattr(status, "current_count"))
+        except Exception:
+            return None
+    return None
+
+
+def _matched_handle_count(method, handles_factory=None) -> int | None:
+    """Read a Fast DDS matched handle count across return-value/output-param bindings."""
+    try:
+        handles = method()
+        if hasattr(handles, "__len__"):
+            return _count_value(len(handles))
+    except TypeError:
+        pass
+    except Exception:
+        return None
+
+    if handles_factory is not None:
+        try:
+            handles = handles_factory()
+            rc = method(handles)
+            if _retcode_is_ok(rc, none_is_ok=True) and hasattr(handles, "__len__"):
+                return _count_value(len(handles))
+        except Exception:
+            return None
+    return None
+
+
 def _normalize_namespace(ns: str) -> str:
     """Normalize namespace per ROS 2 rules (leading slash, no trailing slash except root)."""
     if not ns:
