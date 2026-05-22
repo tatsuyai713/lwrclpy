@@ -390,7 +390,11 @@ class Node:
         event_callbacks=None,
         qos_overriding_options=None,
     ):
-        del callback_group, event_callbacks, qos_overriding_options
+        if event_callbacks is not None:
+            raise NotImplementedError("create_publisher() does not support event_callbacks")
+        if qos_overriding_options is not None:
+            raise NotImplementedError("create_publisher() does not support qos_overriding_options")
+        del callback_group
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
@@ -420,7 +424,11 @@ class Node:
         qos_overriding_options=None,
         content_filter_options=None,
     ):
-        del callback_group, qos_overriding_options, content_filter_options
+        if qos_overriding_options is not None:
+            raise NotImplementedError("create_subscription() does not support qos_overriding_options")
+        if content_filter_options is not None:
+            raise NotImplementedError("create_subscription() does not support content_filter_options")
+        del callback_group
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)

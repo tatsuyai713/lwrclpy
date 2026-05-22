@@ -9,7 +9,7 @@ import inspect
 import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
-from .message_utils import clone_message, expose_callable_fields
+from .message_utils import expose_callable_fields
 from .utils import _retcode_is_ok
 
 
@@ -104,12 +104,11 @@ class _ReaderListener(fastdds.DataReaderListener):
                 except Exception:
                     pass
 
-            msg = data if isinstance(data, self._msg_ctor) else clone_message(data, self._msg_ctor)
             if self._with_message_info:
                 msg_info = MessageInfo(info)
-                self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), msg)
+                self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), data)
             else:
-                self._enqueue_cb(self._user_cb, msg)
+                self._enqueue_cb(self._user_cb, data)
 
 
 def _callback_accepts_message_info(callback) -> bool:
