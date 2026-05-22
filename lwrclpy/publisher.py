@@ -234,23 +234,16 @@ class Publisher:
 
     def get_subscription_count(self) -> int:
         """Return the number of subscriptions matched to this publisher."""
-        try:
-            if hasattr(self._writer, "get_publication_matched_status"):
-                count = _matched_status_count(
-                    self._writer.get_publication_matched_status,
-                    fastdds.PublicationMatchedStatus,
-                )
-                if count is not None:
-                    return count
-            if hasattr(self._writer, "get_matched_subscriptions"):
-                count = _matched_handle_count(
-                    self._writer.get_matched_subscriptions,
-                    fastdds.InstanceHandleVector,
-                )
-                if count is not None:
-                    return count
-        except Exception:
-            pass
+        status_method = getattr(self._writer, "get_publication_matched_status", None)
+        if status_method is not None:
+            count = _matched_status_count(status_method, getattr(fastdds, "PublicationMatchedStatus", None))
+            if count is not None:
+                return count
+        handles_method = getattr(self._writer, "get_matched_subscriptions", None)
+        if handles_method is not None:
+            count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
+            if count is not None:
+                return count
         return 0
 
     def assert_liveliness(self) -> bool:

@@ -215,23 +215,16 @@ class Subscription:
 
     def get_publisher_count(self) -> int:
         """Return the number of publishers matched to this subscription."""
-        try:
-            if hasattr(self._reader, "get_subscription_matched_status"):
-                count = _matched_status_count(
-                    self._reader.get_subscription_matched_status,
-                    fastdds.SubscriptionMatchedStatus,
-                )
-                if count is not None:
-                    return count
-            if hasattr(self._reader, "get_matched_publications"):
-                count = _matched_handle_count(
-                    self._reader.get_matched_publications,
-                    fastdds.InstanceHandleVector,
-                )
-                if count is not None:
-                    return count
-        except Exception:
-            pass
+        status_method = getattr(self._reader, "get_subscription_matched_status", None)
+        if status_method is not None:
+            count = _matched_status_count(status_method, getattr(fastdds, "SubscriptionMatchedStatus", None))
+            if count is not None:
+                return count
+        handles_method = getattr(self._reader, "get_matched_publications", None)
+        if handles_method is not None:
+            count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
+            if count is not None:
+                return count
         return 0
 
     def destroy(self) -> None:
