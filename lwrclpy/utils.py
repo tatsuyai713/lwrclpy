@@ -72,8 +72,8 @@ def _matched_status_count(method, status_factory=None) -> int | None:
         try:
             status = status_factory()
             rc = method(status)
-            if _retcode_is_ok(rc, none_is_ok=True):
-                return _count_value(getattr(status, "current_count", 0))
+            if _retcode_is_ok(rc, none_is_ok=True) and hasattr(status, "current_count"):
+                return _count_value(getattr(status, "current_count"))
         except Exception:
             return None
     return None
