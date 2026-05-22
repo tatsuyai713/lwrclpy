@@ -10,7 +10,7 @@ import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
 from .message_utils import expose_callable_fields
-from .utils import _retcode_is_ok
+from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
@@ -217,13 +217,19 @@ class Subscription:
         """Return the number of publishers matched to this subscription."""
         try:
             if hasattr(self._reader, "get_subscription_matched_status"):
-                status = fastdds.SubscriptionMatchedStatus()
-                self._reader.get_subscription_matched_status(status)
-                return getattr(status, "current_count", 0)
+                count = _matched_status_count(
+                    self._reader.get_subscription_matched_status,
+                    fastdds.SubscriptionMatchedStatus,
+                )
+                if count is not None:
+                    return count
             if hasattr(self._reader, "get_matched_publications"):
-                handles = fastdds.InstanceHandleVector()
-                self._reader.get_matched_publications(handles)
-                return len(handles) if hasattr(handles, "__len__") else 0
+                count = _matched_handle_count(
+                    self._reader.get_matched_publications,
+                    fastdds.InstanceHandleVector,
+                )
+                if count is not None:
+                    return count
         except Exception:
             pass
         return 0

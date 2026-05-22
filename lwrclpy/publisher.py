@@ -11,7 +11,7 @@ from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _assign
 from .duration import Duration
-from .utils import _retcode_is_ok
+from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 T = TypeVar('T')
 
@@ -236,13 +236,19 @@ class Publisher:
         """Return the number of subscriptions matched to this publisher."""
         try:
             if hasattr(self._writer, "get_publication_matched_status"):
-                status = fastdds.PublicationMatchedStatus()
-                self._writer.get_publication_matched_status(status)
-                return getattr(status, "current_count", 0)
+                count = _matched_status_count(
+                    self._writer.get_publication_matched_status,
+                    fastdds.PublicationMatchedStatus,
+                )
+                if count is not None:
+                    return count
             if hasattr(self._writer, "get_matched_subscriptions"):
-                handles = fastdds.InstanceHandleVector()
-                self._writer.get_matched_subscriptions(handles)
-                return len(handles) if hasattr(handles, "__len__") else 0
+                count = _matched_handle_count(
+                    self._writer.get_matched_subscriptions,
+                    fastdds.InstanceHandleVector,
+                )
+                if count is not None:
+                    return count
         except Exception:
             pass
         return 0
