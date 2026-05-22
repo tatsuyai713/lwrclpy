@@ -462,17 +462,39 @@ gen_one() {
   rm -rf "${outdir}"; mkdir -p "${outdir}"
 
   echo "[GEN] ${rel} -> ${outdir}"
+  local gen_input_dir gen_input
+  gen_input_dir="$(mktemp -d)"
+  gen_input="${gen_input_dir}/${base}.idl"
+  cp -f "${idl_path}" "${gen_input}"
   if ! "${FASTDDSGEN_BIN}" -python -cs -typeros2 -language c++ \
-        -d "${outdir}" -I "${GEN_SRC_ROOT}" -replace "${idl_path}" \
+      -d "${outdir}" -I "${GEN_SRC_ROOT}" -I "${GEN_SRC_ROOT}/${dir_rel}" -I "${gen_input_dir}" -replace "${gen_input}" \
         > "${outdir}/_gen.log" 2>&1; then
     echo "[ERR]  fastddsgen failed: ${rel} (see ${outdir}/_gen.log)"
     sed -n '1,160p' "${outdir}/_gen.log" || true
+    rm -rf "${gen_input_dir}"
     FAILED_GEN+=("${rel}")
     return
   fi
+  rm -rf "${gen_input_dir}"
   
   
   [[ -f "${outdir}/${base}.i" ]] || { echo "[ERR]  ${base}.i not generated"; FAILED_GEN+=("${rel}"); return; }
+
+  # fastddsgen emits included IDL support files under a nested mirror path, but
+  # its CMakeLists and SWIG files reference some of them from the package root.
+  local nested_src="${outdir}/$(basename "${BUILD_ROOT}")/src"
+  if [[ -d "${nested_src}" ]]; then
+    while IFS= read -r dep_file; do
+      cp -f "${dep_file}" "${outdir}/"
+      local dep_rel dep_stage_dir
+      dep_rel="${dep_file#${nested_src}/}"
+      dep_stage_dir="${INC_STAGE_ROOT}/$(dirname "${dep_rel}")"
+      mkdir -p "${dep_stage_dir}"
+      cp -f "${dep_file}" "${dep_stage_dir}/"
+    done < <(find "${nested_src}" -type f \
+      \( -name '*.i' -o -name '*.hpp' -o -name '*.h' -o -name '*.hh' -o -name '*.hxx' -o -name '*.cxx' -o -name '*.ipp' \) \
+      -print)
+  fi
 
   normalize_tree_py "${outdir}"
 
@@ -560,7 +582,10 @@ build_one() {
 
 OUTDIRS=()
 tmp_list="$(mktemp)"
-find "${GEN_SRC_ROOT}" -type f -name "*.i" -print | while IFS= read -r p; do dirname "$p"; done | sort -u > "${tmp_list}"
+find "${GEN_SRC_ROOT}" -type f -name "*.i" -print | while IFS= read -r p; do
+  d="$(dirname "$p")"
+  [[ -f "${d}/CMakeLists.txt" ]] && echo "$d"
+done | sort -u > "${tmp_list}"
 while IFS= read -r d; do OUTDIRS+=("$d"); done < "${tmp_list}"
 rm -f "${tmp_list}"
 

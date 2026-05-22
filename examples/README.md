@@ -160,9 +160,9 @@ lwrclpyは標準的なROS 2 QoSプロファイルをすべてサポート：
 大きなメッセージには`loan_message()`でコピーを回避：
 
 ```python
-with publisher.loan_message() as loaned_msg:
-    loaned_msg.data = large_data
-    # コンテキスト終了時にメッセージが自動publish
+loaned_msg = publisher.loan_message()
+loaned_msg.data = large_data
+publisher.publish(loaned_msg)
 ```
 
 ---

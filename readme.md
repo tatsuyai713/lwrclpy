@@ -296,9 +296,9 @@ rclpy.shutdown()
 
 ```python
 # ゼロコピーでメッセージを送信
-with publisher.loan_message() as loaned_msg:
-    loaned_msg.data = large_data
-    # コンテキスト終了時に自動publish
+loaned_msg = publisher.loan_message()
+loaned_msg.data = large_data
+publisher.publish(loaned_msg)
 ```
 
 ### QoSプロファイル

@@ -380,7 +380,21 @@ class Node:
         return SetParametersResult(ok, reason)
 
     # ------------------- Publisher / Subscription 等 -------------------
-    def create_publisher(self, msg_type, topic: str, qos_profile: QoSProfile | int = 10, *, callback_group=None):
+    def create_publisher(
+        self,
+        msg_type,
+        topic: str,
+        qos_profile: QoSProfile | int = 10,
+        *,
+        callback_group=None,
+        event_callbacks=None,
+        qos_overriding_options=None,
+    ):
+        if event_callbacks is not None:
+            raise NotImplementedError("create_publisher() does not support event_callbacks")
+        if qos_overriding_options is not None:
+            raise NotImplementedError("create_publisher() does not support qos_overriding_options")
+        del callback_group
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
@@ -397,7 +411,26 @@ class Node:
         self._publishers.append(pub)
         return pub
 
-    def create_subscription(self, msg_type, topic: str, callback, qos_profile: QoSProfile | int = 10, *, callback_group=None):
+    def create_subscription(
+        self,
+        msg_type,
+        topic: str,
+        callback,
+        qos_profile: QoSProfile | int = 10,
+        *,
+        callback_group=None,
+        raw: bool = False,
+        event_callbacks=None,
+        qos_overriding_options=None,
+        content_filter_options=None,
+    ):
+        if event_callbacks is not None:
+            raise NotImplementedError("create_subscription() does not support event_callbacks")
+        if qos_overriding_options is not None:
+            raise NotImplementedError("create_subscription() does not support qos_overriding_options")
+        if content_filter_options is not None:
+            raise NotImplementedError("create_subscription() does not support content_filter_options")
+        del callback_group
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
@@ -412,7 +445,16 @@ class Node:
         self._topics[resolved_topic] = (topic_obj, owned)
         # メッセージ生成
         msg_ctor = msg_cls
-        sub = Subscription(self._participant, topic_obj, qos, callback, msg_ctor, self._enqueue_callback)
+        sub = Subscription(
+            self._participant,
+            topic_obj,
+            qos,
+            callback,
+            msg_ctor,
+            self._enqueue_callback,
+            raw=raw,
+            event_callbacks=event_callbacks,
+        )
         self._subscriptions.append(sub)
         return sub
 

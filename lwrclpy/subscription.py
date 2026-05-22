@@ -5,24 +5,12 @@
 
 from __future__ import annotations
 from typing import Optional, Callable, List, Tuple, Any
+import inspect
 import fastdds  # type: ignore
 import os
 from .qos import QoSProfile
-from .message_utils import clone_message, expose_callable_fields
-
-
-def _retcode_is_ok(rc) -> bool:
-    """Return True if 'rc' represents RETCODE_OK (v2/v3 tolerant)."""
-    ok_const = getattr(fastdds, "RETCODE_OK", 0)  # v3: module-level; v2: often 0-like
-    try:
-        if rc == ok_const:
-            return True
-    except Exception:
-        pass
-    try:
-        return int(rc) == int(ok_const)
-    except Exception:
-        return bool(rc) is True
+from .message_utils import expose_callable_fields
+from .utils import _retcode_is_ok
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
@@ -88,6 +76,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._raw_mode = raw_mode
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
+        self._with_message_info = _callback_accepts_message_info(user_cb)
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
@@ -115,11 +104,26 @@ class _ReaderListener(fastdds.DataReaderListener):
                 except Exception:
                     pass
 
-            if isinstance(data, self._msg_ctor):
-                self._enqueue_cb(self._user_cb, data)
+            if self._with_message_info:
+                msg_info = MessageInfo(info)
+                self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), data)
             else:
-                cloned = clone_message(data, self._msg_ctor)
-                self._enqueue_cb(self._user_cb, cloned)
+                self._enqueue_cb(self._user_cb, data)
+
+
+def _callback_accepts_message_info(callback) -> bool:
+    try:
+        sig = inspect.signature(callback)
+    except Exception:
+        return False
+    params = list(sig.parameters.values())
+    if any(param.kind == param.VAR_POSITIONAL for param in params):
+        return True
+    positional = [
+        param for param in params
+        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 2
 
 
 class Subscription:

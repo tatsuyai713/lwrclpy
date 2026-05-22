@@ -109,37 +109,37 @@ class Client:
     def wait_for_service(self, timeout_sec: Optional[float] = None) -> bool:
         """Wait for the service to become available (rclpy compatible).
         
-        This waits until the service's subscription is matched with our publisher.
+        This waits until both service directions are matched: our request
+        publisher has a subscriber, and our response subscription has a
+        publisher.
         
-        :param timeout_sec: Maximum time to wait. If None, waits up to 10 seconds.
+        :param timeout_sec: Maximum time to wait. If None, waits forever.
         :return: True if service is available, False if timeout.
         """
-        import time
-        if timeout_sec is None:
-            timeout_sec = 10.0
-        
         poll_interval = 0.05  # 50ms polling
-        elapsed = 0.0
-        
-        while elapsed < timeout_sec:
-            # Check if our request publisher has matched subscribers
-            if self._publisher.get_subscription_count() > 0:
-                # Small additional delay to ensure bidirectional matching
-                time.sleep(0.1)
+        if timeout_sec is not None and timeout_sec <= 0:
+            return self.service_is_ready()
+
+        deadline = None if timeout_sec is None else time.monotonic() + timeout_sec
+
+        while deadline is None or time.monotonic() <= deadline:
+            if self.service_is_ready():
                 return True
             time.sleep(poll_interval)
-            elapsed += poll_interval
-        
-        # Even if not matched, return True to allow the attempt
-        return True
+
+        return self.service_is_ready()
 
     def service_is_ready(self) -> bool:
         """Check if the service is ready (rclpy compatible).
         
-        Returns True if we have matched subscribers for our request publisher.
+        Returns True when the request publisher has matched subscribers and
+        the response subscription has matched publishers.
         """
         try:
-            return self._publisher.get_subscription_count() > 0
+            return (
+                self._publisher.get_subscription_count() > 0
+                and self._subscription.get_publisher_count() > 0
+            )
         except Exception:
             return False
 
