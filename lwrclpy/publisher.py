@@ -9,7 +9,7 @@ import fastdds  # type: ignore
 import os
 from typing import TypeVar, Generic
 from .qos import QoSProfile
-from .message_utils import clone_message, _assign, _ValueProxy
+from .message_utils import clone_message, _assign
 from .duration import Duration
 from .utils import _retcode_is_ok
 
@@ -31,8 +31,6 @@ def _materialize_shadow_attributes(msg) -> bool:
         except Exception:
             class_attr = None
         if callable(class_attr):
-            if isinstance(value, _ValueProxy):
-                continue
             if callable(value):
                 try:
                     value = value()
