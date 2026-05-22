@@ -6,7 +6,6 @@
 from __future__ import annotations
 from typing import Optional, Callable, List, Tuple, Any
 from collections import deque
-import dis
 import inspect
 import fastdds  # type: ignore
 import os
@@ -32,21 +31,21 @@ def _sample_info_attr(sample_info, name, default=None):
         return default
 
 
-def _callback_is_noop(callback) -> bool:
+def _take_queue_keep_all_maxlen() -> int | None:
+    value = os.environ.get("LWRCLPY_TAKE_QUEUE_KEEP_ALL_MAXLEN", "10000").strip().lower()
+    if value in {"", "0", "none", "unbounded"}:
+        return None
     try:
-        instructions = [
-            instr.opname for instr in dis.get_instructions(callback)
-            if instr.opname not in {"RESUME", "CACHE", "NOP", "EXTENDED_ARG"}
-        ]
+        maxlen = int(value)
     except Exception:
-        return False
-    return instructions in (["LOAD_CONST", "RETURN_VALUE"], ["RETURN_CONST"])
+        return 10000
+    return max(1, maxlen)
 
 
 def _take_queue_maxlen(qos: QoSProfile) -> int | None:
     history = getattr(qos, "history", None)
     if getattr(history, "name", None) == "KEEP_ALL":
-        return None
+        return _take_queue_keep_all_maxlen()
     try:
         depth = int(getattr(qos, "depth"))
     except Exception:
@@ -150,7 +149,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._with_message_info = _callback_accepts_message_info(user_cb)
 
-    def _queue_for_take(self, data, msg_info):
+    def _queue_for_take(self, data, sample_info):
         if self._take_queue is None:
             return
         try:
@@ -158,13 +157,14 @@ class _ReaderListener(fastdds.DataReaderListener):
             expose_fn = self._expose_fn
             if expose_fn is not None:
                 expose_fn(queued_data)
+            queued_info = MessageInfo(sample_info)
         except Exception:
             return
         if self._take_lock is not None:
             with self._take_lock:
-                self._take_queue.append((queued_data, msg_info))
+                self._take_queue.append((queued_data, queued_info))
         else:
-            self._take_queue.append((queued_data, msg_info))
+            self._take_queue.append((queued_data, queued_info))
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
@@ -192,12 +192,12 @@ class _ReaderListener(fastdds.DataReaderListener):
                 except Exception:
                     pass
 
-            msg_info = MessageInfo(info)
             if self._take_queue is not None:
-                self._queue_for_take(data, msg_info)
+                self._queue_for_take(data, info)
 
             if self._with_message_info:
-                self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), data)
+                callback_info = MessageInfo(info)
+                self._enqueue_cb(lambda item, cb=self._user_cb, info=callback_info: cb(item, info), data)
             else:
                 self._enqueue_cb(self._user_cb, data)
 
@@ -233,7 +233,7 @@ class Subscription:
         self._message_count = 0
         self._take_lock = threading.Lock()
         self._take_queue_maxlen = _take_queue_maxlen(qos)
-        self._take_queue = deque(maxlen=self._take_queue_maxlen) if _callback_is_noop(callback) else None
+        self._take_queue = deque(maxlen=self._take_queue_maxlen)
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -277,18 +277,15 @@ class Subscription:
         self._reader = reader
 
     def take(self, max_count: int = 1) -> List[Tuple[Any, MessageInfo]]:
-        """Take messages directly from the reader (polling mode).
+        """Take messages buffered by the DDS listener (polling mode).
         
         Returns a list of (message, message_info) tuples.
-        This is useful for manual polling without callbacks.
+        This is useful for manual polling alongside callback delivery.
         """
         if max_count <= 0:
             return []
         results = []
         with self._take_lock:
-            if self._take_queue is None:
-                self._take_queue = deque(maxlen=self._take_queue_maxlen)
-                self._listener._take_queue = self._take_queue
             while self._take_queue and len(results) < max_count:
                 results.append(self._take_queue.popleft())
         self._message_count += len(results)
