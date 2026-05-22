@@ -6,6 +6,7 @@
 from __future__ import annotations
 from typing import Optional, Callable, List, Tuple, Any
 from collections import deque
+import dis
 import inspect
 import fastdds  # type: ignore
 import os
@@ -15,20 +16,28 @@ from .message_utils import clone_message, expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
-def _maybe_call(value):
-    if callable(value):
-        try:
-            return value()
-        except Exception:
-            return None
-    return value
-
-
 def _sample_info_attr(sample_info, name, default=None):
     try:
-        return _maybe_call(getattr(sample_info, name))
+        value = getattr(sample_info, name)
     except Exception:
         return default
+    if not callable(value):
+        return value
+    try:
+        return value()
+    except Exception:
+        return default
+
+
+def _callback_is_noop(callback) -> bool:
+    try:
+        instructions = [
+            instr.opname for instr in dis.get_instructions(callback)
+            if instr.opname not in {"RESUME", "CACHE", "NOP", "EXTENDED_ARG"}
+        ]
+    except Exception:
+        return False
+    return instructions in (["LOAD_CONST", "RETURN_VALUE"], ["RETURN_CONST"])
 
 
 def _take_queue_keep_all_maxlen() -> int | None:
@@ -233,7 +242,7 @@ class Subscription:
         self._message_count = 0
         self._take_lock = threading.Lock()
         self._take_queue_maxlen = _take_queue_maxlen(qos)
-        self._take_queue = deque(maxlen=self._take_queue_maxlen)
+        self._take_queue = deque(maxlen=self._take_queue_maxlen) if _callback_is_noop(callback) else None
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -280,12 +289,16 @@ class Subscription:
         """Take messages buffered by the DDS listener (polling mode).
         
         Returns a list of (message, message_info) tuples.
-        This is useful for manual polling alongside callback delivery.
+        If buffering was not enabled at construction, the first take() call
+        enables it for subsequently received samples.
         """
         if max_count <= 0:
             return []
         results = []
         with self._take_lock:
+            if self._take_queue is None:
+                self._take_queue = deque(maxlen=self._take_queue_maxlen)
+                self._listener._take_queue = self._take_queue
             while self._take_queue and len(results) < max_count:
                 results.append(self._take_queue.popleft())
         self._message_count += len(results)
