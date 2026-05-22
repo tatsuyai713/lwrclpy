@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 from typing import Optional, Callable, List, Tuple, Any
+from collections import deque
 import inspect
 import fastdds  # type: ignore
 import os
+import threading
 from .qos import QoSProfile
 from .message_utils import expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
@@ -64,16 +66,34 @@ class MessageInfo:
             except Exception:
                 pass
 
+    @property
+    def publisher_guid(self):
+        return self.publisher_gid
+
+    @property
+    def sequence_number(self):
+        return self.publication_sequence_number
+
+    @property
+    def sample_identity(self):
+        return None
+
+    @property
+    def is_valid(self):
+        return True
+
 
 class _ReaderListener(fastdds.DataReaderListener):
     """Listener that enqueues callbacks to the executor queue."""
 
-    def __init__(self, enqueue_cb, user_cb, msg_ctor, raw_mode: bool = False):
+    def __init__(self, enqueue_cb, user_cb, msg_ctor, raw_mode: bool = False, take_queue=None, take_lock=None):
         super().__init__()
         self._enqueue_cb = enqueue_cb
         self._user_cb = user_cb
         self._msg_ctor = msg_ctor
         self._raw_mode = raw_mode
+        self._take_queue = take_queue
+        self._take_lock = take_lock
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._with_message_info = _callback_accepts_message_info(user_cb)
@@ -104,8 +124,15 @@ class _ReaderListener(fastdds.DataReaderListener):
                 except Exception:
                     pass
 
+            msg_info = MessageInfo(info)
+            if self._take_queue is not None:
+                if self._take_lock is not None:
+                    with self._take_lock:
+                        self._take_queue.append((data, msg_info))
+                else:
+                    self._take_queue.append((data, msg_info))
+
             if self._with_message_info:
-                msg_info = MessageInfo(info)
                 self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), data)
             else:
                 self._enqueue_cb(self._user_cb, data)
@@ -140,6 +167,8 @@ class Subscription:
         self._raw_mode = raw
         self._event_callbacks = event_callbacks or {}
         self._message_count = 0
+        self._take_lock = threading.Lock()
+        self._take_queue = deque(maxlen=max(1, int(getattr(qos, "depth", 10) or 10)))
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -158,7 +187,14 @@ class Subscription:
         # <<<
 
         # Listener enqueue to executor queue
-        self._listener = _ReaderListener(enqueue_cb, callback, msg_ctor, raw_mode=raw)
+        self._listener = _ReaderListener(
+            enqueue_cb,
+            callback,
+            msg_ctor,
+            raw_mode=raw,
+            take_queue=self._take_queue,
+            take_lock=self._take_lock,
+        )
 
         # Create DataReader with listener
         reader = None
@@ -182,6 +218,13 @@ class Subscription:
         This is useful for manual polling without callbacks.
         """
         results = []
+        with self._take_lock:
+            while self._take_queue and len(results) < max_count:
+                results.append(self._take_queue.popleft())
+        if len(results) >= max_count:
+            self._message_count += len(results)
+            return results
+
         for _ in range(max_count):
             info = fastdds.SampleInfo()
             data = self._msg_ctor()
