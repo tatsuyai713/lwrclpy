@@ -1,6 +1,5 @@
 import importlib
 import types
-import fastdds  # type: ignore
 
 
 TOPIC_PREFIX = "rt/"
@@ -15,7 +14,11 @@ def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
         return none_is_ok
     if rc is True:
         return True
-    ok_const = getattr(fastdds, "RETCODE_OK", 0)
+    try:
+        import fastdds  # type: ignore
+        ok_const = getattr(fastdds, "RETCODE_OK", 0)
+    except Exception:
+        ok_const = 0
     try:
         if rc == ok_const:
             return True

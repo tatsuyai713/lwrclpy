@@ -5,28 +5,47 @@
 # - Support loan_message() for true zero-copy publishing.
 
 from __future__ import annotations
+from collections import deque
 import fastdds  # type: ignore
 import os
 from typing import TypeVar, Generic
 from .qos import QoSProfile
-from .message_utils import clone_message, _ValueProxy
+from .message_utils import clone_message, _assign
 from .duration import Duration
 from .utils import _retcode_is_ok
 
 T = TypeVar('T')
 
 
-def _has_proxy_attributes(msg) -> bool:
-    """Check if any instance __dict__ entries are _ValueProxy objects.
-
-    If the user received a message via subscription (which wraps fields in
-    _ValueProxy) and re-publishes it, we need to clone to unwrap.
-    If the user created a fresh message and set fields directly, no proxy exists.
-    """
+def _materialize_shadow_attributes(msg) -> bool:
+    """Apply rclpy-style shadow attributes to their SWIG setters in-place."""
     inst_dict = getattr(msg, "__dict__", None)
     if not inst_dict:
         return False
-    return any(isinstance(v, _ValueProxy) for v in inst_dict.values())
+    msg_cls = type(msg)
+    materialized = False
+    for name, value in list(inst_dict.items()):
+        if name.startswith("_") or name in {"this", "thisown"}:
+            continue
+        try:
+            class_attr = getattr(msg_cls, name, None)
+        except Exception:
+            class_attr = None
+        if callable(class_attr):
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:
+                    pass
+            try:
+                delattr(msg, name)
+            except Exception:
+                try:
+                    inst_dict.pop(name, None)
+                except Exception:
+                    pass
+            materialized = _assign(msg, name, value) or materialized
+    return materialized
 
 
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> None:
@@ -69,7 +88,8 @@ class LoanedMessage(Generic[T]):
         if name in self.__slots__:
             object.__setattr__(self, name, value)
         else:
-            setattr(self._msg, name, value)
+            if not _assign(self._msg, name, value):
+                setattr(self._msg, name, value)
     
     @property
     def msg(self) -> T:
@@ -100,6 +120,7 @@ class Publisher:
         self._msg_ctor = msg_ctor
         self._destroyed = False
         self._publish_count = 0
+        self._recent_writes = deque(maxlen=64)
 
         # Create Publisher
         pub_qos = fastdds.PublisherQos()
@@ -142,16 +163,19 @@ class Publisher:
 
         target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
 
-        # Fast path: if msg is already the correct SWIG type and has no
-        # _ValueProxy-wrapped attributes, skip the full clone_message.
-        if isinstance(msg, target_ctor) and not _has_proxy_attributes(msg):
+        # Fast path: if msg is already the correct SWIG type, apply any
+        # rclpy-style shadow attributes in-place and write the same instance.
+        if isinstance(msg, target_ctor):
+            _materialize_shadow_attributes(msg)
             self._writer.write(msg)
+            self._recent_writes.append(msg)
         else:
             try:
                 to_send = clone_message(msg, target_ctor)
             except Exception:
                 to_send = msg  # fall back to original on failure
             self._writer.write(to_send)
+            self._recent_writes.append(to_send)
         self._publish_count += 1
 
     @property
@@ -208,6 +232,7 @@ class Publisher:
         except Exception:
             # Fallback to regular write
             self._writer.write(msg)
+        self._recent_writes.append(msg)
         loaned._published = True
         self._publish_count += 1
 
