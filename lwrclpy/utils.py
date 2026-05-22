@@ -7,6 +7,20 @@ SERVICE_REQUEST_PREFIX = "rq/"
 SERVICE_RESPONSE_PREFIX = "rr/"
 ACTION_PREFIX = "ra/"
 
+_RETCODE_OK_UNSET = object()
+_retcode_ok_const = _RETCODE_OK_UNSET
+
+
+def _get_retcode_ok_const():
+    global _retcode_ok_const
+    if _retcode_ok_const is _RETCODE_OK_UNSET:
+        try:
+            import fastdds  # type: ignore
+            _retcode_ok_const = getattr(fastdds, "RETCODE_OK", 0)
+        except Exception:
+            _retcode_ok_const = 0
+    return _retcode_ok_const
+
 
 def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
     """Return True if 'rc' represents RETCODE_OK across Fast DDS bindings."""
@@ -14,11 +28,7 @@ def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
         return none_is_ok
     if isinstance(rc, bool):
         return rc
-    try:
-        import fastdds  # type: ignore
-        ok_const = getattr(fastdds, "RETCODE_OK", 0)
-    except Exception:
-        ok_const = 0
+    ok_const = _get_retcode_ok_const()
     try:
         if rc == ok_const:
             return True

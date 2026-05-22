@@ -220,6 +220,7 @@ class Publisher:
         the ``LoanedMessage`` context manager on successful exit.
         """
         msg = loaned._msg
+        _materialize_shadow_attributes(msg)
         try:
             if loaned._from_middleware and hasattr(self._writer, "write_loaned"):
                 self._writer.write_loaned(msg)
