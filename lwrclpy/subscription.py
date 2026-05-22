@@ -11,8 +11,37 @@ import fastdds  # type: ignore
 import os
 import threading
 from .qos import QoSProfile
-from .message_utils import expose_callable_fields
+from .message_utils import clone_message, expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
+
+
+def _maybe_call(value):
+    if callable(value):
+        try:
+            return value()
+        except Exception:
+            return None
+    return value
+
+
+def _sample_info_attr(sample_info, name, default=None):
+    try:
+        return _maybe_call(getattr(sample_info, name))
+    except Exception:
+        return default
+
+
+def _take_queue_maxlen(qos: QoSProfile) -> int | None:
+    history = getattr(qos, "history", None)
+    if getattr(history, "name", None) == "KEEP_ALL":
+        return None
+    try:
+        depth = int(getattr(qos, "depth"))
+    except Exception:
+        return 10
+    if depth <= 0:
+        return None
+    return depth
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
@@ -35,7 +64,8 @@ def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
 class MessageInfo:
     """Information about a received message (similar to rclpy.MessageInfo)."""
     __slots__ = ("source_timestamp", "received_timestamp", "publication_sequence_number", 
-                 "reception_sequence_number", "publisher_gid", "from_intra_process")
+                 "reception_sequence_number", "publisher_gid", "from_intra_process",
+                 "_sample_identity", "_is_valid")
     
     def __init__(self, sample_info=None):
         self.source_timestamp = 0
@@ -44,25 +74,35 @@ class MessageInfo:
         self.reception_sequence_number = 0
         self.publisher_gid = None
         self.from_intra_process = False
+        self._sample_identity = None
+        self._is_valid = True
         
         if sample_info is not None:
             try:
+                self._is_valid = bool(_sample_info_attr(sample_info, "valid_data", True))
+                self._sample_identity = _sample_info_attr(sample_info, "sample_identity")
                 # Extract timestamp
-                ts = getattr(sample_info, "source_timestamp", None)
+                ts = _sample_info_attr(sample_info, "source_timestamp")
                 if ts is not None:
-                    sec = getattr(ts, "seconds", 0)
-                    nsec = getattr(ts, "nanosec", 0)
+                    sec = _sample_info_attr(ts, "seconds", 0)
+                    nsec = _sample_info_attr(ts, "nanosec", 0)
                     self.source_timestamp = sec * 1_000_000_000 + nsec
                 
                 # Extract sequence numbers if available
                 if hasattr(sample_info, "publication_sequence_number"):
-                    self.publication_sequence_number = sample_info.publication_sequence_number
+                    self.publication_sequence_number = _sample_info_attr(sample_info, "publication_sequence_number", 0)
                 if hasattr(sample_info, "reception_sequence_number"):
-                    self.reception_sequence_number = sample_info.reception_sequence_number
+                    self.reception_sequence_number = _sample_info_attr(sample_info, "reception_sequence_number", 0)
+                if hasattr(sample_info, "publisher_gid"):
+                    self.publisher_gid = _sample_info_attr(sample_info, "publisher_gid")
+                elif hasattr(sample_info, "publication_handle"):
+                    self.publisher_gid = _sample_info_attr(sample_info, "publication_handle")
+                elif self._sample_identity is not None and hasattr(self._sample_identity, "writer_guid"):
+                    self.publisher_gid = _sample_info_attr(self._sample_identity, "writer_guid")
                     
                 # Check for intra-process delivery
                 if hasattr(sample_info, "from_intra_process"):
-                    self.from_intra_process = sample_info.from_intra_process
+                    self.from_intra_process = bool(_sample_info_attr(sample_info, "from_intra_process", False))
             except Exception:
                 pass
 
@@ -76,11 +116,11 @@ class MessageInfo:
 
     @property
     def sample_identity(self):
-        return None
+        return self._sample_identity
 
     @property
     def is_valid(self):
-        return True
+        return self._is_valid
 
 
 class _ReaderListener(fastdds.DataReaderListener):
@@ -97,6 +137,22 @@ class _ReaderListener(fastdds.DataReaderListener):
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._with_message_info = _callback_accepts_message_info(user_cb)
+
+    def _queue_for_take(self, data, msg_info):
+        if self._take_queue is None:
+            return
+        try:
+            queued_data = clone_message(data, self._msg_ctor)
+            expose_fn = self._expose_fn
+            if expose_fn is not None:
+                expose_fn(queued_data)
+        except Exception:
+            return
+        if self._take_lock is not None:
+            with self._take_lock:
+                self._take_queue.append((queued_data, msg_info))
+        else:
+            self._take_queue.append((queued_data, msg_info))
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
@@ -126,11 +182,7 @@ class _ReaderListener(fastdds.DataReaderListener):
 
             msg_info = MessageInfo(info)
             if self._take_queue is not None:
-                if self._take_lock is not None:
-                    with self._take_lock:
-                        self._take_queue.append((data, msg_info))
-                else:
-                    self._take_queue.append((data, msg_info))
+                self._queue_for_take(data, msg_info)
 
             if self._with_message_info:
                 self._enqueue_cb(lambda item, cb=self._user_cb, info=msg_info: cb(item, info), data)
@@ -168,7 +220,7 @@ class Subscription:
         self._event_callbacks = event_callbacks or {}
         self._message_count = 0
         self._take_lock = threading.Lock()
-        self._take_queue = deque(maxlen=max(1, int(getattr(qos, "depth", 10) or 10)))
+        self._take_queue = deque(maxlen=_take_queue_maxlen(qos))
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -217,15 +269,19 @@ class Subscription:
         Returns a list of (message, message_info) tuples.
         This is useful for manual polling without callbacks.
         """
+        if max_count <= 0:
+            return []
         results = []
         with self._take_lock:
             while self._take_queue and len(results) < max_count:
                 results.append(self._take_queue.popleft())
-        if len(results) >= max_count:
-            self._message_count += len(results)
+        queued_count = len(results)
+        remaining = max_count - queued_count
+        if remaining <= 0:
+            self._message_count += queued_count
             return results
 
-        for _ in range(max_count):
+        for _ in range(remaining):
             info = fastdds.SampleInfo()
             data = self._msg_ctor()
             
@@ -247,7 +303,7 @@ class Subscription:
             
             msg_info = MessageInfo(info)
             results.append((data, msg_info))
-            self._message_count += 1
+        self._message_count += len(results)
         
         return results
 
