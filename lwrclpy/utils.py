@@ -12,8 +12,8 @@ def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
     """Return True if 'rc' represents RETCODE_OK across Fast DDS bindings."""
     if rc is None:
         return none_is_ok
-    if rc is True:
-        return True
+    if isinstance(rc, bool):
+        return rc
     try:
         import fastdds  # type: ignore
         ok_const = getattr(fastdds, "RETCODE_OK", 0)

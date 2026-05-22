@@ -5,7 +5,6 @@
 # - Support loan_message() for true zero-copy publishing.
 
 from __future__ import annotations
-from collections import deque
 import fastdds  # type: ignore
 import os
 from typing import TypeVar, Generic
@@ -120,7 +119,6 @@ class Publisher:
         self._msg_ctor = msg_ctor
         self._destroyed = False
         self._publish_count = 0
-        self._recent_writes = deque(maxlen=64)
 
         # Create Publisher
         pub_qos = fastdds.PublisherQos()
@@ -168,14 +166,12 @@ class Publisher:
         if isinstance(msg, target_ctor):
             _materialize_shadow_attributes(msg)
             self._writer.write(msg)
-            self._recent_writes.append(msg)
         else:
             try:
                 to_send = clone_message(msg, target_ctor)
             except Exception:
                 to_send = msg  # fall back to original on failure
             self._writer.write(to_send)
-            self._recent_writes.append(to_send)
         self._publish_count += 1
 
     @property
@@ -232,7 +228,6 @@ class Publisher:
         except Exception:
             # Fallback to regular write
             self._writer.write(msg)
-        self._recent_writes.append(msg)
         loaned._published = True
         self._publish_count += 1
 
