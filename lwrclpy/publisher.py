@@ -235,13 +235,14 @@ class Publisher:
     def get_subscription_count(self) -> int:
         """Return the number of subscriptions matched to this publisher."""
         try:
-            if hasattr(self._writer, "get_matched_subscriptions"):
-                matches = self._writer.get_matched_subscriptions()
-                return len(matches) if hasattr(matches, "__len__") else 0
-            # Alternative API
             if hasattr(self._writer, "get_publication_matched_status"):
-                status = self._writer.get_publication_matched_status()
+                status = fastdds.PublicationMatchedStatus()
+                self._writer.get_publication_matched_status(status)
                 return getattr(status, "current_count", 0)
+            if hasattr(self._writer, "get_matched_subscriptions"):
+                handles = fastdds.InstanceHandleVector()
+                self._writer.get_matched_subscriptions(handles)
+                return len(handles) if hasattr(handles, "__len__") else 0
         except Exception:
             pass
         return 0
