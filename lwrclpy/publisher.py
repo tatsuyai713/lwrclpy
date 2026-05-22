@@ -131,6 +131,12 @@ class Publisher:
                     "publisher; publish loaned messages only with their "
                     "originating publisher."
                 )
+            if msg._published:
+                raise ValueError(
+                    "Cannot publish the same LoanedMessage more than once; "
+                    "obtain a new loaned message or publish a normal message "
+                    "instance instead."
+                )
             self._publish_loaned(msg)
             return
 

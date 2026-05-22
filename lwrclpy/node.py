@@ -420,7 +420,7 @@ class Node:
         qos_overriding_options=None,
         content_filter_options=None,
     ):
-        del qos_overriding_options, content_filter_options
+        del callback_group, qos_overriding_options, content_filter_options
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
