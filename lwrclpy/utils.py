@@ -45,12 +45,24 @@ def _retcode_is_ok(rc, *, none_is_ok: bool = False) -> bool:
     return rc_int == ok_int
 
 
+def _count_value(value) -> int | None:
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
 def _matched_status_count(method, status_factory=None) -> int | None:
     """Read a Fast DDS matched status count across return-value/output-param bindings."""
     try:
         status = method()
         if hasattr(status, "current_count"):
-            return getattr(status, "current_count", 0)
+            return _count_value(getattr(status, "current_count"))
     except TypeError:
         pass
     except Exception:
@@ -61,7 +73,7 @@ def _matched_status_count(method, status_factory=None) -> int | None:
             status = status_factory()
             rc = method(status)
             if _retcode_is_ok(rc, none_is_ok=True):
-                return getattr(status, "current_count", 0)
+                return _count_value(getattr(status, "current_count", 0))
         except Exception:
             return None
     return None
@@ -72,7 +84,7 @@ def _matched_handle_count(method, handles_factory=None) -> int | None:
     try:
         handles = method()
         if hasattr(handles, "__len__"):
-            return len(handles)
+            return _count_value(len(handles))
     except TypeError:
         pass
     except Exception:
@@ -83,7 +95,7 @@ def _matched_handle_count(method, handles_factory=None) -> int | None:
             handles = handles_factory()
             rc = method(handles)
             if _retcode_is_ok(rc, none_is_ok=True) and hasattr(handles, "__len__"):
-                return len(handles)
+                return _count_value(len(handles))
         except Exception:
             return None
     return None
