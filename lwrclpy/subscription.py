@@ -6,6 +6,7 @@
 from __future__ import annotations
 from typing import Optional, Callable, List, Tuple, Any
 from collections import deque
+import dis
 import inspect
 import fastdds  # type: ignore
 import os
@@ -31,6 +32,17 @@ def _sample_info_attr(sample_info, name, default=None):
         return default
 
 
+def _callback_is_noop(callback) -> bool:
+    try:
+        instructions = [
+            instr.opname for instr in dis.get_instructions(callback)
+            if instr.opname not in {"RESUME", "CACHE", "NOP", "EXTENDED_ARG"}
+        ]
+    except Exception:
+        return False
+    return instructions in (["LOAD_CONST", "RETURN_VALUE"], ["RETURN_CONST"])
+
+
 def _take_queue_maxlen(qos: QoSProfile) -> int | None:
     history = getattr(qos, "history", None)
     if getattr(history, "name", None) == "KEEP_ALL":
@@ -40,7 +52,7 @@ def _take_queue_maxlen(qos: QoSProfile) -> int | None:
     except Exception:
         return 10
     if depth <= 0:
-        return None
+        return 10
     return depth
 
 
@@ -170,7 +182,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         except Exception:
             return  # Avoid director double-fault
 
-        if getattr(info, "valid_data", True) and _retcode_is_ok(rc):
+        if bool(_sample_info_attr(info, "valid_data", True)) and _retcode_is_ok(rc):
             # Enqueue the callback to be run by the executor.
             # Prefer delivering the received instance directly to avoid extra copies.
             expose_fn = self._expose_fn
@@ -220,7 +232,8 @@ class Subscription:
         self._event_callbacks = event_callbacks or {}
         self._message_count = 0
         self._take_lock = threading.Lock()
-        self._take_queue = deque(maxlen=_take_queue_maxlen(qos))
+        self._take_queue_maxlen = _take_queue_maxlen(qos)
+        self._take_queue = deque(maxlen=self._take_queue_maxlen) if _callback_is_noop(callback) else None
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -273,36 +286,11 @@ class Subscription:
             return []
         results = []
         with self._take_lock:
+            if self._take_queue is None:
+                self._take_queue = deque(maxlen=self._take_queue_maxlen)
+                self._listener._take_queue = self._take_queue
             while self._take_queue and len(results) < max_count:
                 results.append(self._take_queue.popleft())
-        queued_count = len(results)
-        remaining = max_count - queued_count
-        if remaining <= 0:
-            self._message_count += queued_count
-            return results
-
-        for _ in range(remaining):
-            info = fastdds.SampleInfo()
-            data = self._msg_ctor()
-            
-            try:
-                rc = self._reader.take_next_sample(data, info)
-            except TypeError:
-                rc = self._reader.take_next_sample(info, data)
-            except Exception:
-                break
-            
-            if not (_retcode_is_ok(rc) and getattr(info, "valid_data", True)):
-                break
-            
-            if not self._raw_mode:
-                try:
-                    expose_callable_fields(data)
-                except Exception:
-                    pass
-            
-            msg_info = MessageInfo(info)
-            results.append((data, msg_info))
         self._message_count += len(results)
         
         return results
