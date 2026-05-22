@@ -424,6 +424,8 @@ class Node:
         qos_overriding_options=None,
         content_filter_options=None,
     ):
+        if event_callbacks is not None:
+            raise NotImplementedError("create_subscription() does not support event_callbacks")
         if qos_overriding_options is not None:
             raise NotImplementedError("create_subscription() does not support qos_overriding_options")
         if content_filter_options is not None:
