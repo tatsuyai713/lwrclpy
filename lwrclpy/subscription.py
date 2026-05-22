@@ -12,7 +12,7 @@ import fastdds  # type: ignore
 import os
 import threading
 from .qos import QoSProfile
-from .message_utils import clone_message, expose_callable_fields
+from .message_utils import _copy_val, _get_field_names, _get_value, clone_message, expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
@@ -62,6 +62,33 @@ def _take_queue_maxlen(qos: QoSProfile) -> int | None:
     if depth <= 0:
         return 10
     return depth
+
+
+def _clone_raw_message(msg, msg_ctor):
+    clone = msg_ctor()
+    for name in _get_field_names(msg_ctor):
+        val = _get_value(msg, name)
+        if val is None:
+            continue
+        copied = _copy_val(val)
+        assigned = False
+        try:
+            setter = getattr(clone, name, None)
+            if callable(setter):
+                setter(copied)
+                assigned = True
+        except Exception:
+            assigned = False
+        if assigned:
+            continue
+        try:
+            setattr(clone, name, copied)
+        except Exception:
+            try:
+                object.__setattr__(clone, name, copied)
+            except Exception:
+                pass
+    return clone
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
@@ -157,12 +184,13 @@ class _ReaderListener(fastdds.DataReaderListener):
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._with_message_info = _callback_accepts_message_info(user_cb)
+        self._polling_only = _callback_is_noop(user_cb)
 
     def _queue_for_take(self, data, sample_info):
         if self._take_queue is None:
             return
         try:
-            queued_data = clone_message(data, self._msg_ctor)
+            queued_data = _clone_raw_message(data, self._msg_ctor) if self._raw_mode else clone_message(data, self._msg_ctor)
             expose_fn = self._expose_fn
             if expose_fn is not None:
                 expose_fn(queued_data)
@@ -192,6 +220,12 @@ class _ReaderListener(fastdds.DataReaderListener):
             return  # Avoid director double-fault
 
         if bool(_sample_info_attr(info, "valid_data", True)) and _retcode_is_ok(rc):
+            if self._take_queue is not None:
+                self._queue_for_take(data, info)
+
+            if self._polling_only:
+                return
+
             # Enqueue the callback to be run by the executor.
             # Prefer delivering the received instance directly to avoid extra copies.
             expose_fn = self._expose_fn
@@ -200,9 +234,6 @@ class _ReaderListener(fastdds.DataReaderListener):
                     expose_fn(data)
                 except Exception:
                     pass
-
-            if self._take_queue is not None:
-                self._queue_for_take(data, info)
 
             if self._with_message_info:
                 callback_info = MessageInfo(info)
