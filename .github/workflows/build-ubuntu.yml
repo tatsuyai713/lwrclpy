@@ -11,13 +11,16 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
         platform:
           - arch: x86_64
             runner: ubuntu-22.04
+            build-jobs: 4
           - arch: aarch64
             runner: ubuntu-24.04-arm
+            build-jobs: 2
     name: Build Ubuntu ${{ matrix.platform.arch }} Wheel (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.platform.runner }}
     steps:
@@ -58,6 +61,7 @@ jobs:
           export PATH="/opt/fast-dds-gen-v3/bin:$PATH"
           export FASTDDSGEN_BIN="/opt/fast-dds-gen-v3/bin/fastddsgen"
           export PREFIX_V3="/opt/fast-dds-v3"
+          export JOBS="${{ matrix.platform.build-jobs }}"
           export CMAKE_PREFIX_PATH="/opt/fast-dds-v3:${CMAKE_PREFIX_PATH:-}"
           export LD_LIBRARY_PATH="/opt/fast-dds-v3/lib:/opt/fast-dds-v3/lib64:${LD_LIBRARY_PATH:-}"
           export PYTHONPATH="/opt/fast-dds-v3/lib/python$(python -c 'import sys;print("{}.{}".format(*sys.version_info[:2]))')/site-packages:${PYTHONPATH:-}"
