@@ -80,6 +80,21 @@ fi
 # SWIG 4.* is recommended (avoid 4.2+ unless you have patches)
 sudo apt-get install -y 'swig4.*' || true
 
+SWIG_EXECUTABLE="${SWIG_EXECUTABLE:-}"
+if [[ -z "${SWIG_EXECUTABLE}" ]]; then
+  if command -v swig4.1 >/dev/null 2>&1; then
+    SWIG_EXECUTABLE="$(command -v swig4.1)"
+  elif command -v swig >/dev/null 2>&1; then
+    SWIG_EXECUTABLE="$(command -v swig)"
+  elif command -v swig4.0 >/dev/null 2>&1; then
+    SWIG_EXECUTABLE="$(command -v swig4.0)"
+  fi
+fi
+[[ -n "${SWIG_EXECUTABLE}" ]] || die "No compatible SWIG executable found"
+export SWIG_EXECUTABLE
+log "Using SWIG_EXECUTABLE=${SWIG_EXECUTABLE}"
+"${SWIG_EXECUTABLE}" -version | head -n 3 || true
+
 need git
 need curl
 need "${PYBIN}"
@@ -201,6 +216,7 @@ CMAKE_COMMON_ARGS=(
   -DCMAKE_INSTALL_PREFIX="${PREFIX_V3}"
   -DCMAKE_INSTALL_RPATH="${PREFIX_V3}/lib;${PREFIX_V3}/lib64"
   -DPython3_EXECUTABLE="${PY_EXEC}"
+  -DSWIG_EXECUTABLE="${SWIG_EXECUTABLE}"
   -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
 )
 

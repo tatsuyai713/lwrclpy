@@ -42,6 +42,18 @@ need java
 [[ -d "${ROS_TYPES_ROOT}/src" ]] || { echo "[FATAL] ROS_TYPES_ROOT/src not found: ${ROS_TYPES_ROOT}/src"; exit 1; }
 [[ -f "${PATCH_PY}" ]] || { echo "[FATAL] patch script missing: ${PATCH_PY}"; exit 1; }
 
+SWIG_EXECUTABLE="${SWIG_EXECUTABLE:-}"
+if [[ -z "${SWIG_EXECUTABLE}" ]]; then
+  if command -v swig4.1 >/dev/null 2>&1; then
+    SWIG_EXECUTABLE="$(command -v swig4.1)"
+  else
+    SWIG_EXECUTABLE="$(command -v swig)"
+  fi
+fi
+export SWIG_EXECUTABLE
+echo "[INFO] SWIG_EXECUTABLE=${SWIG_EXECUTABLE}"
+"${SWIG_EXECUTABLE}" -version | head -n 3 || true
+
 mkdir -p "${BUILD_ROOT}" "${GEN_SRC_ROOT}" "${INC_STAGE_ROOT}"
 
 # ===== Auto-detect CMake package dirs for fastdds / fastcdr =====
@@ -169,6 +181,7 @@ build_one() {
       -Dfastdds_DIR="${FASTDDS_CMAKE_DIR}"
       -Dfastcdr_DIR="${FASTCDR_CMAKE_DIR}"
       -DPython3_EXECUTABLE="$(command -v python3)"
+      -DSWIG_EXECUTABLE="${SWIG_EXECUTABLE}"
     )
     if ! cmake .. "${CMAKE_ARGS[@]}" > _cmake_configure.log 2>&1; then
       echo "[ERR]  cmake configure failed: ${outdir#${BUILD_ROOT}/}"
