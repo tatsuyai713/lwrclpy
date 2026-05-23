@@ -31,6 +31,8 @@ def main():
     time.sleep(0.5)
     for _ in range(10):
         rclpy.spin_once(node, timeout_sec=0.1)
+    # Enable the subscription's polling buffer before publishing demo messages.
+    sub.take(1)
     
     logger.info("--- Publishing Messages ---")
     

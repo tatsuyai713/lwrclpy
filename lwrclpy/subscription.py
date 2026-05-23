@@ -258,7 +258,7 @@ class Subscription:
         self._message_count = 0
         self._take_lock = threading.Lock()
         self._take_queue_maxlen = _take_queue_maxlen(qos)
-        self._take_queue = deque(maxlen=self._take_queue_maxlen)
+        self._take_queue = None
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -305,12 +305,15 @@ class Subscription:
         """Take messages buffered by the DDS listener (polling mode).
         
         Returns a list of (message, message_info) tuples.
-        Buffering starts when the subscription is created.
+        The first take() call enables buffering for subsequently received samples.
         """
         if max_count <= 0:
             return []
         results = []
         with self._take_lock:
+            if self._take_queue is None:
+                self._take_queue = deque(maxlen=self._take_queue_maxlen)
+                self._listener._take_queue = self._take_queue
             while self._take_queue and len(results) < max_count:
                 results.append(self._take_queue.popleft())
         self._message_count += len(results)
