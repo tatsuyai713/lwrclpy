@@ -4,9 +4,8 @@
 # Supports zero-copy with data sharing and raw data mode.
 
 from __future__ import annotations
-from typing import Optional, Callable, List, Tuple, Any
+from typing import Optional, List, Tuple, Any
 from collections import deque
-import dis
 import inspect
 import fastdds  # type: ignore
 import os
@@ -27,17 +26,6 @@ def _sample_info_attr(sample_info, name, default=None):
         return value()
     except Exception:
         return default
-
-
-def _callback_is_noop(callback) -> bool:
-    try:
-        instructions = [
-            instr.opname for instr in dis.get_instructions(callback)
-            if instr.opname not in {"RESUME", "CACHE", "NOP", "EXTENDED_ARG"}
-        ]
-    except Exception:
-        return False
-    return instructions in (["LOAD_CONST", "RETURN_VALUE"], ["RETURN_CONST"])
 
 
 def _take_queue_keep_all_maxlen() -> int | None:
@@ -112,7 +100,7 @@ class MessageInfo:
     """Information about a received message (similar to rclpy.MessageInfo)."""
     __slots__ = ("source_timestamp", "received_timestamp", "publication_sequence_number", 
                  "reception_sequence_number", "publisher_gid", "from_intra_process",
-                 "_sample_identity", "_is_valid")
+                 "publisher_handle", "_sample_identity", "_is_valid")
     
     def __init__(self, sample_info=None):
         self.source_timestamp = 0
@@ -120,6 +108,7 @@ class MessageInfo:
         self.publication_sequence_number = 0
         self.reception_sequence_number = 0
         self.publisher_gid = None
+        self.publisher_handle = None
         self.from_intra_process = False
         self._sample_identity = None
         self._is_valid = True
@@ -142,9 +131,9 @@ class MessageInfo:
                     self.reception_sequence_number = _sample_info_attr(sample_info, "reception_sequence_number", 0)
                 if hasattr(sample_info, "publisher_gid"):
                     self.publisher_gid = _sample_info_attr(sample_info, "publisher_gid")
-                elif hasattr(sample_info, "publication_handle"):
-                    self.publisher_gid = _sample_info_attr(sample_info, "publication_handle")
-                elif self._sample_identity is not None and hasattr(self._sample_identity, "writer_guid"):
+                if hasattr(sample_info, "publication_handle"):
+                    self.publisher_handle = _sample_info_attr(sample_info, "publication_handle")
+                if self.publisher_gid is None and self._sample_identity is not None and hasattr(self._sample_identity, "writer_guid"):
                     self.publisher_gid = _sample_info_attr(self._sample_identity, "writer_guid")
                     
                 # Check for intra-process delivery
@@ -184,21 +173,15 @@ class _ReaderListener(fastdds.DataReaderListener):
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._with_message_info = _callback_accepts_message_info(user_cb)
-        self._polling_only = _callback_is_noop(user_cb)
 
     def _queue_for_take(self, data, sample_info):
         if self._take_queue is None:
             return
         try:
             expose_fn = self._expose_fn
-            if self._polling_only:
-                queued_data = data
-                if expose_fn is not None:
-                    expose_fn(queued_data)
-            else:
-                queued_data = _clone_raw_message(data, self._msg_ctor) if self._raw_mode else clone_message(data, self._msg_ctor)
-                if expose_fn is not None:
-                    expose_fn(queued_data)
+            queued_data = _clone_raw_message(data, self._msg_ctor) if self._raw_mode else clone_message(data, self._msg_ctor)
+            if expose_fn is not None:
+                expose_fn(queued_data)
             queued_info = MessageInfo(sample_info)
         except Exception:
             return
@@ -227,9 +210,6 @@ class _ReaderListener(fastdds.DataReaderListener):
         if bool(_sample_info_attr(info, "valid_data", True)) and _retcode_is_ok(rc):
             if self._take_queue is not None:
                 self._queue_for_take(data, info)
-
-            if self._polling_only:
-                return
 
             # Enqueue the callback to be run by the executor.
             # Prefer delivering the received instance directly to avoid extra copies.
@@ -278,7 +258,7 @@ class Subscription:
         self._message_count = 0
         self._take_lock = threading.Lock()
         self._take_queue_maxlen = _take_queue_maxlen(qos)
-        self._take_queue = deque(maxlen=self._take_queue_maxlen) if _callback_is_noop(callback) else None
+        self._take_queue = None
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
