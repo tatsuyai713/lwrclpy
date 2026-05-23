@@ -15,7 +15,8 @@ from .message_utils import expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
-_MAX_CALLBACKS_PER_DRAIN = 64
+_MAX_CALLBACKS_PER_DRAIN = 16
+_SKIP_SAMPLE = object()
 
 
 def _sample_info_attr(sample_info, name, default=None):
@@ -149,8 +150,10 @@ class _ReaderListener(fastdds.DataReaderListener):
         except Exception:
             return None
 
-        if not (_retcode_is_ok(rc, none_is_ok=True) and bool(_sample_info_attr(info, "valid_data", True))):
+        if not _retcode_is_ok(rc, none_is_ok=True):
             return None
+        if not bool(_sample_info_attr(info, "valid_data", True)):
+            return _SKIP_SAMPLE
 
         expose_fn = self._expose_fn
         if expose_fn is not None:
@@ -176,7 +179,7 @@ class _ReaderListener(fastdds.DataReaderListener):
             asyncio.run(result)
 
     def _drain_reader_callbacks(self, reader):
-        drain_exhausted = False
+        hit_drain_limit = False
         try:
             for _ in range(_MAX_CALLBACKS_PER_DRAIN):
                 if self._reader_lock is not None:
@@ -186,17 +189,19 @@ class _ReaderListener(fastdds.DataReaderListener):
                     result = self._read_one_from_reader(reader)
                 if result is None:
                     break
+                if result is _SKIP_SAMPLE:
+                    continue
                 data, msg_info = result
                 try:
                     self._invoke_user_callback(data, msg_info)
                 except Exception:
                     pass
             else:
-                drain_exhausted = True
+                hit_drain_limit = True
         finally:
             schedule_again = False
             with self._pending_lock:
-                if drain_exhausted or self._reschedule_requested:
+                if hit_drain_limit or self._reschedule_requested:
                     self._reschedule_requested = False
                     schedule_again = True
                 else:
@@ -307,6 +312,8 @@ class Subscription:
                 result = self._listener._take_one_from_reader(self._reader)
                 if result is None:
                     break
+                if result is _SKIP_SAMPLE:
+                    continue
                 results.append(result)
         self._message_count += len(results)
         
