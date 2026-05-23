@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 from typing import Optional, List, Tuple, Any
+import asyncio
 import inspect
 import fastdds  # type: ignore
 import os
@@ -129,11 +130,10 @@ class _ReaderListener(fastdds.DataReaderListener):
         """Called when subscription matches/unmatches with a publisher."""
         pass
 
-    def _read_or_take_one_from_reader(self, reader, *, consume: bool):
+    def _read_or_take_one_from_reader(self, reader, *, include_message_info: bool):
         info = fastdds.SampleInfo()
         data = self._msg_ctor()
-        method_name = "take_next_sample" if consume else "read_next_sample"
-        method = getattr(reader, method_name)
+        method = getattr(reader, "take_next_sample")
 
         try:
             rc = method(data, info)
@@ -151,13 +151,22 @@ class _ReaderListener(fastdds.DataReaderListener):
                 expose_fn(data)
             except Exception:
                 pass
-        return data, MessageInfo(info)
+        msg_info = MessageInfo(info) if include_message_info else None
+        return data, msg_info
 
     def _take_one_from_reader(self, reader):
-        return self._read_or_take_one_from_reader(reader, consume=True)
+        return self._read_or_take_one_from_reader(reader, include_message_info=True)
 
     def _read_one_from_reader(self, reader):
-        return self._read_or_take_one_from_reader(reader, consume=False)
+        return self._read_or_take_one_from_reader(reader, include_message_info=self._with_message_info)
+
+    def _invoke_user_callback(self, data, msg_info):
+        if self._with_message_info:
+            result = self._user_cb(data, msg_info)
+        else:
+            result = self._user_cb(data)
+        if inspect.iscoroutine(result):
+            asyncio.run(result)
 
     def _drain_reader_callbacks(self, reader):
         try:
@@ -171,10 +180,7 @@ class _ReaderListener(fastdds.DataReaderListener):
                     break
                 data, msg_info = result
                 try:
-                    if self._with_message_info:
-                        self._user_cb(data, msg_info)
-                    else:
-                        self._user_cb(data)
+                    self._invoke_user_callback(data, msg_info)
                 except Exception:
                     pass
         finally:
@@ -277,8 +283,8 @@ class Subscription:
         """Take messages directly from the DataReader (polling mode).
         
         Returns a list of (message, message_info) tuples.
-        Callback delivery reads samples without removing them; take() removes
-        samples from the reader cache for manual polling.
+        Callback delivery and manual polling both consume samples directly from
+        the reader cache instead of copying them through a Python-side queue.
         """
         if max_count <= 0:
             return []
