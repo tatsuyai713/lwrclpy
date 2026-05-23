@@ -1,3 +1,4 @@
+from ._callback_queue import CallbackQueue
 from .publisher import Publisher
 from .subscription import Subscription
 from .qos import QoSProfile
@@ -10,11 +11,13 @@ from .context import get_participant, track_entity, untrack_entity
 class Service:
     """Best-effort rclpy-like Service (one callback per request)."""
 
-    def __init__(self, service_type, service_name: str, callback, qos_profile: QoSProfile, topic_prefix: str = ""):
+    def __init__(self, service_type, service_name: str, callback, qos_profile: QoSProfile, topic_prefix: str = "", *, enqueue_cb=None):
         self._participant = get_participant()
         self._service_name = service_name
         self._callback = callback
         self._prefix = topic_prefix
+        self._callback_queue = None if enqueue_cb is not None else CallbackQueue()
+        self._enqueue_cb = enqueue_cb or self._callback_queue.enqueue
 
         req_cls, res_cls, _req_pubsub, _res_pubsub = resolve_service_type(service_type)
         self._request_cls = req_cls
@@ -50,7 +53,7 @@ class Service:
             qos_profile,
             _on_request,
             self._request_cls,
-            enqueue_cb=lambda cb, msg: cb(msg),
+            enqueue_cb=self._enqueue_cb,
         )
         
         # Track for proper cleanup
@@ -80,6 +83,10 @@ class Service:
             except Exception:
                 pass
             self._response_pub = None
+
+        if self._callback_queue is not None:
+            self._callback_queue.close()
+            self._callback_queue = None
 
 
 def _service_topics(name: str, prefix: str = ""):

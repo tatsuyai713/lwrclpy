@@ -2,6 +2,7 @@ import threading
 import time
 from typing import Optional
 
+from ._callback_queue import CallbackQueue
 from .publisher import Publisher
 from .subscription import Subscription
 from .qos import QoSProfile
@@ -27,7 +28,8 @@ class Client:
         self._participant = get_participant()
         self._service_name = service_name
         self._prefix = topic_prefix
-        self._enqueue_cb = enqueue_cb or (lambda cb, msg: cb(msg))
+        self._callback_queue = None if enqueue_cb is not None else CallbackQueue()
+        self._enqueue_cb = enqueue_cb or self._callback_queue.enqueue
 
         req_cls, res_cls, _req_pubsub, _res_pubsub = resolve_service_type(service_type)
         self._request_cls = req_cls
@@ -62,7 +64,7 @@ class Client:
             qos_profile,
             _on_response,
             self._response_cls,
-            enqueue_cb=lambda cb, msg: cb(msg),  # Execute callback directly, don't enqueue
+            enqueue_cb=self._enqueue_cb,
         )
         
         # Track for proper cleanup
@@ -166,6 +168,10 @@ class Client:
             except Exception:
                 pass
             self._publisher = None
+
+        if self._callback_queue is not None:
+            self._callback_queue.close()
+            self._callback_queue = None
 
 
 def _service_topics(name: str, prefix: str = ""):
