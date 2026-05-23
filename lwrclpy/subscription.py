@@ -181,10 +181,10 @@ class _ReaderListener(fastdds.DataReaderListener):
         if self._take_queue is None:
             return
         try:
-            expose_fn = self._expose_fn
-            queued_data = _clone_raw_message(data, self._msg_ctor) if self._raw_mode else clone_message(data, self._msg_ctor)
-            if expose_fn is not None:
-                expose_fn(queued_data)
+            if self._raw_mode:
+                queued_data = _clone_raw_message(data, self._msg_ctor)
+            else:
+                queued_data = clone_message(data, self._msg_ctor)
             queued_info = MessageInfo(sample_info)
         except Exception:
             return
@@ -317,8 +317,9 @@ class Subscription:
         results = []
         with self._take_lock:
             if self._take_queue is None:
-                self._take_queue = deque(maxlen=self._take_queue_maxlen)
-                self._listener.enable_take_queue(self._take_queue)
+                take_queue = deque(maxlen=self._take_queue_maxlen)
+                self._listener.enable_take_queue(take_queue)
+                self._take_queue = take_queue
             queue_len = len(self._take_queue)
             take_count = min(max_count, queue_len)
             if take_count == queue_len:
