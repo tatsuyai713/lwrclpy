@@ -15,6 +15,9 @@ from .message_utils import expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
+_MAX_CALLBACKS_PER_DRAIN = 64
+
+
 def _sample_info_attr(sample_info, name, default=None):
     try:
         value = getattr(sample_info, name)
@@ -133,7 +136,11 @@ class _ReaderListener(fastdds.DataReaderListener):
     def _read_or_take_one_from_reader(self, reader, *, include_message_info: bool):
         info = fastdds.SampleInfo()
         data = self._msg_ctor()
-        method = getattr(reader, "take_next_sample")
+        method = getattr(reader, "take_next_sample", None)
+        if method is None:
+            method = getattr(reader, "read_next_sample", None)
+        if method is None:
+            return None
 
         try:
             rc = method(data, info)
@@ -169,8 +176,9 @@ class _ReaderListener(fastdds.DataReaderListener):
             asyncio.run(result)
 
     def _drain_reader_callbacks(self, reader):
+        drain_exhausted = False
         try:
-            while True:
+            for _ in range(_MAX_CALLBACKS_PER_DRAIN):
                 if self._reader_lock is not None:
                     with self._reader_lock:
                         result = self._read_one_from_reader(reader)
@@ -183,10 +191,12 @@ class _ReaderListener(fastdds.DataReaderListener):
                     self._invoke_user_callback(data, msg_info)
                 except Exception:
                     pass
+            else:
+                drain_exhausted = True
         finally:
             schedule_again = False
             with self._pending_lock:
-                if self._reschedule_requested:
+                if drain_exhausted or self._reschedule_requested:
                     self._reschedule_requested = False
                     schedule_again = True
                 else:
