@@ -41,6 +41,14 @@ SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
 
 detect_pkg_version() {
+  latest_tag_version() {
+    git -C "${REPO_ROOT}" ls-remote --tags origin 'v[0-9]*' 2>/dev/null \
+      | awk -F'/' '!/\^\{\}$/ {print $NF}' \
+      | sed 's/^v//' \
+      | sort -V \
+      | tail -n1 || true
+  }
+
   if [[ -n "${PKG_VERSION:-}" ]]; then
     echo "${PKG_VERSION#v}"
     return 0
@@ -53,17 +61,19 @@ detect_pkg_version() {
     echo "${GITHUB_REF#refs/tags/v}"
     return 0
   fi
+  if [[ "${GITHUB_REF_TYPE:-}" == "branch" && "${GITHUB_REF_NAME:-}" == "main" ]] || [[ "${GITHUB_REF:-}" == "refs/heads/main" ]]; then
+    local latest
+    latest="$(latest_tag_version)"
+    echo "${latest:-0.0.0}+latest"
+    return 0
+  fi
   local tag
   tag="$(git -C "${REPO_ROOT}" describe --tags --exact-match 2>/dev/null || true)"
   if [[ -n "${tag}" ]]; then
     echo "${tag#v}"
     return 0
   fi
-  tag="$(git -C "${REPO_ROOT}" ls-remote --tags origin 'v[0-9]*' 2>/dev/null \
-    | awk -F'/' '!/\^\{\}$/ {print $NF}' \
-    | sed 's/^v//' \
-    | sort -V \
-    | tail -n1 || true)"
+  tag="$(latest_tag_version)"
   if [[ -n "${tag}" ]]; then
     echo "${tag}"
     return 0
