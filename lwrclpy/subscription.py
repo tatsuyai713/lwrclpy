@@ -5,13 +5,12 @@
 
 from __future__ import annotations
 from typing import Optional, List, Tuple, Any
-from collections import deque
 import inspect
 import fastdds  # type: ignore
 import os
 import threading
 from .qos import QoSProfile
-from .message_utils import _copy_val, _get_field_names, _get_value, clone_message, expose_callable_fields
+from .message_utils import expose_callable_fields
 from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
 
 
@@ -26,57 +25,6 @@ def _sample_info_attr(sample_info, name, default=None):
         return value()
     except Exception:
         return default
-
-
-def _take_queue_keep_all_maxlen() -> int | None:
-    value = os.environ.get("LWRCLPY_TAKE_QUEUE_KEEP_ALL_MAXLEN", "10000").strip().lower()
-    if value in {"", "0", "none", "unbounded"}:
-        return None
-    try:
-        maxlen = int(value)
-    except Exception:
-        return 10000
-    return max(1, maxlen)
-
-
-def _take_queue_maxlen(qos: QoSProfile) -> int | None:
-    history = getattr(qos, "history", None)
-    if getattr(history, "name", None) == "KEEP_ALL":
-        return _take_queue_keep_all_maxlen()
-    try:
-        depth = int(getattr(qos, "depth"))
-    except Exception:
-        return 10
-    if depth <= 0:
-        return 10
-    return depth
-
-
-def _clone_raw_message(msg, msg_ctor):
-    clone = msg_ctor()
-    for name in _get_field_names(msg_ctor):
-        val = _get_value(msg, name)
-        if val is None:
-            continue
-        copied = _copy_val(val)
-        assigned = False
-        try:
-            setter = getattr(clone, name, None)
-            if callable(setter):
-                setter(copied)
-                assigned = True
-        except Exception:
-            assigned = False
-        if assigned:
-            continue
-        try:
-            setattr(clone, name, copied)
-        except Exception:
-            try:
-                object.__setattr__(clone, name, copied)
-            except Exception:
-                pass
-    return clone
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
@@ -162,72 +110,76 @@ class MessageInfo:
 class _ReaderListener(fastdds.DataReaderListener):
     """Listener that enqueues callbacks to the executor queue."""
 
-    def __init__(self, enqueue_cb, user_cb, msg_ctor, raw_mode: bool = False, take_queue=None, take_lock=None):
+    def __init__(self, enqueue_cb, user_cb, msg_ctor, raw_mode: bool = False, reader_lock=None):
         super().__init__()
         self._enqueue_cb = enqueue_cb
         self._user_cb = user_cb
         self._msg_ctor = msg_ctor
         self._raw_mode = raw_mode
-        self._take_queue = take_queue
-        self._take_lock = take_lock
+        self._reader_lock = reader_lock
+        self._pending_lock = threading.Lock()
+        self._callback_pending = False
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
-        self._with_message_info = _callback_accepts_message_info(user_cb)
-
-    def enable_take_queue(self, queue):
-        self._take_queue = queue
-
-    def _queue_for_take(self, data, sample_info):
-        if self._take_queue is None:
-            return
-        try:
-            if self._raw_mode:
-                queued_data = _clone_raw_message(data, self._msg_ctor)
-            else:
-                queued_data = clone_message(data, self._msg_ctor)
-            queued_info = MessageInfo(sample_info)
-        except Exception:
-            return
-        if self._take_lock is not None:
-            with self._take_lock:
-                self._take_queue.append((queued_data, queued_info))
-        else:
-            self._take_queue.append((queued_data, queued_info))
+        self._has_callback = callable(user_cb)
+        self._with_message_info = self._has_callback and _callback_accepts_message_info(user_cb)
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
         pass
-    
-    def on_data_available(self, reader):
+
+    def _take_one_from_reader(self, reader):
         info = fastdds.SampleInfo()
         data = self._msg_ctor()
 
-        # Absorb ordering & signature differences.
         try:
             rc = reader.take_next_sample(data, info)
         except TypeError:
             rc = reader.take_next_sample(info, data)
         except Exception:
-            return  # Avoid director double-fault
+            return None
 
-        if bool(_sample_info_attr(info, "valid_data", True)) and _retcode_is_ok(rc, none_is_ok=True):
-            if self._take_queue is not None:
-                self._queue_for_take(data, info)
+        if not (_retcode_is_ok(rc, none_is_ok=True) and bool(_sample_info_attr(info, "valid_data", True))):
+            return None
 
-            # Enqueue the callback to be run by the executor.
-            # Prefer delivering the received instance directly to avoid extra copies.
-            expose_fn = self._expose_fn
-            if expose_fn is not None:
+        expose_fn = self._expose_fn
+        if expose_fn is not None:
+            try:
+                expose_fn(data)
+            except Exception:
+                pass
+        return data, MessageInfo(info)
+
+    def _drain_reader_callbacks(self, reader):
+        try:
+            while True:
+                if self._reader_lock is not None:
+                    with self._reader_lock:
+                        result = self._take_one_from_reader(reader)
+                else:
+                    result = self._take_one_from_reader(reader)
+                if result is None:
+                    break
+                data, msg_info = result
                 try:
-                    expose_fn(data)
+                    if self._with_message_info:
+                        self._user_cb(data, msg_info)
+                    else:
+                        self._user_cb(data)
                 except Exception:
                     pass
-
-            if self._with_message_info:
-                callback_info = MessageInfo(info)
-                self._enqueue_cb(lambda item, cb=self._user_cb, info=callback_info: cb(item, info), data)
-            else:
-                self._enqueue_cb(self._user_cb, data)
+        finally:
+            with self._pending_lock:
+                self._callback_pending = False
+    
+    def on_data_available(self, reader):
+        if not self._has_callback:
+            return
+        with self._pending_lock:
+            if self._callback_pending:
+                return
+            self._callback_pending = True
+        self._enqueue_cb(lambda listener=self, reader=reader: listener._drain_reader_callbacks(reader), None)
 
 
 def _callback_accepts_message_info(callback) -> bool:
@@ -259,9 +211,7 @@ class Subscription:
         self._raw_mode = raw
         self._event_callbacks = event_callbacks or {}
         self._message_count = 0
-        self._take_lock = threading.Lock()
-        self._take_queue_maxlen = _take_queue_maxlen(qos)
-        self._take_queue = None
+        self._reader_lock = threading.Lock()
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -285,8 +235,7 @@ class Subscription:
             callback,
             msg_ctor,
             raw_mode=raw,
-            take_queue=self._take_queue,
-            take_lock=self._take_lock,
+            reader_lock=self._reader_lock,
         )
 
         # Create DataReader with listener
@@ -305,28 +254,21 @@ class Subscription:
         self._reader = reader
 
     def take(self, max_count: int = 1) -> List[Tuple[Any, MessageInfo]]:
-        """Take messages buffered by the DDS listener (polling mode).
+        """Take messages directly from the DataReader (polling mode).
         
         Returns a list of (message, message_info) tuples.
-        The first take() call enables buffering for subsequently received samples.
-        Callback delivery is unchanged; callbacks are still queued for executor
-        processing and should be drained with spin/spin_once when used.
+        Callback subscriptions and manual polling consume from the same reader;
+        whichever path takes a sample first owns it.
         """
         if max_count <= 0:
             return []
         results = []
-        with self._take_lock:
-            if self._take_queue is None:
-                take_queue = deque(maxlen=self._take_queue_maxlen)
-                self._listener.enable_take_queue(take_queue)
-                self._take_queue = take_queue
-            queue_len = len(self._take_queue)
-            take_count = min(max_count, queue_len)
-            if take_count == queue_len:
-                results = list(self._take_queue)
-                self._take_queue.clear()
-            else:
-                results = [self._take_queue.popleft() for _ in range(take_count)]
+        with self._reader_lock:
+            for _ in range(max_count):
+                result = self._listener._take_one_from_reader(self._reader)
+                if result is None:
+                    break
+                results.append(result)
         self._message_count += len(results)
         
         return results
