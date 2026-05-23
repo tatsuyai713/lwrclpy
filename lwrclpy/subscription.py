@@ -205,7 +205,10 @@ class _ReaderListener(fastdds.DataReaderListener):
                 self._enqueue_drain(reader)
 
     def _enqueue_drain(self, reader):
-        self._enqueue_cb(lambda _msg=None, listener=self, reader=reader: listener._drain_reader_callbacks(reader), None)
+        def drain_task(_msg=None, listener=self, reader=reader):
+            listener._drain_reader_callbacks(reader)
+
+        self._enqueue_cb(drain_task, None)
     
     def on_data_available(self, reader):
         if not self._has_callback:

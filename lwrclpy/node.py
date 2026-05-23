@@ -468,7 +468,7 @@ class Node:
     def create_service(self, srv_type, srv_name: str, callback, qos_profile: QoSProfile | int = 10, *, callback_group=None):
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix)
+        service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix, enqueue_cb=self._enqueue_callback)
         self._services.append(service)
         return service
 

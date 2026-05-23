@@ -62,7 +62,7 @@ class Client:
             qos_profile,
             _on_response,
             self._response_cls,
-            enqueue_cb=lambda cb, msg: cb(msg),  # Execute callback directly, don't enqueue
+            enqueue_cb=self._enqueue_cb,
         )
         
         # Track for proper cleanup
