@@ -13,8 +13,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-    name: Build Ubuntu Wheel (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-22.04
+        platform:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    name: Build Ubuntu ${{ matrix.platform.arch }} Wheel (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.platform.runner }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -64,7 +69,7 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-ubuntu-py${{ matrix.python-version }}
+          name: wheel-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}
           path: dist/*.whl
           retention-days: 30
 

@@ -14,8 +14,15 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-    name: Test Ubuntu Examples (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-22.04
+        platform:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            wheel-platform: linux_x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            wheel-platform: linux_aarch64
+    name: Test Ubuntu ${{ matrix.platform.arch }} Examples (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.platform.runner }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,7 +37,7 @@ jobs:
       - name: Download wheel artifact
         uses: actions/download-artifact@v4
         with:
-          name: wheel-ubuntu-py${{ matrix.python-version }}
+          name: wheel-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}
           path: downloaded-wheel/
           merge-multiple: false
           run-id: ${{ inputs.build_run_id }}
@@ -44,9 +51,9 @@ jobs:
           echo "Available wheels:"
           ls -la downloaded-wheel/
           PYVER=$(python -c 'import sys; print("".join(map(str, sys.version_info[:2])))')
-          WHEEL_FILE=$(ls downloaded-wheel/lwrclpy-*-cp${PYVER}-cp${PYVER}-linux_x86_64.whl 2>/dev/null | head -n1)
+          WHEEL_FILE=$(ls downloaded-wheel/lwrclpy-*-cp${PYVER}-cp${PYVER}-${{ matrix.platform.wheel-platform }}.whl 2>/dev/null | head -n1)
           if [ -z "$WHEEL_FILE" ]; then
-            echo "Error: No matching wheel found for Python ${PYVER} linux_x86_64"
+            echo "Error: No matching wheel found for Python ${PYVER} ${{ matrix.platform.wheel-platform }}"
             exit 1
           fi
           pip install "$WHEEL_FILE"
