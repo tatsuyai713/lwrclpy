@@ -39,7 +39,40 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"
 PKG_NAME="lwrclpy"
-PKG_VERSION="0.3.2"
+
+detect_pkg_version() {
+  if [[ -n "${PKG_VERSION:-}" ]]; then
+    echo "${PKG_VERSION#v}"
+    return 0
+  fi
+  if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+    echo "${GITHUB_REF_NAME#v}"
+    return 0
+  fi
+  if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+    echo "${GITHUB_REF#refs/tags/v}"
+    return 0
+  fi
+  local tag
+  tag="$(git -C "${REPO_ROOT}" describe --tags --exact-match 2>/dev/null || true)"
+  if [[ -n "${tag}" ]]; then
+    echo "${tag#v}"
+    return 0
+  fi
+  tag="$(git -C "${REPO_ROOT}" ls-remote --tags origin 'v[0-9]*' 2>/dev/null \
+    | awk -F'/' '!/\^\{\}$/ {print $NF}' \
+    | sed 's/^v//' \
+    | sort -V \
+    | tail -n1 || true)"
+  if [[ -n "${tag}" ]]; then
+    echo "${tag}"
+    return 0
+  fi
+  echo "0.0.0"
+}
+
+PKG_VERSION="$(detect_pkg_version)"
+echo "[INFO] Package version: ${PKG_VERSION}"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"   # prebuilt DataTypes
 PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"                          # fixed Fast-DDS prefix
