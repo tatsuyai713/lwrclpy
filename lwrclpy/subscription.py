@@ -173,37 +173,9 @@ class _ReaderListener(fastdds.DataReaderListener):
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._with_message_info = _callback_accepts_message_info(user_cb)
-        self._callback_lock = threading.Lock()
-        self._callback_backlog = 0
-        self._callback_backlog_limit = None
 
     def enable_take_queue(self, queue):
         self._take_queue = queue
-        self._callback_backlog_limit = queue.maxlen if queue.maxlen is not None else 10000
-
-    def _try_reserve_callback_slot(self) -> bool:
-        limit = self._callback_backlog_limit
-        if limit is None:
-            return True
-        with self._callback_lock:
-            if self._callback_backlog >= limit:
-                return False
-            self._callback_backlog += 1
-            return True
-
-    def _release_callback_slot(self):
-        with self._callback_lock:
-            if self._callback_backlog > 0:
-                self._callback_backlog -= 1
-
-    def _run_user_callback(self, item, info=None):
-        try:
-            if info is None:
-                self._user_cb(item)
-            else:
-                self._user_cb(item, info)
-        finally:
-            self._release_callback_slot()
 
     def _queue_for_take(self, data, sample_info):
         if self._take_queue is None:
@@ -242,9 +214,6 @@ class _ReaderListener(fastdds.DataReaderListener):
             if self._take_queue is not None:
                 self._queue_for_take(data, info)
 
-            if not self._try_reserve_callback_slot():
-                return
-
             # Enqueue the callback to be run by the executor.
             # Prefer delivering the received instance directly to avoid extra copies.
             expose_fn = self._expose_fn
@@ -256,9 +225,9 @@ class _ReaderListener(fastdds.DataReaderListener):
 
             if self._with_message_info:
                 callback_info = MessageInfo(info)
-                self._enqueue_cb(lambda item, listener=self, info=callback_info: listener._run_user_callback(item, info), data)
+                self._enqueue_cb(lambda item, cb=self._user_cb, info=callback_info: cb(item, info), data)
             else:
-                self._enqueue_cb(lambda item, listener=self: listener._run_user_callback(item), data)
+                self._enqueue_cb(self._user_cb, data)
 
 
 def _callback_accepts_message_info(callback) -> bool:
@@ -340,6 +309,8 @@ class Subscription:
         
         Returns a list of (message, message_info) tuples.
         The first take() call enables buffering for subsequently received samples.
+        Callback delivery is unchanged; callbacks are still queued for executor
+        processing and should be drained with spin/spin_once when used.
         """
         if max_count <= 0:
             return []
@@ -348,8 +319,13 @@ class Subscription:
             if self._take_queue is None:
                 self._take_queue = deque(maxlen=self._take_queue_maxlen)
                 self._listener.enable_take_queue(self._take_queue)
-            while self._take_queue and len(results) < max_count:
-                results.append(self._take_queue.popleft())
+            queue_len = len(self._take_queue)
+            take_count = min(max_count, queue_len)
+            if take_count == queue_len:
+                results = list(self._take_queue)
+                self._take_queue.clear()
+            else:
+                results = [self._take_queue.popleft() for _ in range(take_count)]
         self._message_count += len(results)
         
         return results
