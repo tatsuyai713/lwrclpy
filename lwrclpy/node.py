@@ -461,14 +461,14 @@ class Node:
     def create_client(self, srv_type, srv_name: str, qos_profile: QoSProfile | int = 10, *, callback_group=None):
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        client = Client(srv_type, resolved, qos, topic_prefix=self._service_prefix, enqueue_cb=self._enqueue_callback)
+        client = Client(srv_type, resolved, qos, topic_prefix=self._service_prefix)
         self._clients.append(client)
         return client
 
     def create_service(self, srv_type, srv_name: str, callback, qos_profile: QoSProfile | int = 10, *, callback_group=None):
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix, enqueue_cb=self._enqueue_callback)
+        service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix)
         self._services.append(service)
         return service
 

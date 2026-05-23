@@ -139,8 +139,6 @@ class _ReaderListener(fastdds.DataReaderListener):
         data = self._msg_ctor()
         method = getattr(reader, "take_next_sample", None)
         if method is None:
-            method = getattr(reader, "read_next_sample", None)
-        if method is None:
             return None
 
         try:
