@@ -1,3 +1,4 @@
+from ._callback_queue import CallbackQueue
 from .publisher import Publisher
 from .subscription import Subscription
 from .qos import QoSProfile
@@ -15,7 +16,8 @@ class Service:
         self._service_name = service_name
         self._callback = callback
         self._prefix = topic_prefix
-        self._enqueue_cb = enqueue_cb or (lambda cb, msg: cb(msg))
+        self._callback_queue = None if enqueue_cb is not None else CallbackQueue()
+        self._enqueue_cb = enqueue_cb or self._callback_queue.enqueue
 
         req_cls, res_cls, _req_pubsub, _res_pubsub = resolve_service_type(service_type)
         self._request_cls = req_cls
@@ -81,6 +83,10 @@ class Service:
             except Exception:
                 pass
             self._response_pub = None
+
+        if self._callback_queue is not None:
+            self._callback_queue.close()
+            self._callback_queue = None
 
 
 def _service_topics(name: str, prefix: str = ""):
