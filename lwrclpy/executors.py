@@ -195,8 +195,12 @@ def spin(node, executor: Optional[Executor] = None):
 
 
 def spin_once(node, timeout_sec: Optional[float] = None):
-    _run_callbacks_for_node(node)
-    if timeout_sec:
+    ran_callbacks = _run_callbacks_for_node(node)
+    if ran_callbacks:
+        return
+    if timeout_sec is None:
+        time.sleep(0.001)
+    elif timeout_sec > 0:
         time.sleep(min(timeout_sec, 0.001))
 
 
@@ -238,6 +242,7 @@ def _run_callbacks_for_node(node):
         callbacks = []
     for cb, msg in callbacks:
         _invoke_callback(cb, msg)
+    return bool(callbacks)
 
 
 def _invoke_callback(cb, msg):
