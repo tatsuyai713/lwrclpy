@@ -26,6 +26,9 @@ class CallbackQueue:
         for item in iter(self._queue.get, self._stop):
             callback, msg = item
             try:
-                callback(msg)
+                if msg is None:
+                    callback()
+                else:
+                    callback(msg)
             except Exception:
                 pass
