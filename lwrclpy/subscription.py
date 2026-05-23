@@ -190,10 +190,15 @@ class _ReaderListener(fastdds.DataReaderListener):
         if self._take_queue is None:
             return
         try:
-            queued_data = _clone_raw_message(data, self._msg_ctor) if self._raw_mode else clone_message(data, self._msg_ctor)
             expose_fn = self._expose_fn
-            if expose_fn is not None:
-                expose_fn(queued_data)
+            if self._polling_only:
+                queued_data = data
+                if expose_fn is not None:
+                    expose_fn(queued_data)
+            else:
+                queued_data = _clone_raw_message(data, self._msg_ctor) if self._raw_mode else clone_message(data, self._msg_ctor)
+                if expose_fn is not None:
+                    expose_fn(queued_data)
             queued_info = MessageInfo(sample_info)
         except Exception:
             return
