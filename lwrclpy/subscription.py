@@ -119,6 +119,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._reader_lock = reader_lock
         self._pending_lock = threading.Lock()
         self._callback_pending = False
+        self._reschedule_requested = False
         # Cache the import once at construction time instead of every callback
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._has_callback = callable(user_cb)
@@ -128,14 +129,16 @@ class _ReaderListener(fastdds.DataReaderListener):
         """Called when subscription matches/unmatches with a publisher."""
         pass
 
-    def _take_one_from_reader(self, reader):
+    def _read_or_take_one_from_reader(self, reader, *, consume: bool):
         info = fastdds.SampleInfo()
         data = self._msg_ctor()
+        method_name = "take_next_sample" if consume else "read_next_sample"
+        method = getattr(reader, method_name)
 
         try:
-            rc = reader.take_next_sample(data, info)
+            rc = method(data, info)
         except TypeError:
-            rc = reader.take_next_sample(info, data)
+            rc = method(info, data)
         except Exception:
             return None
 
@@ -150,14 +153,20 @@ class _ReaderListener(fastdds.DataReaderListener):
                 pass
         return data, MessageInfo(info)
 
+    def _take_one_from_reader(self, reader):
+        return self._read_or_take_one_from_reader(reader, consume=True)
+
+    def _read_one_from_reader(self, reader):
+        return self._read_or_take_one_from_reader(reader, consume=False)
+
     def _drain_reader_callbacks(self, reader):
         try:
             while True:
                 if self._reader_lock is not None:
                     with self._reader_lock:
-                        result = self._take_one_from_reader(reader)
+                        result = self._read_one_from_reader(reader)
                 else:
-                    result = self._take_one_from_reader(reader)
+                    result = self._read_one_from_reader(reader)
                 if result is None:
                     break
                 data, msg_info = result
@@ -169,17 +178,28 @@ class _ReaderListener(fastdds.DataReaderListener):
                 except Exception:
                     pass
         finally:
+            schedule_again = False
             with self._pending_lock:
-                self._callback_pending = False
+                if self._reschedule_requested:
+                    self._reschedule_requested = False
+                    schedule_again = True
+                else:
+                    self._callback_pending = False
+            if schedule_again:
+                self._enqueue_drain(reader)
+
+    def _enqueue_drain(self, reader):
+        self._enqueue_cb(lambda _msg=None, listener=self, reader=reader: listener._drain_reader_callbacks(reader), None)
     
     def on_data_available(self, reader):
         if not self._has_callback:
             return
         with self._pending_lock:
             if self._callback_pending:
+                self._reschedule_requested = True
                 return
             self._callback_pending = True
-        self._enqueue_cb(lambda listener=self, reader=reader: listener._drain_reader_callbacks(reader), None)
+        self._enqueue_drain(reader)
 
 
 def _callback_accepts_message_info(callback) -> bool:
@@ -257,8 +277,8 @@ class Subscription:
         """Take messages directly from the DataReader (polling mode).
         
         Returns a list of (message, message_info) tuples.
-        Callback subscriptions and manual polling consume from the same reader;
-        whichever path takes a sample first owns it.
+        Callback delivery reads samples without removing them; take() removes
+        samples from the reader cache for manual polling.
         """
         if max_count <= 0:
             return []
