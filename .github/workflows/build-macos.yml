@@ -18,8 +18,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Checkout submodules
+        run: |
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git submodule sync --recursive
+          for attempt in 1 2 3; do
+            if git submodule update --init --recursive --depth=1 --jobs=1; then
+              exit 0
+            fi
+            echo "Submodule checkout failed on attempt ${attempt}; retrying..."
+            git submodule deinit --all --force || true
+          done
+          git submodule update --init --recursive --depth=1 --jobs=1
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
