@@ -168,14 +168,10 @@ fi
 echo "[INFO] Vendoring Fast DDS native libs"
 VEN_LIB_DIR="${STAGING_ROOT}/lwrclpy/_vendor/lib"
 mkdir -p "${VEN_LIB_DIR}"
-install -m 0644 "${FASTDDS_PREFIX}/lib/libfastdds.dylib" "${VEN_LIB_DIR}/"
-install -m 0644 "${FASTDDS_PREFIX}/lib/libfastcdr.dylib" "${VEN_LIB_DIR}/"
-
-# Create versioned symlinks for libfastdds and libfastcdr
-echo "[INFO] Creating versioned symlinks for Fast DDS libraries"
-(cd "${VEN_LIB_DIR}" && ln -sf libfastdds.dylib libfastdds.3.2.dylib)
-(cd "${VEN_LIB_DIR}" && ln -sf libfastcdr.dylib libfastcdr.1.1.dylib)
-(cd "${VEN_LIB_DIR}" && ln -sf libfastcdr.dylib libfastcdr.2.dylib)
+for f in "${FASTDDS_PREFIX}/lib"/libfastdds*.dylib "${FASTDDS_PREFIX}/lib"/libfastcdr*.dylib; do
+  [[ -f "${f}" ]] || continue
+  install -m 0644 "${f}" "${VEN_LIB_DIR}/$(basename "${f}")"
+done
 
 # Bundle tinyxml2 if present (Homebrew dependency required by Fast DDS)
 echo "[INFO] Vendoring tinyxml2 (if available)"
