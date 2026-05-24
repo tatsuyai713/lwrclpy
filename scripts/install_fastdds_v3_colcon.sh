@@ -75,11 +75,11 @@ _install_cmake3() {
 }
 _install_cmake3
 
-# Java is required to build Fast-DDS-Gen (gradle)
-# Prefer OpenJDK 11 for widest compatibility with older Gradle wrappers.
-if ! dpkg -l | grep -qw openjdk-11-jre || ! dpkg -l | grep -qw openjdk-11-jdk; then
+# Java is required to build Fast-DDS-Gen (gradle). Fast-DDS-Gen v4.3.0 uses
+# Gradle 9.x, which requires Java 17 or newer.
+if ! dpkg -l | grep -qw openjdk-17-jre || ! dpkg -l | grep -qw openjdk-17-jdk; then
   sudo apt-get update
-  sudo apt-get install -y openjdk-11-jre openjdk-11-jdk
+  sudo apt-get install -y openjdk-17-jre openjdk-17-jdk
 fi
 
 # SWIG 4.* is recommended (avoid 4.2+ unless you have patches)
@@ -110,7 +110,7 @@ detect_java_home() {
   javac_path="$(command -v javac || true)"
   [[ -n "${javac_path}" ]] || return 1
   javac_path="$(readlink -f "${javac_path}" 2>/dev/null || echo "${javac_path}")"
-  # /usr/lib/jvm/java-11-openjdk-<arch>/bin/javac -> /usr/lib/jvm/java-11-openjdk-<arch>
+  # /usr/lib/jvm/java-17-openjdk-<arch>/bin/javac -> /usr/lib/jvm/java-17-openjdk-<arch>
   echo "${javac_path%/bin/javac}"
 }
 
@@ -118,9 +118,9 @@ JAVA_HOME_DETECTED="$(detect_java_home || true)"
 if [[ -z "${JAVA_HOME_DETECTED}" ]] || [[ ! -d "${JAVA_HOME_DETECTED}" ]]; then
   warn "Could not auto-detect JAVA_HOME via javac; falling back to common paths."
   case "${ARCH}" in
-    amd64)  JAVA_HOME_DETECTED="/usr/lib/jvm/java-11-openjdk-amd64" ;;
-    arm64)  JAVA_HOME_DETECTED="/usr/lib/jvm/java-11-openjdk-arm64" ;;
-    *)      JAVA_HOME_DETECTED="/usr/lib/jvm/java-11-openjdk" ;;
+    amd64)  JAVA_HOME_DETECTED="/usr/lib/jvm/java-17-openjdk-amd64" ;;
+    arm64)  JAVA_HOME_DETECTED="/usr/lib/jvm/java-17-openjdk-arm64" ;;
+    *)      JAVA_HOME_DETECTED="/usr/lib/jvm/java-17-openjdk" ;;
   esac
 fi
 export JAVA_HOME="${JAVA_HOME_DETECTED}"
