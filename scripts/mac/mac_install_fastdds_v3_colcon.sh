@@ -46,7 +46,7 @@ ASIO_INCLUDE_DIR="${ASIO_INCLUDE_DIR:-${BREW_PREFIX}/include}"
 
 log "Installing build deps via Homebrew…"
 brew update
-brew install ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio
+brew install ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio openjdk@17
 
 # ===== cmake 3.x (avoid 4.x series) =====
 # Pin cmake to the latest 3.x to avoid incompatibilities with Fast DDS build scripts.
@@ -62,21 +62,31 @@ _install_cmake3_mac() {
     brew link --overwrite cmake@3 2>/dev/null || true
     return 0
   fi
-  # Fallback: install via pip (pinned to <4)
-  log "cmake 3.x not available via Homebrew; installing via pip…"
-  pip install 'cmake>=3.16,<4'
+  # Fallback: install via an isolated venv (Homebrew Python is externally managed).
+  log "cmake 3.x not available via Homebrew; installing via local venv…"
+  local cmake_venv="${SCRIPT_DIR}/venv"
+  "${PYBIN}" -m venv "${cmake_venv}"
+  "${cmake_venv}/bin/python" -m pip install -U pip wheel
+  "${cmake_venv}/bin/python" -m pip install 'cmake>=3.16,<4'
+  export PATH="${cmake_venv}/bin:${PATH}"
 }
 _install_cmake3_mac
 
-# Ensure Python build dependencies
-"${PYBIN}" -m pip install --upgrade pip setuptools wheel || true
-
 # Java (for Fast-DDS-Gen)
-if ! /usr/libexec/java_home -V >/dev/null 2>&1; then
-  brew install openjdk@17
-  sudo ln -sf "${BREW_PREFIX}/opt/openjdk@17/libexec/openjdk.jdk" /Library/Java/JavaVirtualMachines/openjdk-17.jdk || true
-fi
-export JAVA_HOME="$("/usr/libexec/java_home" -v 17 2>/dev/null || /usr/libexec/java_home)"
+detect_java17_home() {
+  local brew_java_prefix
+  brew_java_prefix="$(brew --prefix openjdk@17 2>/dev/null || true)"
+  local brew_java_home="${brew_java_prefix}/libexec/openjdk.jdk/Contents/Home"
+  if [[ -x "${brew_java_home}/bin/java" ]]; then
+    echo "${brew_java_home}"
+    return 0
+  fi
+  /usr/libexec/java_home -v 17 2>/dev/null || return 1
+}
+export JAVA_HOME="$(detect_java17_home)"
+export PATH="${JAVA_HOME}/bin:${PATH}"
+log "Using JAVA_HOME=${JAVA_HOME}"
+java -version
 
 need git; need curl; need "${PYBIN}"
 
@@ -190,9 +200,11 @@ GEN_SRC_DIR="$(find "${WS}/src" -maxdepth 2 -type d \( -iname 'fastddsgen' -o -i
 [[ -n "${GEN_SRC_DIR}" ]] || die "Fast-DDS-Gen repo not found under ${WS}/src"
 log "Building fastddsgen from: ${GEN_SRC_DIR}"
 
-# Ensure Java 17 is used for Gradle (Gradle 7.6 doesn't support Java 21+)
-export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)"
+# Ensure Java 17 is used for Gradle.
+export JAVA_HOME="$(detect_java17_home)"
+export PATH="${JAVA_HOME}/bin:${PATH}"
 log "Using JAVA_HOME=${JAVA_HOME}"
+java -version
 
 sudo mkdir -p "${GEN_PREFIX}"
 pushd "${GEN_SRC_DIR}" >/dev/null
@@ -274,7 +286,7 @@ colcon build \
 cat <<'EOF'
 
 ========================================
-✅ Installation completed (macOS, no patch; pinned standalone Asio 1.12.x)
+✅ Installation completed (macOS, Homebrew Asio + Java 17)
 
 # Add these to your shell (~/.zshrc recommended)
 export PATH="$PATH:__GEN_PREFIX__/bin"
@@ -291,10 +303,9 @@ print("KEEP_* symbols:", [n for n in dir(fastdds) if "KEEP" in n][:6], "…")
 PY
 
 # Notes:
-# - We DO NOT install Homebrew 'asio'. We pin standalone Asio to 1.12.x and put its include first via -I.
-# - If you previously installed 'asio' via Homebrew, it won't hurt because -I${ASIO_DIR}/include wins over -isystem /opt/homebrew/include.
+# - Fast DDS v3.6.x needs modern standalone Asio APIs, so Homebrew 'asio' is used via -I.
+# - Fast-DDS-Gen v4.3.x needs Java 17; this script prefers Homebrew openjdk@17 even if java_home sees an older JDK.
 # - If you need SHM transport, rebuild with -DFASTDDS_SHM_TRANSPORT_DEFAULT=ON after confirming stability.
 # - If you experimented earlier, clean: rm -rf build install log && re-run this script.
-# - Change Asio version with:  --asio-ver 1.12.2  (default) / 1.12.1 etc.
 ========================================
 EOF | sed "s|__GEN_PREFIX__|${GEN_PREFIX}|g; s|__PREFIX_V3__|${PREFIX_V3}|g"
