@@ -177,10 +177,12 @@ fi
 GEN_SRC_DIR="$(find "${WS}/src" -maxdepth 2 -type d \( -iname 'fastddsgen' -o -iname 'Fast-DDS-Gen' \) | head -n 1 || true)"
 [[ -n "${GEN_SRC_DIR}" ]] || die "Fast-DDS-Gen repo not found under ${WS}/src (check your repos file)"
 log "Building fastddsgen from: ${GEN_SRC_DIR}"
+sudo mkdir -p "${GEN_PREFIX}"
+sudo chown "$(id -u)":"$(id -g)" "${GEN_PREFIX}"
 
 pushd "${GEN_SRC_DIR}" >/dev/null
   ./gradlew --no-daemon clean assemble
-  sudo JAVA_HOME="${JAVA_HOME}" ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
+  ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
 popd >/dev/null
 
 # Make fastddsgen available in PATH for this shell
