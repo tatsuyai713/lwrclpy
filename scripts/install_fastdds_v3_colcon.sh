@@ -4,6 +4,8 @@
 # Tested idea: Ubuntu 22.04/24.04 on both arches.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ===== Defaults (override via env or CLI flags) =====
 PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"         # install/merge-install prefix for the v3 runtime
 GEN_PREFIX="${GEN_PREFIX:-/opt/fast-dds-gen-v3}"   # installation prefix for fastddsgen launcher
@@ -11,6 +13,8 @@ WS="${WS:-$HOME/fastdds_python_ws}"                # colcon workspace
 REPOS_FILE="${REPOS_FILE:-$WS/fastdds_python.repos}"
 PYBIN="${PYBIN:-python3}"                          # Python used to create the venv
 JOBS="${JOBS:-$(command -v nproc >/dev/null && nproc || echo 4)}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-${JOBS}}"
+export MAKEFLAGS="${MAKEFLAGS:--j${JOBS}}"
 
 # ===== CLI flags =====
 while [[ $# -gt 0 ]]; do
@@ -145,6 +149,12 @@ fi
 
 log "Importing repos into src/…"
 vcs import --recursive src < "${REPOS_FILE}"
+
+LOAN_HELPER_PATCH="${SCRIPT_DIR}/patch_fastdds_python_loan_helpers.py"
+if [[ -f "${LOAN_HELPER_PATCH}" ]]; then
+  log "Patching Fast-DDS-python SWIG loan helpers…"
+  "${PYBIN}" "${LOAN_HELPER_PATCH}" "${WS}/src" || true
+fi
 
 # ===== Build & install fastddsgen (Gradle) into ${GEN_PREFIX} =====
 GEN_SRC_DIR="$(find "${WS}/src" -maxdepth 2 -type d \( -iname 'fastddsgen' -o -iname 'Fast-DDS-Gen' \) | head -n 1 || true)"

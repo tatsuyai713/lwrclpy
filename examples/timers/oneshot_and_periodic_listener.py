@@ -6,7 +6,7 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.Node("timer_combo_listener")
+    node = rclpy.create_node("timer_combo_listener")
 
     def on_msg(msg: String):
         print(f"[combo recv] {msg.data}")

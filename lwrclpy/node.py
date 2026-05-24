@@ -407,7 +407,7 @@ class Node:
         resolved_topic = self._resolve_topic_name(topic)
         topic_obj, owned = self._create_topic(resolved_topic, type_name)
         self._topics[resolved_topic] = (topic_obj, owned)
-        pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls)
+        pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls, msg_module=_mod, pubsub_cls=_pubsub_cls)
         self._publishers.append(pub)
         return pub
 
@@ -454,6 +454,7 @@ class Node:
             self._enqueue_callback,
             raw=raw,
             event_callbacks=event_callbacks,
+            pubsub_cls=_pubsub_cls,
         )
         self._subscriptions.append(sub)
         return sub

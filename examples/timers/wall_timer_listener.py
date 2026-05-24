@@ -6,7 +6,7 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.Node("wall_timer_listener")
+    node = rclpy.create_node("wall_timer_listener")
 
     def on_msg(msg: String):
         print(f"[timer recv] {msg.data}")

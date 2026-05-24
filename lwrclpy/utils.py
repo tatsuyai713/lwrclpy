@@ -101,6 +101,20 @@ def _matched_handle_count(method, handles_factory=None) -> int | None:
     return None
 
 
+def _pubsub_type_supports_data_sharing(pubsub_cls) -> bool:
+    """Return whether a generated PubSubType is known to support DataSharing."""
+    if pubsub_cls is None:
+        return False
+    try:
+        pubsub_type = pubsub_cls()
+        is_bounded = getattr(pubsub_type, "is_bounded", None)
+        if callable(is_bounded) and not bool(is_bounded()):
+            return False
+    except Exception:
+        return True
+    return True
+
+
 def _normalize_namespace(ns: str) -> str:
     """Normalize namespace per ROS 2 rules (leading slash, no trailing slash except root)."""
     if not ns:

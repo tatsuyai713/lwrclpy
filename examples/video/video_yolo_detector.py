@@ -5,9 +5,9 @@ import argparse
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from ultralytics import YOLO
-from lwrclpy.qos import QoSProfile
 
 
 def default_device() -> str:
@@ -45,7 +45,7 @@ class VideoYoloDetector(Node):
         self.device = device
         if self.device != "cpu":
             self.model.to(self.device)
-        sensor_qos = QoSProfile.sensor_data()
+        sensor_qos = qos_profile_sensor_data
         self.subscription = self.create_subscription(Image, in_topic, self.handle_frame, sensor_qos)
         self.publisher = self.create_publisher(Image, out_topic, sensor_qos)
         self._count = 0
@@ -64,7 +64,7 @@ class VideoYoloDetector(Node):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run YOLO on sensor_msgs/Image over lwrclpy")
+    parser = argparse.ArgumentParser(description="Run YOLO on sensor_msgs/Image over rclpy")
     parser.add_argument(
         "--input-topic",
         "-i",

@@ -8,7 +8,7 @@ from std_srvs.srv import SetBool
 
 def main():
     rclpy.init()
-    node = rclpy.Node("set_bool_client")
+    node = rclpy.create_node("set_bool_client")
     client = node.create_client(SetBool, "set_flag")
     
     # Wait for DDS discovery

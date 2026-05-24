@@ -2,7 +2,6 @@
 """Subscription with MessageInfo demonstration.
 
 This example shows:
-- take() and take_one() for polling-style subscription
 - MessageInfo for accessing message metadata
 - Source timestamp and receive timestamp
 - Publisher GUID and sequence numbers
@@ -10,7 +9,6 @@ This example shows:
 
 import time
 import rclpy
-from lwrclpy.subscription import MessageInfo
 from std_msgs.msg import String
 
 
@@ -20,12 +18,23 @@ def main():
     logger = node.get_logger()
     
     logger.info("=== MessageInfo Demo ===\n")
+    received = []
+
+    def on_message(msg: String, info=None):
+        received.append((msg, info))
+        logger.info(f"Received: {msg.data}")
+        if info:
+            logger.info(f"  Source timestamp: {getattr(info, 'source_timestamp', None)}")
+            logger.info(f"  Received timestamp: {getattr(info, 'received_timestamp', None)}")
+            logger.info(f"  Publisher GID: {getattr(info, 'publisher_gid', None)}")
+            logger.info(f"  Publication sequence: {getattr(info, 'publication_sequence_number', None)}")
+        else:
+            logger.info("  (MessageInfo not available)")
     
     # Create publisher
     pub = node.create_publisher(String, "/info_demo", 10)
     
-    # Create subscription
-    sub = node.create_subscription(String, "/info_demo", lambda m: None, 10)
+    sub = node.create_subscription(String, "/info_demo", on_message, 10)
     
     # Allow time for discovery
     time.sleep(0.5)
@@ -42,30 +51,12 @@ def main():
         logger.info(f"Published: {msg.data}")
         time.sleep(0.1)
     
-    # Process to ensure messages are received
     for _ in range(10):
         rclpy.spin_once(node, timeout_sec=0.1)
-    
-    logger.info("\n--- Using take_one() ---")
-    
-    # Take single message with info
-    result = sub.take_one()
-    if result:
-        msg, info = result
-        logger.info(f"Received: {msg.data}")
-        
-        if info:
-            logger.info(f"  Source timestamp: {info.source_timestamp}")
-            logger.info(f"  Received timestamp: {info.received_timestamp}")
-            logger.info(f"  Publisher GUID: {info.publisher_guid}")
-            logger.info(f"  Sequence number: {info.sequence_number}")
-            logger.info(f"  Sample identity: {info.sample_identity}")
-        else:
-            logger.info("  (MessageInfo not available)")
-    else:
-        logger.info("No message available")
-    
-    logger.info("\n--- Using take() for Multiple Messages ---")
+
+    logger.info(f"\nReceived {len(received)} messages via callback")
+
+    logger.info("\n--- More Messages ---")
     
     # Publish more
     for i in range(3):
@@ -76,15 +67,8 @@ def main():
     time.sleep(0.2)
     for _ in range(5):
         rclpy.spin_once(node, timeout_sec=0.1)
-    
-    # Take up to 10 messages at once
-    messages = sub.take(max_count=10)
-    logger.info(f"Took {len(messages)} messages:")
-    
-    for i, (msg, info) in enumerate(messages):
-        logger.info(f"  [{i}] {msg.data}")
-        if info and info.sequence_number is not None:
-            logger.info(f"      seq={info.sequence_number}")
+
+    logger.info(f"Total received: {len(received)}")
     
     logger.info("\n--- MessageInfo Fields Explanation ---")
     logger.info("""
@@ -92,9 +76,9 @@ def main():
     
     - source_timestamp: When the message was published
     - received_timestamp: When the message was received by subscriber
-    - publisher_guid: Unique identifier of the publisher
-    - sequence_number: Sequence number from the publisher
-    - sample_identity: Full sample identity from DDS
+    - publisher_gid: Unique identifier of the publisher
+    - publication_sequence_number: Sequence number from the publisher
+    - reception_sequence_number: Sequence number observed by the subscriber
     - is_valid: Whether the sample is valid data
     
     Note: Some fields may be None depending on QoS settings

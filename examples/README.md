@@ -32,6 +32,8 @@ examples/
 ├── guard_condition/      # Guard Conditionトリガー
 │   ├── trigger_guard_condition.py
 │   └── guard_condition_advanced.py
+├── lwrclpy_extensions/   # lwrclpy独自拡張API
+│   └── zero_copy_extension_publisher.py
 ├── logging/              # ロギングレベルとパターン
 │   └── logging_demo.py
 ├── node/                 # 包括的なノード使用例
@@ -44,7 +46,7 @@ examples/
 │   ├── string/           # 基本的な文字列メッセージ
 │   ├── sensor_qos/       # センサー最適化QoS
 │   ├── ml/               # 機械学習統合
-│   ├── zero_copy/        # loan_messageによるゼロコピー
+│   ├── zero_copy/        # 標準publish APIでのゼロコピー向け通信
 │   ├── typed_messages/   # Geometry, Sensor, Navメッセージ
 │   ├── rate_publisher.py
 │   ├── multi_pubsub.py
@@ -99,13 +101,14 @@ python examples/<category>/<example_name>.py
 | QoSプロファイル | `qos/qos_profiles_demo.py` | Deadline, Lifespan, Liveliness含む全QoS |
 | Reliable QoS | `qos/reliable_pubsub.py` | Transient Local durabilityでの確実な配信 |
 | Best Effort QoS | `qos/best_effort_pubsub.py` | 高周波データ向けBest Effort |
-| ゼロコピー | `pubsub/zero_copy/` | 大きなメッセージの効率的な送信 |
+| ゼロコピー | `pubsub/zero_copy/` | 標準rclpy APIでの大きなメッセージの効率的な送信 |
 | Service | `services/set_bool/` | リクエスト-レスポンスパターン |
 | Trigger Service | `services/trigger/` | 空リクエストによるアクション起動 |
 | Action | `actions/` | フィードバック付き長時間実行タスク |
 | Parameter | `parameters/` | ノードパラメータの宣言とアクセス |
 | Guard Condition | `guard_condition/` | スレッド間シグナリングと同期 |
 | Launch | `launch/` | ROS 2互換のLaunchシステム |
+| lwrclpy拡張 | `lwrclpy_extensions/` | ROS 2 rclpy互換範囲外のlwrclpy独自API |
 
 ### ノードパターン
 
@@ -155,14 +158,15 @@ lwrclpyは標準的なROS 2 QoSプロファイルをすべてサポート：
 
 ---
 
-## ⚡ ゼロコピーPublishing
+## ⚡ ゼロコピー向けPublishing
 
-大きなメッセージには`loan_message()`でコピーを回避：
+標準の`publish(msg)` APIを使います。lwrclpyは利用可能な場合にmiddlewareの
+DataSharing/SHMを内部で有効化し、同じサンプルはROS 2 rclpyでも有効です。
 
 ```python
-loaned_msg = publisher.loan_message()
-loaned_msg.data = large_data
-publisher.publish(loaned_msg)
+msg = Image()
+msg.data = large_data
+publisher.publish(msg)
 ```
 
 ---

@@ -7,7 +7,7 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.Node("single_spin_loopback")
+    node = rclpy.create_node("single_spin_loopback")
     pub = node.create_publisher(String, "chatter", 10)
     count = {"n": 0}
 
@@ -29,7 +29,7 @@ def main():
             timer.cancel()
             rclpy.shutdown()
 
-    timer = node.create_wall_timer(0.2, on_timer)
+    timer = node.create_timer(0.2, on_timer)
     try:
         rclpy.spin(node)
     finally:

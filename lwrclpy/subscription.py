@@ -12,7 +12,12 @@ import os
 import threading
 from .qos import QoSProfile
 from .message_utils import expose_callable_fields
-from .utils import _matched_handle_count, _matched_status_count, _retcode_is_ok
+from .utils import (
+    _matched_handle_count,
+    _matched_status_count,
+    _pubsub_type_supports_data_sharing,
+    _retcode_is_ok,
+)
 
 
 _MAX_CALLBACKS_PER_DRAIN = 16
@@ -32,20 +37,40 @@ def _sample_info_attr(sample_info, name, default=None):
         return default
 
 
-def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
+def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> bool:
     """Prefer/force data sharing on the reader QoS when the API exists."""
     if os.environ.get("LWRCLPY_NO_DATASHARING") == "1":
-        return
+        return False
     try:
         if hasattr(rq, "data_sharing"):
             ds = rq.data_sharing()
-            # Prefer explicit ON for internal zero-copy; fallback to automatic.
+            shared_dir = os.environ.get("LWRCLPY_DATASHARING_DIR", "")
             if hasattr(ds, "on"):
-                ds.on()  # Force data-sharing if supported
-            elif hasattr(ds, "automatic"):
+                try:
+                    if shared_dir:
+                        ds.on(shared_dir)
+                    else:
+                        ds.on()
+                except TypeError:
+                    ds.on()
+                return True
+            if hasattr(ds, "automatic"):
                 ds.automatic()
+                return False
     except Exception:
-        # Silently ignore if this build doesn't expose the API
+        pass
+    return False
+
+
+def _disable_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> None:
+    try:
+        if hasattr(rq, "data_sharing"):
+            ds = rq.data_sharing()
+            if hasattr(ds, "automatic"):
+                ds.automatic()
+            elif hasattr(ds, "off"):
+                ds.off()
+    except Exception:
         pass
 
 
@@ -244,7 +269,7 @@ class Subscription:
     コールバックは DDS リスナーで受信し、Executor にキューイングする。"""
 
     def __init__(self, participant, topic, qos: QoSProfile, callback, msg_ctor, enqueue_cb, 
-                 *, raw: bool = False, event_callbacks=None):
+                 *, raw: bool = False, event_callbacks=None, pubsub_cls=None):
         self._participant = participant
         self._topic = topic
         self._callback = callback
@@ -267,9 +292,10 @@ class Subscription:
         self._subscriber.get_default_datareader_qos(rq)
         qos.apply_to_reader(rq)
 
-        # >>> Zero-copy–friendly hint: prefer DataSharing if the API exists
-        _force_data_sharing_on_reader(rq)
-        # <<<
+        self._data_sharing_enabled = (
+            _pubsub_type_supports_data_sharing(pubsub_cls)
+            and _force_data_sharing_on_reader(rq)
+        )
 
         # Listener enqueue to executor queue
         self._listener = _ReaderListener(
@@ -290,6 +316,17 @@ class Subscription:
                 reader.set_listener(self._listener)
             except AttributeError:
                 pass
+        if reader is None and self._data_sharing_enabled:
+            _disable_data_sharing_on_reader(rq)
+            self._data_sharing_enabled = False
+            try:
+                reader = self._subscriber.create_datareader(self._topic, rq, self._listener)
+            except TypeError:
+                reader = self._subscriber.create_datareader(self._topic, rq)
+                try:
+                    reader.set_listener(self._listener)
+                except AttributeError:
+                    pass
 
         if reader is None:
             raise RuntimeError("Failed to create DataReader")
@@ -335,6 +372,16 @@ class Subscription:
             if count is not None:
                 return count
         return 0
+
+    @property
+    def data_sharing_enabled(self) -> bool:
+        """Return whether Fast DDS DataSharing was explicitly enabled."""
+        return self._data_sharing_enabled
+
+    @property
+    def zero_copy_enabled(self) -> bool:
+        """Return whether lwrclpy enabled its zero-copy transport path."""
+        return self._data_sharing_enabled
 
     def destroy(self) -> None:
         """Mark as destroyed. Fast DDS will clean up resources automatically."""

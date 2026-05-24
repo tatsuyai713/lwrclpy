@@ -107,6 +107,33 @@ if not re.search(r'%extend\s+eprosima::fastdds::rtps::SerializedPayload_t', txt)
     else:
         txt = txt.rstrip() + "\n" + extend + "\n"
 
+# 5b) Add address conversion helpers for generated message classes.
+#     These are used by lwrclpy's optional loaned-message extension to wrap a
+#     middleware-loaned sample address back into the concrete SWIG message type.
+msg_match = re.search(r'Binding for class\s+([A-Za-z_][A-Za-z_0-9:]*)', txt)
+if msg_match and "/* __LWRCLPY_LOAN_ADDR_HELPERS__ */" not in txt:
+    fqcn = msg_match.group(1)
+    class_name = fqcn.split("::")[-1]
+    helper = f'''
+/* __LWRCLPY_LOAN_ADDR_HELPERS__ */
+%inline %{{
+uintptr_t lwrclpy_{class_name}_addr({fqcn}* msg)
+{{
+    return reinterpret_cast<uintptr_t>(msg);
+}}
+{fqcn}* lwrclpy_{class_name}_from_addr(uintptr_t addr)
+{{
+    return reinterpret_cast<{fqcn}*>(addr);
+}}
+%}}
+'''
+    include_pat = rf'(?m)^\s*%include\s+"{re.escape(class_name)}\.hpp"\s*$'
+    m = re.search(include_pat, txt)
+    if m:
+        txt = txt[:m.end()] + "\n" + helper + txt[m.end():]
+    else:
+        txt = txt.rstrip() + "\n" + helper + "\n"
+
 # 6) Clean up any known bad redefinition blocks (safe pattern).
 #    E.g., if someone injected a hand-written "struct SerializedPayload_t { … }" block into the .i, remove it.
 txt = re.sub(

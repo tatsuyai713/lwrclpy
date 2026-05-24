@@ -6,7 +6,7 @@ from std_srvs.srv import SetBool
 
 def main():
     rclpy.init()
-    node = rclpy.Node("set_bool_server")
+    node = rclpy.create_node("set_bool_server")
     node.get_logger().info("Starting SetBool server on /set_flag")
 
     def handle_set_bool(request: SetBool.Request, response: SetBool.Response):

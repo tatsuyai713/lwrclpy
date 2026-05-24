@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal Fibonacci action client using the lwrclpy ActionClient."""
+"""Minimal Fibonacci action client using the rclpy ActionClient API."""
 
 import time
 import rclpy

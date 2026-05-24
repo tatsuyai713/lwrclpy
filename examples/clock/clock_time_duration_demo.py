@@ -4,12 +4,14 @@
 This example shows:
 - Different clock types (SYSTEM_TIME, STEADY_TIME, ROS_TIME)
 - Time and Duration arithmetic
-- Simulated time override for testing
 - Time comparisons
 """
 
 import rclpy
-from lwrclpy.clock import Clock, ClockType, Time, Duration
+import time
+from rclpy.clock import Clock, ClockType
+from rclpy.duration import Duration
+from rclpy.time import Time
 
 
 def main():
@@ -75,33 +77,16 @@ def main():
     logger.info(f"d1 / 2 = {d1 / 2}")
     logger.info(f"d1 / d2 = {d1 / d2:.2f}")
     
-    # 7. Simulated time (ROS Time override)
-    logger.info("\n--- Simulated Time (ROS Time) ---")
+    # 7. ROS time clock
+    logger.info("\n--- ROS Time Clock ---")
     ros_clock = Clock(clock_type=ClockType.ROS_TIME)
-    
-    logger.info(f"ROS time active: {ros_clock.ros_time_is_active}")
-    
-    # Set simulated time
-    sim_time = Time(seconds=1000, nanoseconds=0, clock_type=ClockType.ROS_TIME)
-    ros_clock.set_ros_time_override(sim_time)
-    
-    logger.info(f"ROS time active after override: {ros_clock.ros_time_is_active}")
-    logger.info(f"Simulated time: {ros_clock.now()}")
-    
-    # Advance simulated time
-    new_sim_time = Time(seconds=1005, nanoseconds=0, clock_type=ClockType.ROS_TIME)
-    ros_clock.set_ros_time_override(new_sim_time)
-    logger.info(f"Advanced simulated time: {ros_clock.now()}")
-    
-    # Clear override
-    ros_clock.clear_ros_time_override()
-    logger.info(f"After clearing override, ROS time active: {ros_clock.ros_time_is_active}")
+    logger.info(f"ROS clock now: {ros_clock.now()}")
     
     # 8. Sleep demonstration
     logger.info("\n--- Sleep Demo ---")
-    logger.info("Sleeping for 0.5 seconds using sleep_for()...")
+    logger.info("Sleeping for 0.5 seconds...")
     start = system_clock.now()
-    system_clock.sleep_for(Duration(seconds=0, nanoseconds=500_000_000))
+    time.sleep(0.5)
     end = system_clock.now()
     elapsed = end - start
     logger.info(f"Actual sleep duration: {elapsed.nanoseconds / 1e9:.3f} seconds")

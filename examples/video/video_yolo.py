@@ -3,14 +3,14 @@
 import argparse
 
 import cv2
-import lwrclpy
 import numpy as np
 import torch
-from lwrclpy.executors import SingleThreadedExecutor
-from lwrclpy.node import Node
+import rclpy
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from ultralytics import YOLO
-from lwrclpy.qos import QoSProfile
 
 
 def default_device() -> str:
@@ -57,7 +57,7 @@ class VideoYoloNode(Node):
         self.device = device
         if self.device:
             self.model.to(self.device)
-        sensor_qos = QoSProfile.sensor_data()
+        sensor_qos = qos_profile_sensor_data
         self.image_pub = self.create_publisher(Image, "video/image_raw", sensor_qos)
         self.annotated_pub = self.create_publisher(Image, "video/image_annotated", sensor_qos)
         self.timer = self.create_timer(1.0 / publish_rate, self.publish_frame)
@@ -80,7 +80,7 @@ class VideoYoloNode(Node):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Publish video frames and YOLO detections over lwrclpy")
+    parser = argparse.ArgumentParser(description="Publish video frames and YOLO detections over rclpy")
     parser.add_argument(
         "--video",
         "-v",
@@ -108,14 +108,14 @@ def main():
     )
     args = parser.parse_args()
 
-    lwrclpy.init()
+    rclpy.init()
     try:
         node = VideoYoloNode(video_path=args.video, model_path=args.model, device=args.device, publish_rate=args.rate)
         executor = SingleThreadedExecutor()
         executor.add_node(node)
         executor.spin()
     finally:
-        lwrclpy.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Demonstration of asyncio integration with lwrclpy Future.
+"""Demonstration of asyncio integration with rclpy Future.
 
 This example shows:
 - Using Future with async/await
@@ -10,7 +10,7 @@ This example shows:
 
 import asyncio
 import rclpy
-from lwrclpy.future import Future
+from rclpy.task import Future
 from std_srvs.srv import SetBool
 
 

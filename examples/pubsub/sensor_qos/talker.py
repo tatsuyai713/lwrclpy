@@ -2,14 +2,14 @@
 """Talker using sensor_data QoS profile (best-effort)."""
 import time
 import rclpy
-from rclpy.qos import QoSProfile
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 
 
 def main():
     rclpy.init()
-    node = rclpy.Node("sensor_qos_talker")
-    qos = QoSProfile.sensor_data()
+    node = rclpy.create_node("sensor_qos_talker")
+    qos = qos_profile_sensor_data
     pub = node.create_publisher(String, "sensor/chatter", qos)
     msg = String()
     i = 0

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Wall timer demo: publish String at a fixed rate using create_wall_timer."""
+"""Wall timer demo: publish String at a fixed rate using create_timer."""
 import rclpy
 from std_msgs.msg import String
 
 
 def main():
     rclpy.init()
-    node = rclpy.Node("wall_timer_talker")
+    node = rclpy.create_node("wall_timer_talker")
     pub = node.create_publisher(String, "timer/chatter", 10)
     count = {"n": 0}
 
@@ -21,7 +21,7 @@ def main():
             timer.cancel()
             rclpy.shutdown()
 
-    timer = node.create_wall_timer(0.5, on_timer)
+    timer = node.create_timer(0.5, on_timer)
     try:
         rclpy.spin(node)
     finally:

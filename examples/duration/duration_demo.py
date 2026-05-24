@@ -10,7 +10,7 @@ This example shows:
 """
 
 import rclpy
-from lwrclpy.duration import Duration
+from rclpy.duration import Duration
 
 
 def main():
@@ -140,7 +140,7 @@ def main():
     print(f"Timer period: {period.nanoseconds / 1e9:.1f}s")
     
     # Use with clock
-    from lwrclpy.clock import Clock
+    from rclpy.clock import Clock
     clock = Clock()
     
     start_time = clock.now()

@@ -7,7 +7,7 @@ def callback(msg: String):
 
 def main():
     rclpy.init()
-    node = rclpy.Node("listener")
+    node = rclpy.create_node("listener")
     _ = node.create_subscription(String, "chatter", callback, 10)
     try:
         rclpy.spin(node)

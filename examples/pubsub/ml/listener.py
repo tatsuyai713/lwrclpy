@@ -7,7 +7,7 @@ def on_msg(msg: String):
 
 def main():
     rclpy.init()
-    node = rclpy.Node("ml_listener")
+    node = rclpy.create_node("ml_listener")
     _ = node.create_subscription(String, "ml/topic", on_msg, 10)
     try:
         rclpy.spin(node)

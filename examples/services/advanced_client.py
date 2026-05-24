@@ -93,8 +93,7 @@ def main():
     request2 = SetBool.Request()
     request2.data = False
     
-    # Wait for the first async request to complete before sending another
-    # (lwrclpy only supports one pending service request at a time)
+    # Wait for the first async request to complete before sending another.
     while not future.done():
         rclpy.spin_once(node, timeout_sec=0.1)
     
@@ -107,7 +106,6 @@ def main():
         rclpy.spin_once(node, timeout_sec=0.1)
     
     logger.info("")
-    logger.info("(Note: lwrclpy only supports one pending service request at a time)")
     logger.info("=== Demo Complete ===")
     
     node.destroy_node()
