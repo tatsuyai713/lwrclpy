@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import os
+import platform
 import sys
 
 
@@ -75,6 +76,24 @@ def patch_file(path: str) -> bool:
     return True
 
 
+def patch_macos_uint64_vector(path: str) -> bool:
+    if platform.system() != "Darwin" or os.path.basename(path) != "fastdds.i":
+        return False
+
+    with io.open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+
+    old = "%template(uint64_t_vector) std::vector<uint64_t>;"
+    new = "%template(uint64_t_vector) std::vector<unsigned long long>;"
+    if old not in text or new in text:
+        return False
+
+    with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text.replace(old, new))
+    print(f"[mac-uint64] patched: {path}")
+    return True
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <Fast-DDS-python source root or workspace src>", file=sys.stderr)
@@ -86,6 +105,7 @@ def main() -> int:
             if filename.endswith(".i"):
                 try:
                     patched += int(patch_file(os.path.join(dirpath, filename)))
+                    patched += int(patch_macos_uint64_vector(os.path.join(dirpath, filename)))
                 except UnicodeDecodeError:
                     pass
     print(f"[loan-helper] patched files: {patched}")
