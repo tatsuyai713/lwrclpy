@@ -11,6 +11,7 @@ PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"         # install/merge-install prefi
 GEN_PREFIX="${GEN_PREFIX:-/opt/fast-dds-gen-v3}"   # installation prefix for fastddsgen launcher
 WS="${WS:-$HOME/fastdds_python_ws}"                # colcon workspace
 REPOS_FILE="${REPOS_FILE:-$WS/fastdds_python.repos}"
+FASTDDS_PYTHON_REPOS_REF="${FASTDDS_PYTHON_REPOS_REF:-v2.6.1}"
 PYBIN="${PYBIN:-python3}"                          # Python used to create the venv
 JOBS="${JOBS:-$(command -v nproc >/dev/null && nproc || echo 4)}"
 export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-${JOBS}}"
@@ -139,11 +140,10 @@ python -m pip install -U pip setuptools wheel
 python -m pip install -U colcon-common-extensions vcstool empy
 
 # ===== Fetch repos (vcstool) =====
-# Use a pinned Fast-DDS-python repos file for reproducibility
 if [[ ! -f "${REPOS_FILE}" ]]; then
-  log "Fetching default repos file (Fast-DDS-python v2.2.0)…"
+  log "Fetching default repos file (Fast-DDS-python ${FASTDDS_PYTHON_REPOS_REF})…"
   curl -fsSL -o "${REPOS_FILE}" \
-    https://raw.githubusercontent.com/eProsima/Fast-DDS-python/v2.2.0/fastdds_python.repos
+    "https://raw.githubusercontent.com/eProsima/Fast-DDS-python/${FASTDDS_PYTHON_REPOS_REF}/fastdds_python.repos"
 fi
 [[ -f "${REPOS_FILE}" ]] || die "repos file not found: ${REPOS_FILE}"
 
