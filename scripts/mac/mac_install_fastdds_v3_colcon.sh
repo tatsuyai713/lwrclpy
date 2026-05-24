@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Install Fast DDS v3 core + fastddsgen + fastdds_python via colcon into /opt/fast-dds-v3 (macOS).
 # Applies a macOS-specific Fast DDS patch to drop unsupported thread-affinity calls and
-# force-uses an old standalone Asio (1.12.x) via -I include precedence,
-# so legacy API like asio::io_service / address::from_string / obj.post(...) resolves.
+# uses Homebrew standalone Asio headers for the Fast DDS version selected by fastdds_python.repos.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +15,7 @@ REPOS_FILE="${REPOS_FILE:-$WS/fastdds_python.repos}"
 FASTDDS_PYTHON_REPOS_REF="${FASTDDS_PYTHON_REPOS_REF:-v2.6.1}"
 PYBIN="${PYBIN:-python3}"                         # Python used to create the venv
 JOBS="${JOBS:-$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
-ASIO_VER="${ASIO_VER:-1.12.2}"                    # <- old standalone Asio (keeps io_service etc.)
+ASIO_INCLUDE_DIR="${ASIO_INCLUDE_DIR:-}"
 
 # ===== CLI flags =====
 while [[ $# -gt 0 ]]; do
@@ -27,7 +26,7 @@ while [[ $# -gt 0 ]]; do
     --repos)       REPOS_FILE="$2"; shift 2;;
     --python)      PYBIN="$2"; shift 2;;
     -j|--jobs)     JOBS="$2"; shift 2;;
-    --asio-ver)    ASIO_VER="$2"; shift 2;;
+    --asio-include-dir) ASIO_INCLUDE_DIR="$2"; shift 2;;
     *) echo "[WARN] Unknown arg: $1"; shift;;
   esac
 done
@@ -43,6 +42,7 @@ if ! command -v brew >/dev/null 2>&1; then
   die "Homebrew not found. Install: https://brew.sh/"
 fi
 BREW_PREFIX="$(brew --prefix)"
+ASIO_INCLUDE_DIR="${ASIO_INCLUDE_DIR:-${BREW_PREFIX}/include}"
 
 log "Installing build deps via Homebrew…"
 brew update
@@ -110,38 +110,9 @@ if [[ -f "${LOAN_HELPER_PATCH}" ]]; then
   "${PYBIN}" "${LOAN_HELPER_PATCH}" "${WS}/src" || true
 fi
 
-# ===== Bring old standalone Asio headers (1.12.x) =====
-# Asio 1.12.2 tarball URL: https://sourceforge.net/projects/asio/files/asio/1.12.2%20%28Stable%29/asio-1.12.2.tar.bz2/download
-# Alternatively: https://github.com/chriskohlhoff/asio/releases/tag/asio-1-12-2
-ASIO_DIR="${WS}/.deps/asio-${ASIO_VER}"
-if [[ ! -d "${ASIO_DIR}/include" ]]; then
-  log "Fetching standalone Asio ${ASIO_VER} headers…"
-  case "${ASIO_VER}" in
-    1.12.*)
-      curl -fL -o ".deps/asio-${ASIO_VER}.tar.bz2" \
-        "https://sourceforge.net/projects/asio/files/asio/${ASIO_VER//./.}%20%28Stable%29/asio-${ASIO_VER}.tar.bz2/download" \
-        || curl -fL -o ".deps/asio-${ASIO_VER}.tar.gz" \
-        "https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-${ASIO_VER//./-}.tar.gz"
-      ;;
-    *)
-      # Match GitHub tag naming scheme
-      curl -fL -o ".deps/asio-${ASIO_VER}.tar.gz" \
-        "https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-${ASIO_VER//./-}.tar.gz"
-      ;;
-  esac
-  if [[ -f ".deps/asio-${ASIO_VER}.tar.bz2" ]]; then
-    tar -C ".deps" -xjf ".deps/asio-${ASIO_VER}.tar.bz2"
-  else
-    tar -C ".deps" -xzf ".deps/asio-${ASIO_VER}.tar.gz"
-  fi
-  # Normalize folder name variations
-  if [[ ! -d "${ASIO_DIR}" ]]; then
-    ASIO_DIR_FALLBACK="$(find ".deps" -maxdepth 1 -type d -name "asio-*" | grep "${ASIO_VER//./-}\|${ASIO_VER}" | head -n1 || true)"
-    [[ -n "${ASIO_DIR_FALLBACK}" ]] && ASIO_DIR="${ASIO_DIR_FALLBACK}"
-  fi
-fi
-[[ -d "${ASIO_DIR}/include" ]] || die "Asio ${ASIO_VER} include not found at: ${ASIO_DIR}/include"
-log "Using standalone Asio from: ${ASIO_DIR}"
+# ===== Standalone Asio headers =====
+[[ -f "${ASIO_INCLUDE_DIR}/asio.hpp" ]] || die "Asio include not found at: ${ASIO_INCLUDE_DIR}"
+log "Using standalone Asio include dir: ${ASIO_INCLUDE_DIR}"
 
 # ===== Locate Fast-DDS source tree (for info only) =====
 log "Locating Fast-DDS source tree under ${WS}/src…"
@@ -271,8 +242,8 @@ FASTCDR_DIR="${FASTCDR_DIR_CAND1}"; [[ -d "${FASTCDR_DIR_CAND2}" ]] && FASTCDR_D
 log "Using foonathan_memory_DIR=${FOONATHAN_DIR}"
 log "Using fastcdr_DIR=${FASTCDR_DIR}"
 
-# Ensure old standalone Asio headers take precedence via explicit -I.
-# Fast DDS sets ASIO_STANDALONE, so standalone headers must be found first.
+# Ensure standalone Asio headers take precedence via explicit -I.
+# Fast DDS v3.6.x uses modern Asio APIs such as asio::make_strand.
 # Disable SHM transport for stability; re-enable later if needed.
 CMAKE_COMMON_ARGS=(
   -G Ninja
@@ -284,9 +255,8 @@ CMAKE_COMMON_ARGS=(
   -Dfoonathan_memory_DIR="${FOONATHAN_DIR}"
   -Dfastcdr_DIR="${FASTCDR_DIR}"
   -DCMAKE_MACOSX_RPATH=ON
-  # Key point: prioritize legacy Asio headers
-  -DCMAKE_CXX_FLAGS="-I${ASIO_DIR}/include -Wno-error=nonnull"
-  -DCMAKE_C_FLAGS="-I${ASIO_DIR}/include"
+  -DCMAKE_CXX_FLAGS="-I${ASIO_INCLUDE_DIR} -Wno-error=nonnull"
+  -DCMAKE_C_FLAGS="-I${ASIO_INCLUDE_DIR}"
   -DFASTDDS_SHM_TRANSPORT_DEFAULT=OFF
 )
 
