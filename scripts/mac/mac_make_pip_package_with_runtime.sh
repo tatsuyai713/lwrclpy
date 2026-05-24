@@ -364,17 +364,15 @@ def _preload_libs(root):
                 pass
 
 def _preload_ros_msg_libs():
+    if os.environ.get("LWRCLPY_PRELOAD_MSG_LIBS") != "1":
+        return
     base = os.path.dirname(_pkg_dir)
-    seen = set()
     for dp, _dn, files in sorted(os.walk(base), key=lambda item: item[0]):
         for f in sorted(files):
             if not f.startswith("lib"):
                 continue
             if not (f.endswith(".so") or f.endswith(".dylib") or ".so." in f):
                 continue
-            if f in seen:
-                continue
-            seen.add(f)
             fp = os.path.join(dp, f)
             try:
                 ctypes.CDLL(fp, mode=getattr(ctypes, "RTLD_GLOBAL", os.RTLD_GLOBAL))
