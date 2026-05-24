@@ -252,7 +252,7 @@ done
 
 # Patch binary deps to load bundled tinyxml2 from @rpath
 echo "[INFO] Rewriting tinyxml2 dylib references to @rpath (if any)"
-for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
+for BIN in "${VEN_LIB_DIR}"/libfastdds*.dylib "${VEN_LIB_DIR}"/libfastcdr*.dylib \
            "${VEN_FASTDDS_DIR}/_fastdds_python.so" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"; do
   [[ -f "${BIN}" ]] || continue
   for DEP in $(otool -L "${BIN}" | awk 'NR>1 {print $1}' | grep 'tinyxml2' || true); do
@@ -286,7 +286,7 @@ done < <(find "${STAGING_ROOT}" -type f -name '*.so' ! -path "*/lwrclpy/_vendor/
 
 # Patch binary deps to load bundled OpenSSL from @rpath
 echo "[INFO] Rewriting OpenSSL dylib references to @rpath (if any)"
-for BIN in "${VEN_LIB_DIR}/libfastdds.dylib" "${VEN_LIB_DIR}/libfastcdr.dylib" \
+for BIN in "${VEN_LIB_DIR}"/libfastdds*.dylib "${VEN_LIB_DIR}"/libfastcdr*.dylib \
            "${VEN_FASTDDS_DIR}/_fastdds_python.so" "${FASTDDS_ROOT_DIR}/_fastdds_python.so"; do
   [[ -f "${BIN}" ]] || continue
   for DEP in $(otool -L "${BIN}" | awk 'NR>1 {print $1}' | grep -E 'libssl|libcrypto' || true); do
@@ -312,6 +312,16 @@ for CRYPTO in "${VEN_LIB_DIR}/libcrypto"*.dylib; do
   [[ -f "${CRYPTO}" ]] || continue
   # Normalize libcrypto install name
   install_name_tool -id "@rpath/$(basename "${CRYPTO}")" "${CRYPTO}" 2>/dev/null || true
+done
+
+echo "[INFO] Normalizing Fast DDS runtime dylib rpaths"
+for BIN in "${VEN_LIB_DIR}"/libfastdds*.dylib "${VEN_LIB_DIR}"/libfastcdr*.dylib; do
+  [[ -f "${BIN}" ]] || continue
+  for OLD_RPATH in $(otool -l "${BIN}" | grep -A 2 "LC_RPATH" | grep "path " | awk '{print $2}' | tr -d '()'); do
+    [[ "${OLD_RPATH}" == /* ]] || continue
+    install_name_tool -delete_rpath "${OLD_RPATH}" "${BIN}" 2>/dev/null || true
+  done
+  install_name_tool -add_rpath "@loader_path" "${BIN}" 2>/dev/null || true
 done
 
 # Normalize all binaries to avoid /opt absolute paths (use @rpath to vendor libs)
