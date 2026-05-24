@@ -114,6 +114,20 @@ patch_cmakelists_min() {
   fi
 }
 
+validate_patched_i() {
+  local iface="$1"
+  local base="$2"
+
+  if ! grep -q "__FASTDDS_V3_CPP_BLOCK__" "${iface}"; then
+    echo "[ERR]  ${base}.i missing Fast DDS v3 SWIG patch marker"
+    return 1
+  fi
+  if grep -q "Binding for class" "${iface}" && ! grep -q "__LWRCLPY_LOAN_ADDR_HELPERS__" "${iface}"; then
+    echo "[ERR]  ${base}.i missing lwrclpy loan address helpers"
+    return 1
+  fi
+}
+
 # ===== Generate → Patch → Stage includes for each IDL =====
 FAILED_GEN=()
 
@@ -144,6 +158,10 @@ gen_one() {
 
   echo "[PATCH.i] ${rel}"
   python3 "${PATCH_PY}" "${outdir}/${base}.i"
+  if ! validate_patched_i "${outdir}/${base}.i" "${base}"; then
+    FAILED_GEN+=("${rel}")
+    return
+  fi
 
   # Stage includes (.i/.hpp/TypeObjectSupport/PubSubTypes) into a central include tree
   local inc_dst_dir="${INC_STAGE_ROOT}/${dir_rel}"

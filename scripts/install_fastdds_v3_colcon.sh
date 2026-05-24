@@ -106,6 +106,21 @@ need "${PYBIN}"
 
 # ===== Helper: robust JAVA_HOME detection (works on amd64/arm64) =====
 detect_java_home() {
+  local preferred_path=""
+  case "${ARCH}" in
+    amd64) preferred_path="/usr/lib/jvm/java-17-openjdk-amd64" ;;
+    arm64) preferred_path="/usr/lib/jvm/java-17-openjdk-arm64" ;;
+    *)     preferred_path="/usr/lib/jvm/java-17-openjdk" ;;
+  esac
+  if [[ -x "${preferred_path}/bin/java" ]]; then
+    echo "${preferred_path}"
+    return 0
+  fi
+  if [[ -x "/usr/lib/jvm/java-17-openjdk/bin/java" ]]; then
+    echo "/usr/lib/jvm/java-17-openjdk"
+    return 0
+  fi
+
   local javac_path
   javac_path="$(command -v javac || true)"
   [[ -n "${javac_path}" ]] || return 1
@@ -124,7 +139,9 @@ if [[ -z "${JAVA_HOME_DETECTED}" ]] || [[ ! -d "${JAVA_HOME_DETECTED}" ]]; then
   esac
 fi
 export JAVA_HOME="${JAVA_HOME_DETECTED}"
+export PATH="${JAVA_HOME}/bin:${PATH}"
 log "Using JAVA_HOME=${JAVA_HOME}"
+java -version
 
 # ===== Workspace & virtualenv =====
 log "Preparing workspace at: ${WS}"
