@@ -8,7 +8,7 @@ from std_msgs.msg import String
 
 
 def make_talker(name, topic, on_finished):
-    node = rclpy.Node(name)
+    node = rclpy.create_node(name)
     pub = node.create_publisher(String, topic, 10)
     msg = String()
     count = {"n": 0}
@@ -22,12 +22,12 @@ def make_talker(name, topic, on_finished):
             print(f"[{name}] finished sending {count['n']} messages")
             timer.cancel()
             on_finished(name)
-    timer = node.create_wall_timer(0.2, on_timer)
+    timer = node.create_timer(0.2, on_timer)
     return node
 
 
 def make_listener(name, topic):
-    node = rclpy.Node(name)
+    node = rclpy.create_node(name)
 
     def on_msg(msg: String):
         print(f"[{name}] recv: {msg.data}")

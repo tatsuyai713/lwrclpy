@@ -9,7 +9,7 @@ This example shows:
 
 import time
 import rclpy
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
 
 def main():
@@ -22,9 +22,9 @@ def main():
     # Create QoS profile for best effort (sensor data)
     best_effort_qos = QoSProfile(
         depth=1,  # Only keep latest
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE,
-        history=HistoryPolicy.KEEP_LAST
+        reliability=QoSReliabilityPolicy.BEST_EFFORT,
+        durability=QoSDurabilityPolicy.VOLATILE,
+        history=QoSHistoryPolicy.KEEP_LAST
     )
     
     logger.info("QoS Profile:")

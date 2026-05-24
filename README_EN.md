@@ -42,7 +42,7 @@ lwrclpy reimplements the "rclpy" API (ROS 2's Python client library) on top of F
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | Thread synchronization |
 | **QoS Profiles** | ✅ | ✅ | Major policies supported |
-| **Zero-Copy Communication** | ✅ DataSharing/SHM | ✅ | `loan_message()` supported |
+| **Zero-Copy Communication** | ✅ DataSharing/SHM internally | ⚠️ no public Python loan API | App code uses standard `publish(msg)` |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time supported |
 | **Logging** | ✅ | ✅ | Levels/throttling supported |
 | **Context/Domain ID** | ✅ | ✅ | Multiple contexts supported |
@@ -57,7 +57,7 @@ lwrclpy reimplements the "rclpy" API (ROS 2's Python client library) on top of F
 |--------|---------|-------|-------|
 | **Startup Time** | ⚡ Fast | 🐢 Slower | No ROS 2 middleware layer |
 | **Memory Usage** | 📉 Low | 📈 Higher | Minimal dependencies |
-| **Zero-Copy** | ✅ Fast DDS DataSharing | ✅ Via rmw | Effective for large messages |
+| **Zero-Copy** | ✅ Fast DDS DataSharing | ⚠️ rmw-dependent, no rclpy loan API | Effective for large messages without changing app code |
 | **Latency** | ⚡ Low | ⚡ Low | Same (same DDS foundation) |
 
 ### Tested Environments
@@ -290,16 +290,62 @@ rclpy.shutdown()
 
 ## 🚀 Advanced Features
 
-### Zero-Copy Communication (loan_message)
+### Zero-Copy Friendly Communication
 
-Efficiently send large messages (images, point clouds, etc.):
+Portable rclpy-compatible code should use the standard publish API:
 
 ```python
-# Send message with zero-copy
-loaned_msg = publisher.loan_message()
-loaned_msg.data = large_data
-publisher.publish(loaned_msg)
+msg = Image()
+msg.data = large_data
+publisher.publish(msg)
 ```
+
+lwrclpy enables Fast DDS DataSharing/SHM internally when available.  ROS 2
+`rclpy` does not expose a public `loan_message()` API, so portable examples use
+the standard `publish(msg)` API.
+
+### lwrclpy Extension: Verified DataSharing Zero-Copy
+
+lwrclpy forces Fast DDS DataSharing on the writer and reader QoS when the Fast
+DDS Python API exposes it.  Code that intentionally depends on lwrclpy can verify
+this with the `zero_copy_enabled` extension property:
+
+```python
+assert publisher.zero_copy_enabled
+assert subscription.zero_copy_enabled
+
+msg = Image()
+msg.data = large_data
+publisher.publish(msg)
+```
+
+The publish/subscribe API remains rclpy-compatible; `zero_copy_enabled` is an
+lwrclpy-only verification hook.  DataSharing/SHM is the supported zero-copy path
+for already-built wheels.
+
+`Publisher.loan_message(require_zero_copy=True)` is also implemented as an
+experimental lwrclpy extension.  It becomes active when Fast-DDS-python is rebuilt
+with `scripts/patch_fastdds_python_loan_helpers.py` and the generated message
+bindings are regenerated with `scripts/patch_fastdds_swig_v3.py`; those patches
+add address helpers for `loan_sample(void*&)` and typed message wrappers.  Without
+those rebuilt helpers, `can_loan_messages` remains `False` and the API does not
+pretend that loaned samples are available.
+
+To verify the extension on your environment:
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy
+```
+
+After rebuilding Fast-DDS-python and the generated message bindings with the
+loan helper patches, the experimental loaned-message path can be checked with:
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-message
+```
+
+If Fast DDS DataSharing could not be enabled, the command fails instead of
+pretending zero-copy was used.
 
 ### QoS Profiles
 
@@ -446,7 +492,7 @@ See [examples/README.md](examples/README.md) for details.
 |----------|---------|-------------|
 | **Pub/Sub** | `pubsub/string/` | Basic string messages |
 | **Pub/Sub** | `pubsub/typed_messages/` | Various ROS message types |
-| **Pub/Sub** | `pubsub/zero_copy/` | Zero-copy communication |
+| **Pub/Sub** | `pubsub/zero_copy/` | Zero-copy friendly publishing with standard rclpy API |
 | **Service** | `services/set_bool/` | SetBool service |
 | **Service** | `services/trigger/` | Trigger service |
 | **Action** | `actions/` | Fibonacci action |

@@ -4,20 +4,20 @@ import argparse
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image
-from lwrclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 
 class VideoRelay(Node):
     def __init__(self, in_topic: str, out_topic: str):
         super().__init__("mac_video_relay")
-        sub_qos = QoSProfile.sensor_data()  # best-effort, depth=5 (ROS2 SensorData equivalent)
+        sub_qos = qos_profile_sensor_data
         # Publish reliable so viewers expecting RELIABLE still receive
         pub_qos = QoSProfile(
             depth=sub_qos.depth,
             history=sub_qos.history,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
         )
         self._sub = self.create_subscription(Image, in_topic, self._handle_frame, sub_qos)
         self._pub = self.create_publisher(Image, out_topic, pub_qos)

@@ -6,7 +6,7 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.Node("timer_combo")
+    node = rclpy.create_node("timer_combo")
     log = node.get_logger()
     count = {"n": 0}
     pub = node.create_publisher(String, "timer/combo", 10)
@@ -25,9 +25,10 @@ def main():
     def oneshot():
         log.info("oneshot fired; resetting periodic schedule")
         periodic_timer.reset()
+        oneshot_timer.cancel()
 
-    periodic_timer = node.create_wall_timer(1.0, periodic)
-    oneshot_timer = node.create_timer(0.5, oneshot, oneshot=True)  # queue through executor
+    periodic_timer = node.create_timer(1.0, periodic)
+    oneshot_timer = node.create_timer(0.5, oneshot)
 
     try:
         rclpy.spin(node)

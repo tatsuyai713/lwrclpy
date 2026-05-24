@@ -12,14 +12,16 @@ if os.environ.get("LWRCLPY_PATCH_MSG_ATTRS") == "1":
     except Exception:
         pass
 
-# Backfill PointField constants required by sensor_msgs_py (always safe to run)
-try:
-    from .compat import ensure_pointfield_constants, ensure_common_interface_constants, patch_kwargs_for_common_interfaces
-    ensure_pointfield_constants()
-    ensure_common_interface_constants()
-    patch_kwargs_for_common_interfaces()
-except Exception:
-    pass
+# Eager compatibility patching imports generated message packages.  Keep that
+# opt-in so ``import lwrclpy`` mirrors rclpy and does not load message modules.
+if os.environ.get("LWRCLPY_EAGER_COMPAT_PATCHES") == "1":
+    try:
+        from .compat import ensure_pointfield_constants, ensure_common_interface_constants, patch_kwargs_for_common_interfaces
+        ensure_pointfield_constants()
+        ensure_common_interface_constants()
+        patch_kwargs_for_common_interfaces()
+    except Exception:
+        pass
 
 from .context import init, ok, get_participant, get_domain_id, try_shutdown, Context
 from .context import shutdown as _context_shutdown
@@ -44,13 +46,17 @@ from . import timer
 from .client import Client
 from .service import Service
 from .action import ActionServer, ActionClient, GoalResponse, CancelResponse
-from .service_aliases import install_service_aliases as _install_service_aliases
 from .future import Future
 from .clock import Clock, ClockType, Time
 from .duration import Duration
 from .subscription import MessageInfo
 
-_install_service_aliases()
+if os.environ.get("LWRCLPY_EAGER_SERVICE_ALIASES") == "1":
+    try:
+        from .service_aliases import install_service_aliases as _install_service_aliases
+        _install_service_aliases()
+    except Exception:
+        pass
 
 __all__ = [
     "init", "shutdown", "ok", "spin", "spin_once", "spin_some", "spin_until_future_complete",

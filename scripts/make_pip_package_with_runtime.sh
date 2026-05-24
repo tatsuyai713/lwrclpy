@@ -470,20 +470,25 @@ def _preload_ros_msg_libs():
 def ensure_fastdds():
     _prune_opt_paths()
 
-    # 1) preload core native libs
-    _preload_libs(_vendor_lib)
-
-    # 2) import vendored 'fastdds' by putting its parent on sys.path front
+    # 1) import vendored 'fastdds' by putting its parent on sys.path front.
+    # Prefer RPATH/dynamic-loader resolution on Linux; eager ctypes preloading
+    # can crash during interpreter shutdown.
     if not os.path.isdir(_vendor_fastdds):
         raise ImportError("Vendored fastdds package missing: " + _vendor_fastdds)
     if _vendor_parent not in sys.path:
         sys.path.insert(0, _vendor_parent)
 
-    # 3) now a plain import resolves to our vendored package
-    import fastdds  # noqa: F401 (this triggers loading _fastdds_python.so inside the package)
+    try:
+        import fastdds  # noqa: F401 (this triggers loading _fastdds_python.so inside the package)
+    except Exception:
+        _preload_libs(_vendor_lib)
+        import fastdds  # noqa: F401
 
-    # 4) preload ROS msg shared libs (SWIG types depend on RTLD_GLOBAL)
-    _preload_ros_msg_libs()
+    # 2) Message modules preload their own native dependencies when imported.
+    # Keep eager all-message preloading opt-in; doing it at lwrclpy import time
+    # can trigger native shutdown-order crashes on Linux.
+    if os.environ.get("LWRCLPY_PRELOAD_MSG_LIBS") == "1":
+        _preload_ros_msg_libs()
 PY
 
 # Prepend bootstrap call to __init__.py (idempotent)
@@ -524,7 +529,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 else
   # Linux: use patchelf
   echo "[INFO] Linux detected - using patchelf for RPATH"
-  PATCHED_RPATH='$ORIGIN:$ORIGIN/../../lwrclpy/_vendor/lib'
+  PATCHED_RPATH='$ORIGIN:$ORIGIN/../lib:$ORIGIN/../lwrclpy/_vendor/lib:$ORIGIN/../../lwrclpy/_vendor/lib'
   while IFS= read -r so; do
     case "${so}" in
       */lwrclpy/_vendor/lib/*) continue ;;

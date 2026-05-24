@@ -32,6 +32,8 @@ examples/
 ├── guard_condition/      # Guard Condition triggers
 │   ├── trigger_guard_condition.py
 │   └── guard_condition_advanced.py
+├── lwrclpy_extensions/   # lwrclpy-only extension APIs
+│   └── zero_copy_extension_publisher.py
 ├── logging/              # Logging levels and patterns
 │   └── logging_demo.py
 ├── node/                 # Comprehensive node usage
@@ -44,7 +46,7 @@ examples/
 │   ├── string/           # Basic string messages
 │   ├── sensor_qos/       # Sensor-optimized QoS
 │   ├── ml/               # Machine learning integration
-│   ├── zero_copy/        # Zero-copy with loan_message
+│   ├── zero_copy/        # Zero-copy friendly standard publish API
 │   ├── typed_messages/   # Geometry, Sensor, Nav messages
 │   ├── rate_publisher.py
 │   ├── multi_pubsub.py
@@ -99,13 +101,14 @@ Many examples require two terminals (Publisher/Subscriber, Server/Client, etc.).
 | QoS Profiles | `qos/qos_profiles_demo.py` | All QoS including Deadline, Lifespan, Liveliness |
 | Reliable QoS | `qos/reliable_pubsub.py` | Reliable delivery with Transient Local durability |
 | Best Effort QoS | `qos/best_effort_pubsub.py` | Best effort for high-frequency data |
-| Zero-Copy | `pubsub/zero_copy/` | Efficient large message publishing |
+| Zero-Copy | `pubsub/zero_copy/` | Efficient large message publishing with standard rclpy API |
 | Service | `services/set_bool/` | Request-response pattern |
 | Trigger Service | `services/trigger/` | Empty-request services for triggering actions |
 | Action | `actions/` | Long-running tasks with feedback |
 | Parameters | `parameters/` | Node parameter declaration and access |
 | Guard Condition | `guard_condition/` | Thread signaling and synchronization |
 | Launch | `launch/` | ROS 2 compatible Launch system |
+| lwrclpy Extensions | `lwrclpy_extensions/` | lwrclpy-only APIs outside ROS 2 rclpy compatibility |
 
 ### Node Patterns
 
@@ -155,14 +158,15 @@ Custom QoS options:
 
 ---
 
-## ⚡ Zero-Copy Publishing
+## ⚡ Zero-Copy Friendly Publishing
 
-Use `loan_message()` to avoid copying for large messages:
+Use the standard `publish(msg)` API. lwrclpy enables middleware DataSharing/SHM
+internally when available, and the same example remains valid on ROS 2 rclpy:
 
 ```python
-loaned_msg = publisher.loan_message()
-loaned_msg.data = large_data
-publisher.publish(loaned_msg)
+msg = Image()
+msg.data = large_data
+publisher.publish(msg)
 ```
 
 ---

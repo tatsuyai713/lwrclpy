@@ -6,7 +6,7 @@ import rclpy
 
 def main():
     rclpy.init()
-    node = rclpy.Node(
+    node = rclpy.create_node(
         "param_logger_demo",
         allow_undeclared_parameters=False,
         parameters=[("greeting", "hello"), ("rate_hz", 2)],

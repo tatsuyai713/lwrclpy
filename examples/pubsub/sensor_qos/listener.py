@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Listener using sensor_data QoS profile (best-effort)."""
 import rclpy
-from rclpy.qos import QoSProfile
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 
 
 def main():
     rclpy.init()
-    node = rclpy.Node("sensor_qos_listener")
-    qos = QoSProfile.sensor_data()
+    node = rclpy.create_node("sensor_qos_listener")
+    qos = qos_profile_sensor_data
 
     def on_msg(msg: String):
         print(f"[recv] {msg.data}")

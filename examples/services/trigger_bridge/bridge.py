@@ -7,7 +7,7 @@ from std_srvs.srv import Trigger
 
 def main():
     rclpy.init()
-    node = rclpy.Node("service_echo_bridge")
+    node = rclpy.create_node("service_echo_bridge")
 
     def on_trigger(req: Trigger.Request, res: Trigger.Response):
         res.success = True

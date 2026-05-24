@@ -5,6 +5,9 @@
 # so legacy API like asio::io_service / address::from_string / obj.post(...) resolves.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 # ===== Defaults (override via env or CLI flags) =====
 PREFIX_V3="${PREFIX_V3:-/opt/fast-dds-v3}"        # merge-install prefix for the v3 runtime
 GEN_PREFIX="${GEN_PREFIX:-/opt/fast-dds-gen-v3}"  # installation prefix for fastddsgen launcher
@@ -99,6 +102,12 @@ fi
 
 log "Importing repos into src/…"
 vcs import --recursive src < "${REPOS_FILE}"
+
+LOAN_HELPER_PATCH="${ROOT_DIR}/scripts/patch_fastdds_python_loan_helpers.py"
+if [[ -f "${LOAN_HELPER_PATCH}" ]]; then
+  log "Patching Fast-DDS-python SWIG loan helpers…"
+  "${PYBIN}" "${LOAN_HELPER_PATCH}" "${WS}/src" || true
+fi
 
 # ===== Bring old standalone Asio headers (1.12.x) =====
 # Asio 1.12.2 tarball URL: https://sourceforge.net/projects/asio/files/asio/1.12.2%20%28Stable%29/asio-1.12.2.tar.bz2/download

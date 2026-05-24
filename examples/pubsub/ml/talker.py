@@ -8,7 +8,7 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.Node("ml_talker")
+    node = rclpy.create_node("ml_talker")
     pub = node.create_publisher(String, "ml/topic", QoSProfile(depth=10))
 
     # Dummy PyTorch "inference" — pick any model/device/mode without ROS 2 constraints

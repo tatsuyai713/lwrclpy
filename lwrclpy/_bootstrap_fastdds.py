@@ -125,7 +125,7 @@ def ensure_fastdds():
         vendor_lib = os.path.join(vendor_parent, "lib")
         vendor_fastdds = os.path.join(vendor_parent, "fastdds")
         
-        if os.path.isdir(vendor_lib):
+        if os.path.isdir(vendor_lib) and (_is_macos() or os.environ.get("LWRCLPY_PRELOAD_FASTDDS_LIBS") == "1"):
             # Preload Fast-DDS libs in dependency order: fastcdr -> fastdds
             if _is_macos():
                 # Load libfastcdr first (dependency of libfastdds)
@@ -150,19 +150,33 @@ def ensure_fastdds():
     except Exception:
         pass
     
-    # 2) Preload message type libraries from Python site-packages
-    # This handles dependencies like action_msgs -> unique_identifier_msgs
-    try:
-        msg_libs = list(_find_message_libs())
-        if msg_libs:
-            _preload_libs(msg_libs)
-    except Exception:
-        pass
+    # 2) Message modules preload their own native dependencies when imported.
+    # Preloading every generated type at lwrclpy import time can trigger native
+    # shutdown-order crashes on Linux, so keep the old eager mode opt-in only.
+    if os.environ.get("LWRCLPY_PRELOAD_MSG_LIBS") == "1":
+        try:
+            msg_libs = list(_find_message_libs())
+            if msg_libs:
+                _preload_libs(msg_libs)
+        except Exception:
+            pass
 
-    # 3) Try to import fastdds module
+    # 3) Try to import fastdds module.  Prefer RPATH/dynamic-loader resolution
+    # on Linux; eager ctypes preloading can crash during interpreter shutdown.
     try:
         import fastdds  # noqa: F401
         return
+    except Exception:
+        pass
+
+    try:
+        pkg_dir = os.path.dirname(os.path.abspath(__file__))
+        vendor_lib = os.path.join(pkg_dir, "_vendor", "lib")
+        if os.path.isdir(vendor_lib):
+            libs = glob.glob(os.path.join(vendor_lib, "libfast*.so*"))
+            _preload_libs(libs)
+            import fastdds  # noqa: F401
+            return
     except Exception:
         pass
 

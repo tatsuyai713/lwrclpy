@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal Fibonacci action server built on lwrclpy's ActionServer."""
+"""Minimal Fibonacci action server built on the rclpy ActionServer API."""
 
 import time
 

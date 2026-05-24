@@ -12,6 +12,7 @@ import time
 import rclpy
 from action_msgs.msg import GoalStatus
 from example_interfaces.action import Fibonacci
+from rclpy.action import ActionClient
 
 
 def main():
@@ -21,8 +22,6 @@ def main():
     
     logger.info("=== Advanced Action Client Demo ===\n")
     
-    # Create action client
-    from lwrclpy.action import ActionClient
     client = ActionClient(node, Fibonacci, "fibonacci")
     
     logger.info("Waiting for action server (DDS discovery)...")

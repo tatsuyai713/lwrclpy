@@ -6,7 +6,7 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.Node("talker")
+    node = rclpy.create_node("talker")
     pub = node.create_publisher(String, "chatter", QoSProfile(depth=10))
 
     msg = String()

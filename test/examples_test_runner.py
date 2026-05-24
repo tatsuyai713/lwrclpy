@@ -322,9 +322,9 @@ def run_all_examples(platform_name: str) -> bool:
         ),
         PairSpec(
             name="Pub/Sub zero_copy",
-            publisher="examples/pubsub/zero_copy/loan_message_publisher.py",
-            subscriber="examples/pubsub/zero_copy/polling_subscriber.py",
-            subscriber_expect=("Polling Subscription", "take()"),
+            publisher="examples/pubsub/zero_copy/zero_copy_publisher.py",
+            subscriber="examples/pubsub/zero_copy/callback_subscriber.py",
+            subscriber_expect=("Callback Subscription Demo", "Message"),
             publisher_timeout=8.0,
             subscriber_timeout=8.0,
         ),

@@ -9,7 +9,7 @@ This example shows:
 """
 
 import rclpy
-from lwrclpy.context import Context
+from rclpy.context import Context
 
 
 def main():

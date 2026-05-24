@@ -44,6 +44,22 @@ _STATUS_SUCCEEDED = 4
 _STATUS_CANCELED = 5
 _STATUS_ABORTED = 6
 
+if GoalStatus is not None:
+    for _name, _value in {
+        "STATUS_UNKNOWN": _STATUS_UNKNOWN,
+        "STATUS_ACCEPTED": _STATUS_ACCEPTED,
+        "STATUS_EXECUTING": _STATUS_EXECUTING,
+        "STATUS_CANCELING": _STATUS_CANCELING,
+        "STATUS_SUCCEEDED": _STATUS_SUCCEEDED,
+        "STATUS_CANCELED": _STATUS_CANCELED,
+        "STATUS_ABORTED": _STATUS_ABORTED,
+    }.items():
+        if not hasattr(GoalStatus, _name):
+            try:
+                setattr(GoalStatus, _name, _value)
+            except Exception:
+                pass
+
 
 def _swig_set(target, name, value):
     """Set a field on a (possibly SWIG) object using the method-based setter pattern.
@@ -107,6 +123,11 @@ def _set_uuid(field, uid: uuid.UUID):
 def _uuid_bytes(field) -> bytes:
     if field is None:
         return b""
+    if callable(field):
+        try:
+            field = field()
+        except TypeError:
+            return b""
     if hasattr(field, "uuid"):
         data = getattr(field, "uuid")
         # If uuid is a method, call it
@@ -122,6 +143,11 @@ def _uuid_bytes(field) -> bytes:
 def _copy_goal_id(goal_id_field):
     if goal_id_field is None:
         return None
+    if callable(goal_id_field):
+        try:
+            goal_id_field = goal_id_field()
+        except TypeError:
+            return None
     try:
         new_field = goal_id_field.__class__()
     except Exception:
@@ -802,7 +828,7 @@ class ActionClient:
     def wait_for_server(self, timeout_sec: Optional[float] = None) -> bool:
         """Wait for an action server to become available (rclpy compatible).
         
-        This waits until the server's subscriptions are matched with our publishers.
+        This waits until the server's action endpoints are matched.
         
         :param timeout_sec: Maximum time to wait. If None, waits up to 10 seconds.
         :return: True if server is available, False if timeout.
@@ -814,10 +840,7 @@ class ActionClient:
         elapsed = 0.0
         
         while elapsed < timeout_sec:
-            # Check if our send_goal publisher has matched subscribers
-            if self._send_goal_pub.get_subscription_count() > 0:
-                # Small additional delay to ensure bidirectional matching
-                time.sleep(0.1)
+            if self.server_is_ready():
                 return True
             time.sleep(poll_interval)
             elapsed += poll_interval
@@ -829,9 +852,17 @@ class ActionClient:
     def server_is_ready(self) -> bool:
         """Check if the action server is ready (rclpy compatible).
         
-        Returns True if we have matched subscribers for our publishers.
+        Returns True if the action request and response endpoints are matched.
         """
-        return self._send_goal_pub.get_subscription_count() > 0
+        return (
+            self._send_goal_pub.get_subscription_count() > 0
+            and self._get_result_pub.get_subscription_count() > 0
+            and self._cancel_pub.get_subscription_count() > 0
+            and self._send_goal_res_sub.get_publisher_count() > 0
+            and self._result_sub.get_publisher_count() > 0
+            and self._feedback_sub.get_publisher_count() > 0
+            and self._cancel_res_sub.get_publisher_count() > 0
+        )
 
     def send_goal(self, goal_msg, feedback_callback: Optional[Callable] = None):
         """Send a goal and wait for the result (blocking, rclpy compatible).
@@ -936,8 +967,14 @@ class ActionClient:
             self._result_futures[key] = future
             self._pending_result_keys.append(key)
         request = self._get_result_req_cls()
+        request_goal_id = getattr(request, "goal_id", None)
+        if callable(request_goal_id):
+            request_goal_id = request_goal_id()
         try:
-            _swig_set(request, "goal_id", _copy_goal_id(goal_id))
+            if request_goal_id is not None:
+                _set_uuid(request_goal_id, uuid.UUID(bytes=key))
+            else:
+                _swig_set(request, "goal_id", _copy_goal_id(goal_id))
         except Exception:
             pass
         self._get_result_pub.publish(request)
@@ -957,7 +994,10 @@ class ActionClient:
             # Expose callable fields for ROS 2 compatibility
             try:
                 from .message_utils import expose_callable_fields, _ValueProxy
+                expose_callable_fields(msg)
                 result = getattr(msg, "result", None)
+                if callable(result):
+                    result = result()
                 if result:
                     # If result is wrapped in _ValueProxy, unwrap it
                     if isinstance(result, _ValueProxy):
@@ -983,7 +1023,13 @@ class ActionClient:
             goal_info = goal_info()
         if goal_info is not None:
             try:
-                _swig_set(goal_info, "goal_id", _copy_goal_id(goal_id))
+                goal_info_id = getattr(goal_info, "goal_id", None)
+                if callable(goal_info_id):
+                    goal_info_id = goal_info_id()
+                if goal_info_id is not None:
+                    _set_uuid(goal_info_id, uuid.UUID(bytes=key))
+                else:
+                    _swig_set(goal_info, "goal_id", _copy_goal_id(goal_id))
             except Exception:
                 pass
         else:

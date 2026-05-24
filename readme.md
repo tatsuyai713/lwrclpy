@@ -42,7 +42,7 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | スレッド間同期 |
 | **QoS Profiles** | ✅ | ✅ | 主要ポリシー対応 |
-| **ゼロコピー通信** | ✅ DataSharing/SHM | ✅ | `loan_message()` 対応 |
+| **ゼロコピー通信** | ✅ DataSharing/SHMを内部利用 | ⚠️ Python公開loan APIなし | アプリ側は標準 `publish(msg)` を使用 |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time対応 |
 | **Logging** | ✅ | ✅ | レベル/スロットリング対応 |
 | **Context/Domain ID** | ✅ | ✅ | 複数コンテキスト対応 |
@@ -57,7 +57,7 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 |------|---------|-------|------|
 | **起動時間** | ⚡ 高速 | 🐢 やや遅い | ROS 2ミドルウェア層がない |
 | **メモリ使用量** | 📉 少ない | 📈 多い | 最小限の依存関係 |
-| **ゼロコピー** | ✅ Fast DDS DataSharing | ✅ rmw経由 | 大型メッセージで効果大 |
+| **ゼロコピー** | ✅ Fast DDS DataSharing | ⚠️ rmw依存、rclpy loan APIなし | アプリコードを変えずに大型メッセージで効果 |
 | **レイテンシ** | ⚡ 低い | ⚡ 低い | 同等（同じDDS基盤） |
 
 ### 動作確認済み環境
@@ -290,16 +290,59 @@ rclpy.shutdown()
 
 ## 🚀 高度な機能
 
-### ゼロコピー通信（loan_message）
+### ゼロコピー向け通信
 
-大きなメッセージ（画像、点群など）を効率的に送信できます。
+移植可能なrclpy互換コードでは、標準のpublish APIを使います。
 
 ```python
-# ゼロコピーでメッセージを送信
-loaned_msg = publisher.loan_message()
-loaned_msg.data = large_data
-publisher.publish(loaned_msg)
+msg = Image()
+msg.data = large_data
+publisher.publish(msg)
 ```
+
+lwrclpyは利用可能な場合にFast DDS DataSharing/SHMを内部で有効化します。ROS 2
+`rclpy`には公開された`loan_message()` APIがないため、移植可能なコードでは標準の
+`publish(msg)` APIを使います。
+
+### lwrclpy拡張: DataSharing Zero-Copyの検証
+
+lwrclpyは、Fast DDS Python APIが対応している場合にwriter/reader QoSのDataSharingを
+明示的にONにします。lwrclpyに依存してよいコードでは、`zero_copy_enabled`拡張
+プロパティでその状態を検証できます。
+
+```python
+assert publisher.zero_copy_enabled
+assert subscription.zero_copy_enabled
+
+msg = Image()
+msg.data = large_data
+publisher.publish(msg)
+```
+
+publish/subscribe APIはrclpy互換のままで、`zero_copy_enabled`だけがlwrclpy独自の
+検証用フックです。ビルド済みwheelで対応済みのzero-copy経路はDataSharing/SHMです。
+
+`Publisher.loan_message(require_zero_copy=True)`も実験的なlwrclpy拡張として実装しています。
+これはFast-DDS-pythonを`scripts/patch_fastdds_python_loan_helpers.py`適用後に再ビルドし、
+生成メッセージbindingを`scripts/patch_fastdds_swig_v3.py`適用後に再生成した場合に有効になります。
+これらのpatchは`loan_sample(void*&)`用のaddress helperと、addressから型付きメッセージwrapperへ
+戻すhelperを追加します。再ビルド済みhelperがない場合、`can_loan_messages`は`False`のままで、
+loaned sampleが使えるようには見せません。
+
+現在の環境で拡張APIが使えるか確認するには、次を実行します。
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy
+```
+
+Fast-DDS-pythonと生成メッセージbindingをloan helper patch込みで再ビルドした後は、
+実験的なloaned-message経路を次のように確認できます。
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-message
+```
+
+Fast DDS DataSharingを有効化できない場合、このコマンドはzero-copy使用を装わずに失敗します。
 
 ### QoSプロファイル
 
@@ -446,7 +489,7 @@ python3 examples/pubsub/string/talker.py
 |----------|---------|------|
 | **Pub/Sub** | `pubsub/string/` | 基本的な文字列メッセージ |
 | **Pub/Sub** | `pubsub/typed_messages/` | 各種ROS型メッセージ |
-| **Pub/Sub** | `pubsub/zero_copy/` | ゼロコピー通信 |
+| **Pub/Sub** | `pubsub/zero_copy/` | 標準rclpy APIでのゼロコピー向けPublishing |
 | **Service** | `services/set_bool/` | SetBoolサービス |
 | **Service** | `services/trigger/` | Triggerサービス |
 | **Action** | `actions/` | Fibonacciアクション |
