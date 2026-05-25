@@ -90,12 +90,12 @@ set_rpaths(){
 rewrite_dep_paths(){
   local target="$1"
   [[ -x "${INSTALL_NAME_TOOL}" && -x "${OTOOL}" ]] || return 0
-  # Replace @rpath/lib*.dylib (except fastdds/fastcdr) with @loader_path/lib*.dylib to keep deps local
+  # Replace generated type deps with @loader_path refs to keep deps local.
   while IFS= read -r line; do
     dep="$(echo "$line" | awk '{print $1}')"
     case "${dep}" in
       @rpath/libfastdds.*|@rpath/libfastcdr.*) continue ;;
-      @rpath/lib*.dylib)
+      @rpath/lib*.dylib|@rpath/lib*.so)
         base="$(basename "${dep}")"
         install_name_tool -change "${dep}" "@loader_path/${base}" "${target}" >/dev/null 2>&1 || true
         ;;
@@ -236,9 +236,9 @@ if [[ -x "${INSTALL_NAME_TOOL}" ]]; then
   done < <(find "${INSTALL_ROOT}" -type f \( -name "*.so" -o -name "*.dylib" \))
 fi
 
-# Generic dependency mirroring: for every msg dir, ensure all @loader_path/lib*.dylib deps are present
+# Generic dependency mirroring: for every msg dir, ensure all @loader_path/lib* deps are present
 LIB_INDEX="$(mktemp)"
-find "${INSTALL_ROOT}" -type f -name "lib*.dylib" -print | while IFS= read -r f; do
+find "${INSTALL_ROOT}" -type f \( -name "lib*.dylib" -o -name "lib*.so" \) -print | while IFS= read -r f; do
   bn="$(basename "$f")"
   echo "${bn}|${f}"
 done | sort -u > "${LIB_INDEX}"
@@ -250,7 +250,7 @@ mirror_missing_deps(){
     while IFS= read -r line; do
       dep_path="$(echo "$line" | awk '{print $1}')"
       case "${dep_path}" in
-        @loader_path/lib*.dylib)
+        @loader_path/lib*.dylib|@loader_path/lib*.so)
           dep_bn="$(basename "${dep_path}")"
           if [[ ! -e "${dir}/${dep_bn}" ]]; then
             src="$(awk -F'|' -v bn="${dep_bn}" '$1==bn{print $2; exit}' "${LIB_INDEX}")"
@@ -261,7 +261,7 @@ mirror_missing_deps(){
           ;;
       esac
     done < <("${OTOOL}" -L "${file}" 2>/dev/null | tail -n +2)
-  done < <(find "${dir}" -maxdepth 1 -type f \( -name "lib*.dylib" -o -name "*Wrapper.so" -o -name "*Wrapper.dylib" \))
+  done < <(find "${dir}" -maxdepth 1 -type f \( -name "lib*.dylib" -o -name "lib*.so" -o -name "*Wrapper.so" -o -name "*Wrapper.dylib" \))
 }
 
 while IFS= read -r d; do
