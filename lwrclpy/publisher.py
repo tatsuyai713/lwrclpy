@@ -2,7 +2,6 @@
 # Zero-copy–friendly DataWriter wrapper for Fast DDS v3.
 # - Prefer DDS internal zero-copy (DataSharing) where available.
 # - Keep compatibility with QoSProfile mapping.
-# - Expose loan_message() as a lwrclpy extension; portable rclpy code should use publish(msg).
 
 from __future__ import annotations
 import fastdds  # type: ignore
@@ -10,10 +9,12 @@ import os
 from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _assign
+from .message_utils import _copy_val, _get_field_names, _get_value
 from .duration import Duration
 from .utils import (
     _matched_handle_count,
     _matched_status_count,
+    _pubsub_type_is_plain,
     _pubsub_type_supports_data_sharing,
     _retcode_is_ok,
 )
@@ -52,6 +53,19 @@ def _materialize_shadow_attributes(msg) -> bool:
     return materialized
 
 
+def _copy_message_into(src, dst) -> bool:
+    """Copy generated message fields from *src* into existing *dst*."""
+    copied = False
+    for name in _get_field_names(type(dst)):
+        if name.startswith("_") or name in {"this", "thisown"}:
+            continue
+        value = _get_value(src, name)
+        if value is None:
+            continue
+        copied = _assign(dst, name, _copy_val(value)) or copied
+    return copied
+
+
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> bool:
     """Prefer/force data sharing on the writer QoS when the API exists."""
     if os.environ.get("LWRCLPY_NO_DATASHARING") == "1":
@@ -62,10 +76,7 @@ def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> bool:
             shared_dir = os.environ.get("LWRCLPY_DATASHARING_DIR", "")
             if hasattr(ds, "on"):
                 try:
-                    if shared_dir:
-                        ds.on(shared_dir)
-                    else:
-                        ds.on()
+                    ds.on(shared_dir)
                 except TypeError:
                     ds.on()
                 return True
@@ -89,13 +100,8 @@ def _disable_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> None:
         pass
 
 
-class LoanedMessage(Generic[T]):
-    """Message-like wrapper for a DataWriter loaned sample.
-
-    The wrapper forwards field access to the underlying message, so callers can
-    use it like a normal message and pass it to ``publish()``.  It also supports
-    the existing context-manager examples, publishing on successful exit.
-    """
+class _LoanedMessage(Generic[T]):
+    """Internal wrapper for a DataWriter loaned sample."""
 
     __slots__ = ("_publisher", "_msg", "_from_middleware", "_published", "_addr")
 
@@ -137,7 +143,7 @@ class LoanedMessage(Generic[T]):
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not self._published and exc_type is None:
-            self._publisher.publish(self)
+            self._publisher._publish_loaned(self)
         return False
 
 
@@ -168,6 +174,8 @@ class Publisher:
             _pubsub_type_supports_data_sharing(pubsub_cls)
             and _force_data_sharing_on_writer(wq)
         )
+        self._is_fixed_size_type = _pubsub_type_is_plain(pubsub_cls)
+        self._auto_loan_publish_count = 0
 
         # Create DataWriter
         self._writer = self._publisher.create_datawriter(self._topic, wq)
@@ -180,23 +188,17 @@ class Publisher:
 
     def publish(self, msg) -> None:
         """Publish a message instance generated from the SWIG type."""
-        if isinstance(msg, LoanedMessage):
-            if msg._publisher is not self:
-                raise ValueError(
-                    "Cannot publish a LoanedMessage created by a different "
-                    "publisher; publish loaned messages only with their "
-                    "originating publisher."
-                )
-            if msg._published:
-                raise ValueError(
-                    "Cannot publish the same LoanedMessage more than once; "
-                    "obtain a new loaned message or publish a normal message "
-                    "instance instead."
-                )
-            self._publish_loaned(msg)
-            return
-
         target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
+
+        if self._automatic_loaned_publish_enabled:
+            try:
+                loaned = self._loan_message(require_zero_copy=True)
+                _copy_message_into(msg, loaned._msg)
+                self._publish_loaned(loaned)
+                self._auto_loan_publish_count += 1
+                return
+            except Exception:
+                pass
 
         # Fast path: if msg is already the correct SWIG type, apply any
         # rclpy-style shadow attributes in-place and write the same instance.
@@ -212,17 +214,11 @@ class Publisher:
         self._publish_count += 1
 
     @property
-    def data_sharing_enabled(self) -> bool:
-        """Return whether Fast DDS DataSharing was explicitly enabled."""
-        return self._data_sharing_enabled
+    def _automatic_loaned_publish_enabled(self) -> bool:
+        return self._data_sharing_enabled and self._is_fixed_size_type and self._can_loan_messages
 
     @property
-    def zero_copy_enabled(self) -> bool:
-        """Return whether lwrclpy enabled its zero-copy transport path."""
-        return self._data_sharing_enabled
-
-    @property
-    def can_loan_messages(self) -> bool:
+    def _can_loan_messages(self) -> bool:
         """Return whether this publisher can use the true loaned write path."""
         return (
             hasattr(self._writer, "lwrclpy_loan_sample_addr")
@@ -239,18 +235,10 @@ class Publisher:
             module = __import__(self._msg_ctor.__module__, fromlist=[self._msg_ctor.__name__])
         return getattr(module, f"lwrclpy_{self._msg_ctor.__name__}_from_addr", None)
 
-    def loan_message(self, *, require_zero_copy: bool = False) -> LoanedMessage:
-        """Borrow a message for efficient publishing.
-
-        Returns a message-like object that can be passed to ``publish()``.  When
-        Fast DDS exposes sample loaning for this type, publish uses the loaned
-        write path.  Otherwise the object falls back to a normal message while
-        preserving the same public API.  Set ``require_zero_copy=True`` to fail
-        instead of falling back when the middleware loan path is unavailable.
-        """
+    def _loan_message(self, *, require_zero_copy: bool = False) -> _LoanedMessage:
         if self._msg_ctor is None:
             raise RuntimeError("Cannot loan message: message constructor not available")
-        if require_zero_copy and not self.can_loan_messages:
+        if require_zero_copy and not self._can_loan_messages:
             raise RuntimeError("Cannot loan message: middleware loaned write path is not available")
 
         loaned_msg = None
@@ -282,14 +270,9 @@ class Publisher:
         if loaned_msg is None:
             loaned_msg = self._msg_ctor()
 
-        return LoanedMessage(self, loaned_msg, from_middleware, addr=loaned_addr)
+        return _LoanedMessage(self, loaned_msg, from_middleware, addr=loaned_addr)
 
-    def _publish_loaned(self, loaned: LoanedMessage) -> None:
-        """Publish a loaned message through the appropriate writer path.
-
-        Used by ``Publisher.publish()`` for explicit loaned publishing and by
-        the ``LoanedMessage`` context manager on successful exit.
-        """
+    def _publish_loaned(self, loaned: _LoanedMessage) -> None:
         msg = loaned._msg
         _materialize_shadow_attributes(msg)
         if loaned._from_middleware and loaned._addr and hasattr(self._writer, "lwrclpy_write_addr"):

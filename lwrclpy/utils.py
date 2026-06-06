@@ -115,6 +115,40 @@ def _pubsub_type_supports_data_sharing(pubsub_cls) -> bool:
     return True
 
 
+def _pubsub_type_is_plain(pubsub_cls) -> bool:
+    """Return whether a generated PubSubType is fixed-size/plain.
+
+    Fast DDS generated Python bindings expose ``is_plain(data_representation)``
+    for types whose serialized size is fixed.  Those are the types that can use
+    middleware loaning without changing the rclpy-style callback API.
+    """
+    if pubsub_cls is None:
+        return False
+    try:
+        pubsub_type = pubsub_cls()
+    except Exception:
+        return False
+
+    is_plain = getattr(pubsub_type, "is_plain", None)
+    if not callable(is_plain):
+        return False
+
+    try:
+        return bool(is_plain())
+    except TypeError:
+        pass
+    except Exception:
+        return False
+
+    for representation in (0, 1, 2, 3):
+        try:
+            if bool(is_plain(representation)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _normalize_namespace(ns: str) -> str:
     """Normalize namespace per ROS 2 rules (leading slash, no trailing slash except root)."""
     if not ns:

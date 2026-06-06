@@ -304,42 +304,44 @@ lwrclpyは利用可能な場合にFast DDS DataSharing/SHMを内部で有効化�
 `rclpy`には公開された`loan_message()` APIがないため、移植可能なコードでは標準の
 `publish(msg)` APIを使います。
 
-### lwrclpy拡張: DataSharing Zero-Copyの検証
+### 自動 Zero-Copy
 
 lwrclpyは、Fast DDS Python APIが対応している場合にwriter/reader QoSのDataSharingを
-明示的にONにします。lwrclpyに依存してよいコードでは、`zero_copy_enabled`拡張
-プロパティでその状態を検証できます。
+明示的にONにします。さらに生成型が固定サイズ/plainで、再生成済みbindingにmiddleware
+loan helperがある場合は、通常の`publish(msg)`と通常のsubscription callbackのまま、
+内部でDataWriter/DataReader loanを自動利用します。
 
 ```python
-assert publisher.zero_copy_enabled
-assert subscription.zero_copy_enabled
-
 msg = Image()
 msg.data = large_data
 publisher.publish(msg)
 ```
 
-publish/subscribe APIはrclpy互換のままで、`zero_copy_enabled`だけがlwrclpy独自の
-検証用フックです。ビルド済みwheelで対応済みのzero-copy経路はDataSharing/SHMです。
+`sensor_msgs/Image`や`std_msgs/String`のような可変長型では、自動loanは無効になります。
+この場合もrclpy互換の通常送受信として動作します。
 
-`Publisher.loan_message(require_zero_copy=True)`も実験的なlwrclpy拡張として実装しています。
-これはFast-DDS-pythonを`scripts/patch_fastdds_python_loan_helpers.py`適用後に再ビルドし、
-生成メッセージbindingを`scripts/patch_fastdds_swig_v3.py`適用後に再生成した場合に有効になります。
-これらのpatchは`loan_sample(void*&)`用のaddress helperと、addressから型付きメッセージwrapperへ
-戻すhelperを追加します。再ビルド済みhelperがない場合、`can_loan_messages`は`False`のままで、
-loaned sampleが使えるようには見せません。
-
-現在の環境で拡張APIが使えるか確認するには、次を実行します。
+現在の環境で自動zero-copy経路を確認するには、次を実行します。
 
 ```bash
-python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-complete-zero-copy
 ```
-
-Fast-DDS-pythonと生成メッセージbindingをloan helper patch込みで再ビルドした後は、
 実験的なloaned-message経路を次のように確認できます。
 
 ```bash
 python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-message
+```
+
+Sub側loaned receiveも確認する場合は次を実行します。
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-receive
+```
+
+Pub側のDataWriter loan、DataSharing、Sub側のDataReader loanをすべて必須にして
+完全なゼロコピー経路を確認するには次を実行します。
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-complete-zero-copy
 ```
 
 Fast DDS DataSharingを有効化できない場合、このコマンドはzero-copy使用を装わずに失敗します。

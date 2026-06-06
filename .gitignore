@@ -6,3 +6,7 @@ __pycache__/
 .DS_Store
 .vscode/
 dist/
+.fastdds-gen-v3/
+.fastdds-v3/
+.fastdds_python_ws/
+.lwrclpy-types/

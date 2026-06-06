@@ -20,6 +20,10 @@ _field_names_cache: dict[type, tuple[str, ...]] = {}
 # msg_class -> tuple of callable zero-arg field names (getter/setter style)
 _callable_fields_cache: dict[type, tuple[str, ...]] = {}
 
+# Avoid eagerly materializing large SWIG vectors such as sensor_msgs/Image.data.
+# Small vectors are still converted to lists for convenient rclpy-style access.
+_EAGER_VECTOR_LIST_MAX_LEN = 4096
+
 
 def _get_field_names(msg_cls) -> tuple[str, ...]:
     """Return cacheable field names for a SWIG-generated message class.
@@ -133,6 +137,9 @@ class _ValueProxy:
         if hasattr(self._v, "__iter__"):
             return iter(self._v)
         raise TypeError(f"'{type(self._v).__name__}' object is not iterable")
+
+    def __getitem__(self, key):
+        return self._v[key]
 
     def __bool__(self):
         return bool(self._v)
@@ -331,12 +338,19 @@ def expose_callable_fields(msg):
             continue
         except Exception:
             continue
-        # Convert SWIG vectors to Python lists to avoid lifetime issues
+        # Convert only small SWIG vectors to Python lists.  Large vectors, most
+        # notably sensor_msgs/Image.data, are left as their native sequence to
+        # avoid an O(n) Python list allocation before every callback.
         if hasattr(val, '__iter__') and hasattr(val, 'size') and 'vector' in type(val).__name__:
             try:
-                val = list(val)
+                vector_len = int(val.size())
             except Exception:
-                pass
+                vector_len = _EAGER_VECTOR_LIST_MAX_LEN + 1
+            if vector_len <= _EAGER_VECTOR_LIST_MAX_LEN:
+                try:
+                    val = list(val)
+                except Exception:
+                    pass
         try:
             setattr(msg, name, _ValueProxy(val))
         except Exception:

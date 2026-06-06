@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""lwrclpy-only zero-copy transport extension example.
+"""lwrclpy automatic zero-copy transport example.
 
 This sample verifies that lwrclpy has explicitly enabled Fast DDS DataSharing
 for the publisher and subscription.  By default the message is published with the
 standard rclpy-compatible publish(msg) API; zero-copy is provided by the Fast DDS
-shared-memory/DataSharing transport.  With rebuilt SWIG loan helpers, the sample
-can also exercise lwrclpy's experimental loaned-message extension.
+shared-memory/DataSharing transport and automatic middleware loaning for fixed
+size message types.
 """
 
 import argparse
@@ -24,11 +24,19 @@ def main():
         help="fail if Fast DDS DataSharing was not enabled",
     )
     parser.add_argument(
-        "--require-loaned-message",
+        "--require-automatic-loan",
         action="store_true",
-        help="fail unless the experimental lwrclpy loaned-message path is available and used",
+        help="fail unless automatic internal middleware loaning is available and used",
+    )
+    parser.add_argument(
+        "--require-complete-zero-copy",
+        action="store_true",
+        help="fail unless DataSharing and automatic internal middleware loaning are used",
     )
     args = parser.parse_args()
+    if args.require_complete_zero_copy:
+        args.require_zero_copy = True
+        args.require_automatic_loan = True
 
     rclpy.init()
     node = rclpy.create_node("zero_copy_extension")
@@ -47,26 +55,23 @@ def main():
 
     try:
         logger.info("=== lwrclpy Zero-Copy Transport Extension ===")
-        logger.info(f"publisher.zero_copy_enabled: {pub.zero_copy_enabled}")
-        logger.info(f"subscription.zero_copy_enabled: {sub.zero_copy_enabled}")
-        logger.info(f"publisher.can_loan_messages: {pub.can_loan_messages}")
+        logger.info(f"publisher internal DataSharing: {pub._data_sharing_enabled}")
+        logger.info(f"subscription internal DataSharing: {sub._data_sharing_enabled}")
+        logger.info(f"publisher internal automatic loan: {pub._automatic_loaned_publish_enabled}")
+        logger.info(f"subscription internal automatic loan: {sub._automatic_loaned_receive_enabled}")
 
-        if args.require_zero_copy and not (pub.zero_copy_enabled and sub.zero_copy_enabled):
+        if args.require_zero_copy and not (pub._data_sharing_enabled and sub._data_sharing_enabled):
             logger.error("Fast DDS DataSharing zero-copy transport is not enabled")
             return 2
-        if args.require_loaned_message and not pub.can_loan_messages:
-            logger.error("lwrclpy loaned-message extension is not available in these bindings")
+        if args.require_automatic_loan and not (
+            pub._automatic_loaned_publish_enabled and sub._automatic_loaned_receive_enabled
+        ):
+            logger.error("Automatic internal middleware loaning is not available")
             return 3
 
-        if pub.can_loan_messages:
-            msg = pub.loan_message(require_zero_copy=args.require_loaned_message)
-            msg.data = 42
-            pub.publish(msg)
-            logger.info("published via lwrclpy loaned-message extension")
-        else:
-            msg = Int32()
-            msg.data = 42
-            pub.publish(msg)
+        msg = Int32()
+        msg.data = 42
+        pub.publish(msg)
 
         for _ in range(20):
             if received:
@@ -76,9 +81,12 @@ def main():
         if not received:
             logger.error("message was not received")
             exit_code = 1
-        elif args.require_loaned_message:
-            logger.info("Verified lwrclpy loaned-message extension is available")
-        elif pub.zero_copy_enabled and sub.zero_copy_enabled:
+        elif args.require_complete_zero_copy:
+            if pub._auto_loan_publish_count < 1 or sub._auto_loan_receive_count < 1:
+                logger.error("Automatic internal loaning was not used")
+                return 4
+            logger.info("Verified complete automatic zero-copy path through normal rclpy-style APIs")
+        elif pub._data_sharing_enabled and sub._data_sharing_enabled:
             logger.info("Verified Fast DDS DataSharing zero-copy transport is enabled")
         else:
             logger.info("Message path works, but DataSharing zero-copy transport is not enabled")

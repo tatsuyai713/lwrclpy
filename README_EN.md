@@ -304,37 +304,27 @@ lwrclpy enables Fast DDS DataSharing/SHM internally when available.  ROS 2
 `rclpy` does not expose a public `loan_message()` API, so portable examples use
 the standard `publish(msg)` API.
 
-### lwrclpy Extension: Verified DataSharing Zero-Copy
+### Automatic Zero-Copy
 
 lwrclpy forces Fast DDS DataSharing on the writer and reader QoS when the Fast
-DDS Python API exposes it.  Code that intentionally depends on lwrclpy can verify
-this with the `zero_copy_enabled` extension property:
+DDS Python API exposes it.  When a generated type is fixed-size/plain and the
+rebuilt bindings include middleware loan helpers, lwrclpy automatically uses
+DataWriter/DataReader loaning behind the normal `publish(msg)` and subscription
+callback APIs.
 
 ```python
-assert publisher.zero_copy_enabled
-assert subscription.zero_copy_enabled
-
 msg = Image()
 msg.data = large_data
 publisher.publish(msg)
 ```
 
-The publish/subscribe API remains rclpy-compatible; `zero_copy_enabled` is an
-lwrclpy-only verification hook.  DataSharing/SHM is the supported zero-copy path
-for already-built wheels.
+Variable-size types such as `sensor_msgs/Image` and `std_msgs/String` do not use
+automatic loaning.  They still work through the normal rclpy-compatible path.
 
-`Publisher.loan_message(require_zero_copy=True)` is also implemented as an
-experimental lwrclpy extension.  It becomes active when Fast-DDS-python is rebuilt
-with `scripts/patch_fastdds_python_loan_helpers.py` and the generated message
-bindings are regenerated with `scripts/patch_fastdds_swig_v3.py`; those patches
-add address helpers for `loan_sample(void*&)` and typed message wrappers.  Without
-those rebuilt helpers, `can_loan_messages` remains `False` and the API does not
-pretend that loaned samples are available.
-
-To verify the extension on your environment:
+To verify the automatic zero-copy path on your environment:
 
 ```bash
-python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-complete-zero-copy
 ```
 
 After rebuilding Fast-DDS-python and the generated message bindings with the
@@ -342,6 +332,19 @@ loan helper patches, the experimental loaned-message path can be checked with:
 
 ```bash
 python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-message
+```
+
+To check subscriber-side loaned receive as well:
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-receive
+```
+
+To require and exercise the complete zero-copy path, including DataWriter loan,
+DataSharing, and DataReader loan:
+
+```bash
+python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-complete-zero-copy
 ```
 
 If Fast DDS DataSharing could not be enabled, the command fails instead of

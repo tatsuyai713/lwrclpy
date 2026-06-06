@@ -1,4 +1,6 @@
 import asyncio
+import concurrent.futures
+import functools
 import inspect
 import threading
 import time
@@ -23,6 +25,7 @@ class Executor:
         self._stopped = False
         self._stopped_lock = threading.Lock()
         self._wake_event = threading.Event()
+        self._task_queue = deque()
 
     def add_node(self, node):
         with self._nodes_lock:
@@ -87,7 +90,25 @@ class Executor:
         """Wake the executor from any wait."""
         self._wake_event.set()
 
+    def create_task(self, callback, *args, **kwargs):
+        """Queue a callback for executor execution and return a Future."""
+        task = functools.partial(callback, *args, **kwargs)
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        self._task_queue.append((task, None, None, future))
+        self._wake_event.set()
+        return future
+
+    def _pop_executor_task(self):
+        try:
+            return self._task_queue.popleft()
+        except IndexError:
+            return None
+
     def wait_for_ready_callbacks(self, timeout_sec: Optional[float] = None):
+        task = self._pop_executor_task()
+        if task:
+            cb, msg, node, future = task
+            return (lambda: _execute_callback(cb, msg, future), None, node)
         nodes = self.get_nodes()
         item = _pop_any_callback(nodes, timeout_sec, self._is_stopped, self._wake_event)
         if not item:
@@ -105,7 +126,7 @@ class Executor:
                 if not item:
                     break
                 cb, msg = item
-                _invoke_callback(cb, msg)
+                _execute_callback(cb, msg)
 
 
 class SingleThreadedExecutor(Executor):
@@ -116,14 +137,19 @@ class SingleThreadedExecutor(Executor):
 
 
 class MultiThreadedExecutor(Executor):
-    """Processes callbacks across a thread pool with proper synchronization."""
+    """Processes callbacks concurrently on worker threads."""
 
-    def __init__(self, num_threads: Optional[int] = None):
+    def __init__(
+        self,
+        num_threads: Optional[int] = None,
+        *,
+        context=None,
+    ):
+        del context  # compatibility placeholder
         super().__init__()
         self._threads: List[threading.Thread] = []
         self._num_threads = num_threads
         self._threads_lock = threading.Lock()
-        self._callback_lock = threading.Lock()
 
     def spin(self):
         if self._is_stopped():
@@ -139,7 +165,7 @@ class MultiThreadedExecutor(Executor):
         try:
             while ok() and not self._is_stopped():
                 nodes = self.get_nodes()
-                if not any(getattr(n, "_has_pending_work", lambda: True)() for n in nodes):
+                if not self._task_queue and not any(getattr(n, "_has_pending_work", lambda: True)() for n in nodes):
                     # Wait for wake event or timeout
                     self._wake_event.wait(timeout=0.05)
                     self._wake_event.clear()
@@ -154,12 +180,13 @@ class MultiThreadedExecutor(Executor):
 
     def _worker(self):
         while ok() and not self._is_stopped():
-            nodes = self.get_nodes()
-            item = _pop_any_callback(nodes, 0.05, self._is_stopped, self._wake_event)
+            item = self._pop_executor_task()
+            if item is None:
+                nodes = self.get_nodes()
+                item = _pop_any_callback(nodes, 0.05, self._is_stopped, self._wake_event)
             if item:
-                cb, msg, _node = item
-                with self._callback_lock:
-                    _invoke_callback(cb, msg)
+                cb, msg, _node, future = _normalize_callback_item(item)
+                _execute_callback(cb, msg, future)
 
     def shutdown(self, timeout_sec: Optional[float] = None):
         super().shutdown(timeout_sec)
@@ -241,17 +268,36 @@ def _run_callbacks_for_node(node):
     except Exception:
         callbacks = []
     for cb, msg in callbacks:
-        _invoke_callback(cb, msg)
+        _execute_callback(cb, msg)
     return bool(callbacks)
 
 
-def _invoke_callback(cb, msg):
+def _normalize_callback_item(item):
+    if len(item) == 4:
+        return item
+    cb, msg, node = item
+    return cb, msg, node, None
+
+
+def _execute_callback(cb, msg, future=None):
+    if future is not None and future.cancelled():
+        return None
     try:
-        result = cb(msg) if msg is not None else cb()
-        if inspect.iscoroutine(result):
-            asyncio.run(result)
-    except Exception:
-        pass
+        result = _invoke_callback(cb, msg)
+    except Exception as exc:
+        if future is not None and not future.done():
+            future.set_exception(exc)
+        return None
+    if future is not None and not future.done():
+        future.set_result(result)
+    return result
+
+
+def _invoke_callback(cb, msg):
+    result = cb(msg) if msg is not None else cb()
+    if inspect.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _pop_any_callback(nodes: Iterable, timeout_sec: Optional[float], is_stopped_fn, wake_event: Optional[threading.Event] = None):

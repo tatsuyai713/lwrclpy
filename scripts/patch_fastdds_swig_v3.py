@@ -134,6 +134,156 @@ uintptr_t lwrclpy_{class_name}_addr({fqcn}* msg)
     else:
         txt = txt.rstrip() + "\n" + helper + "\n"
 
+# 5c) Add a per-message DataReader loan wrapper.
+#     Fast DDS performs zero-copy receiving through read/take on loanable
+#     collections whose max_len is 0, followed by DataReader::return_loan().
+#     The wrapper keeps those collections alive while Python inspects samples.
+if msg_match and "/* __LWRCLPY_READER_LOAN_HELPERS__ */" not in txt:
+    fqcn = msg_match.group(1)
+    class_name = fqcn.split("::")[-1]
+    loan_cls = f"Lwrclpy_{class_name}_LoanedSamples"
+    helper = f'''
+/* __LWRCLPY_READER_LOAN_HELPERS__ */
+%{{ 
+#include <fastdds/dds/core/ReturnCode.hpp>
+#include <fastdds/dds/core/LoanableSequence.hpp>
+#include <fastdds/dds/subscriber/DataReader.hpp>
+#include <fastdds/dds/subscriber/SampleInfo.hpp>
+
+class {loan_cls}
+{{
+public:
+    {loan_cls}()
+        : reader_(nullptr)
+        , active_(false)
+    {{
+    }}
+
+    ~{loan_cls}()
+    {{
+        return_loan();
+    }}
+
+    bool take(eprosima::fastdds::dds::DataReader* reader, int32_t max_samples)
+    {{
+        return read_or_take(reader, max_samples, true);
+    }}
+
+    bool read(eprosima::fastdds::dds::DataReader* reader, int32_t max_samples)
+    {{
+        return read_or_take(reader, max_samples, false);
+    }}
+
+    bool return_loan()
+    {{
+        if (!active_ || reader_ == nullptr)
+        {{
+            return true;
+        }}
+        auto ret = reader_->return_loan(data_, infos_);
+        active_ = false;
+        reader_ = nullptr;
+        return ret == eprosima::fastdds::dds::RETCODE_OK;
+    }}
+
+    int32_t length() const
+    {{
+        return static_cast<int32_t>(data_.length());
+    }}
+
+    bool active() const
+    {{
+        return active_;
+    }}
+
+    {fqcn}* sample(int32_t index)
+    {{
+        if (index < 0 || index >= static_cast<int32_t>(data_.length()))
+        {{
+            return nullptr;
+        }}
+        return &data_[index];
+    }}
+
+    eprosima::fastdds::dds::SampleInfo* info(int32_t index)
+    {{
+        if (index < 0 || index >= static_cast<int32_t>(infos_.length()))
+        {{
+            return nullptr;
+        }}
+        return &infos_[index];
+    }}
+
+    bool valid_data(int32_t index) const
+    {{
+        if (index < 0 || index >= static_cast<int32_t>(infos_.length()))
+        {{
+            return false;
+        }}
+        return infos_[index].valid_data;
+    }}
+
+private:
+    bool read_or_take(eprosima::fastdds::dds::DataReader* reader, int32_t max_samples, bool do_take)
+    {{
+        return_loan();
+        if (reader == nullptr)
+        {{
+            return false;
+        }}
+        if (max_samples <= 0)
+        {{
+            max_samples = -1;
+        }}
+
+        eprosima::fastdds::dds::ReturnCode_t ret =
+            do_take
+                ? reader->take(data_, infos_, max_samples)
+                : reader->read(data_, infos_, max_samples);
+        if (ret != eprosima::fastdds::dds::RETCODE_OK)
+        {{
+            return false;
+        }}
+        reader_ = reader;
+        active_ = !data_.has_ownership();
+        return data_.length() > 0;
+    }}
+
+    eprosima::fastdds::dds::DataReader* reader_;
+    eprosima::fastdds::dds::LoanableSequence<{fqcn}> data_;
+    eprosima::fastdds::dds::SampleInfoSeq infos_;
+    bool active_;
+}};
+%}}
+
+namespace eprosima {{ namespace fastdds {{ namespace dds {{
+    class DataReader;
+    struct SampleInfo;
+}}}}
+}}
+
+class {loan_cls}
+{{
+public:
+    {loan_cls}();
+    ~{loan_cls}();
+    bool take(eprosima::fastdds::dds::DataReader* reader, int32_t max_samples);
+    bool read(eprosima::fastdds::dds::DataReader* reader, int32_t max_samples);
+    bool return_loan();
+    int32_t length() const;
+    bool active() const;
+    {fqcn}* sample(int32_t index);
+    eprosima::fastdds::dds::SampleInfo* info(int32_t index);
+    bool valid_data(int32_t index) const;
+}};
+'''
+    include_pat = rf'(?m)^\s*%include\s+"{re.escape(class_name)}\.hpp"\s*$'
+    m = re.search(include_pat, txt)
+    if m:
+        txt = txt[:m.end()] + "\n" + helper + txt[m.end():]
+    else:
+        txt = txt.rstrip() + "\n" + helper + "\n"
+
 # 6) Clean up any known bad redefinition blocks (safe pattern).
 #    E.g., if someone injected a hand-written "struct SerializedPayload_t { … }" block into the .i, remove it.
 txt = re.sub(

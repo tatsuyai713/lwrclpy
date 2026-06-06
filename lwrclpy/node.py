@@ -424,6 +424,12 @@ class Node:
         qos_overriding_options=None,
         content_filter_options=None,
     ):
+        if raw:
+            raise NotImplementedError(
+                "create_subscription(raw=True) is not supported: rclpy raw "
+                "subscriptions deliver serialized bytes, and lwrclpy does not "
+                "currently expose an equivalent serialized receive path"
+            )
         if event_callbacks is not None:
             raise NotImplementedError("create_subscription() does not support event_callbacks")
         if qos_overriding_options is not None:
@@ -455,6 +461,7 @@ class Node:
             raw=raw,
             event_callbacks=event_callbacks,
             pubsub_cls=_pubsub_cls,
+            msg_module=_mod,
         )
         self._subscriptions.append(sub)
         return sub
