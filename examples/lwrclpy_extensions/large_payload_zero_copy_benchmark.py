@@ -25,10 +25,10 @@ def _set_payload(msg: LargeFixedImage, payload: bytes | None, *, seq: int) -> No
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Large payload lwrclpy zero-copy benchmark")
-    parser.add_argument("--samples", type=int, default=60)
-    parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--max-inflight", type=int, default=8)
-    parser.add_argument("--poll-timeout", type=float, default=5.0)
+    parser.add_argument("--samples", type=int, default=1)
+    parser.add_argument("--warmup", type=int, default=0)
+    parser.add_argument("--max-inflight", type=int, default=1)
+    parser.add_argument("--poll-timeout", type=float, default=2.0)
     parser.add_argument("--min-mib-s", type=float, default=0.0)
     parser.add_argument(
         "--fill-payload",

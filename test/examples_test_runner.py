@@ -258,6 +258,8 @@ class ServerClientSpec:
 
 def _skip_reason(script: Path) -> Optional[str]:
     rel = script.relative_to(PROJECT_ROOT)
+    if rel.name.endswith("_benchmark.py") and os.environ.get("LWRCLPY_TEST_BENCHMARKS") != "1":
+        return "benchmark examples disabled (set LWRCLPY_TEST_BENCHMARKS=1 to run)"
     if rel.parts[:2] == ("examples", "video"):
         if os.environ.get("LWRCLPY_TEST_VIDEO") != "1":
             return "video examples disabled (set LWRCLPY_TEST_VIDEO=1 and provide assets)"
