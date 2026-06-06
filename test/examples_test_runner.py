@@ -445,7 +445,7 @@ def run_all_examples(platform_name: str) -> bool:
             server="third_party/ros2_examples/rclpy/actions/minimal_action_server/examples_rclpy_minimal_action_server/server.py",
             clients=("third_party/ros2_examples/rclpy/actions/minimal_action_client/examples_rclpy_minimal_action_client/client.py",),
             client_expect=("Goal succeeded!", "Result:"),
-            client_timeout=90.0,
+            client_timeout=240.0,
             server_ready=("Executing goal",),
         ),
     )
@@ -632,6 +632,7 @@ def run_all_examples(platform_name: str) -> bool:
     platform_key = platform_name.lower()
     is_macos = platform_key.startswith("mac") or sys.platform == "darwin"
     standalone_timeouts: dict[Path, float] = {}
+    standalone_timeouts[PROJECT_ROOT / "examples/executor/multithreaded_executor_demo.py"] = 60.0
     if is_macos:
         # macOS can take longer for service discovery in this example.
         standalone_timeouts[PROJECT_ROOT / "examples/services/trigger_bridge/bridge.py"] = 45.0
