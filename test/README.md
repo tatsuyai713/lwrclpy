@@ -135,7 +135,7 @@ The test script automatically executes examples from the `/tmp` directory. This 
 
 ### Timeout Errors
 
-The default timeout is 3 seconds. You can adjust the `timeout` parameter in the script.
+The example runner uses per-category timeouts for pub/sub pairs, service/action pairs, launch files, and standalone examples. In slow CI environments, set `LWRCLPY_TEST_TIMEOUT_SCALE` to multiply all runner timeouts without changing each test case.
 
 ## Notes
 
@@ -163,4 +163,3 @@ If any test fails, check:
 1. Library dependencies are installed correctly
 2. FastDDS v3 is properly configured
 3. Python environment is set up correctly
-

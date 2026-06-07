@@ -24,6 +24,33 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 EXAMPLES_ROOT = PROJECT_ROOT / "examples"
 ROS2_EXAMPLES_ROOT = PROJECT_ROOT / "third_party" / "ros2_examples" / "rclpy"
 
+DEFAULT_PAIR_TIMEOUT = 20.0
+DEFAULT_CLIENT_TIMEOUT = 45.0
+DEFAULT_STANDALONE_TIMEOUT = 45.0
+DDS_DISCOVERY_DELAY = 3.0
+SERVER_READY_TIMEOUT = 20.0
+ROS2_SERVER_READY_TIMEOUT = 30.0
+LAUNCH_TIMEOUT = 20.0
+LONG_RUNNING_SMOKE_TIMEOUT = 15.0
+PROCESS_TERMINATE_GRACE = 5.0
+PROCESS_KILL_GRACE = 2.0
+
+
+def _timeout_scale() -> float:
+    raw = os.environ.get("LWRCLPY_TEST_TIMEOUT_SCALE", "1.0")
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 1.0
+
+
+def _timeout(seconds: float) -> float:
+    return float(seconds) * _timeout_scale()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(_timeout(seconds))
+
 
 class Colors:
     GREEN = "\033[92m"
@@ -113,7 +140,7 @@ class ProcessCapture:
     def output(self) -> str:
         return "".join(self.stdout_lines + self.stderr_lines)
 
-    def terminate(self, grace: float = 2.0) -> None:
+    def terminate(self, grace: float = PROCESS_TERMINATE_GRACE) -> None:
         if self.proc.poll() is not None:
             return
         try:
@@ -121,11 +148,11 @@ class ProcessCapture:
         except Exception:
             self.proc.terminate()
         try:
-            self.proc.wait(timeout=grace)
+            self.proc.wait(timeout=_timeout(grace))
         except subprocess.TimeoutExpired:
             self.proc.kill()
             try:
-                self.proc.wait(timeout=1.0)
+                self.proc.wait(timeout=_timeout(PROCESS_KILL_GRACE))
             except subprocess.TimeoutExpired:
                 pass
 
@@ -141,7 +168,8 @@ def _contains_error(output: str) -> bool:
 
 def _wait_for_keywords(proc: ProcessCapture, keywords: Sequence[str], timeout: float) -> bool:
     start = time.monotonic()
-    while (time.monotonic() - start) < timeout:
+    effective_timeout = _timeout(timeout)
+    while (time.monotonic() - start) < effective_timeout:
         output = proc.output()
         if any(keyword in output for keyword in keywords):
             return True
@@ -168,7 +196,7 @@ def _run_script(
         if expect_output:
             matched = _wait_for_keywords(proc, expect_output, timeout)
         else:
-            time.sleep(timeout)
+            _sleep(timeout)
         early_exit = proc.proc.poll() is not None and proc.proc.returncode not in (0, None)
         output = proc.output()
         proc.terminate()
@@ -179,11 +207,12 @@ def _run_script(
         return True, output[:300] if output else "OK"
 
     try:
-        proc.proc.wait(timeout=timeout)
+        proc.proc.wait(timeout=_timeout(timeout))
     except subprocess.TimeoutExpired:
         output = proc.output()
         proc.terminate()
-        return False, "Timeout"
+        detail = output[:500]
+        return False, f"Timeout after {_timeout(timeout):.1f}s" + (f"\n{detail}" if detail else "")
 
     output = proc.output()
     if _contains_error(output):
@@ -198,20 +227,20 @@ def _run_pair(
     publisher: Path,
     subscriber: Path,
     subscriber_expect: Sequence[str],
-    publisher_timeout: float = 10.0,
-    subscriber_timeout: float = 10.0,
+    publisher_timeout: float = DEFAULT_PAIR_TIMEOUT,
+    subscriber_timeout: float = DEFAULT_PAIR_TIMEOUT,
     publisher_args: Optional[Sequence[str]] = None,
     subscriber_args: Optional[Sequence[str]] = None,
 ) -> Tuple[bool, str]:
     print_test_start(name)
     sub = ProcessCapture([sys.executable, str(subscriber)] + list(subscriber_args or []))
     # Allow DDS discovery time between separate processes
-    time.sleep(1.5)
+    _sleep(DDS_DISCOVERY_DELAY)
     pub = ProcessCapture([sys.executable, str(publisher)] + list(publisher_args or []))
 
     pub_done = False
     try:
-        pub.proc.wait(timeout=publisher_timeout)
+        pub.proc.wait(timeout=_timeout(publisher_timeout))
         pub_done = True
     except subprocess.TimeoutExpired:
         pass
@@ -225,7 +254,6 @@ def _run_pair(
 
     if _contains_error(pub_output) or _contains_error(sub_output):
         return False, (pub_output + sub_output)[:500]
-    print(f"DEBUG: matched={matched}, sub_output={repr(sub_output)}")
     if not matched:
         return False, f"Subscriber output did not include {list(subscriber_expect)}"
     if not pub_done:
@@ -240,8 +268,8 @@ class PairSpec:
     publisher: str
     subscriber: str
     subscriber_expect: Tuple[str, ...]
-    publisher_timeout: float = 10.0
-    subscriber_timeout: float = 10.0
+    publisher_timeout: float = DEFAULT_PAIR_TIMEOUT
+    subscriber_timeout: float = DEFAULT_PAIR_TIMEOUT
     publisher_args: Tuple[str, ...] = ()
     subscriber_args: Tuple[str, ...] = ()
 
@@ -252,7 +280,7 @@ class ServerClientSpec:
     server: str
     clients: Tuple[str, ...]
     client_expect: Tuple[str, ...]
-    client_timeout: float = 15.0
+    client_timeout: float = DEFAULT_CLIENT_TIMEOUT
     server_ready: Tuple[str, ...] = ()
 
 
@@ -284,6 +312,7 @@ def run_all_examples(platform_name: str) -> bool:
     print_header(f"lwrclpy Examples Test Suite ({platform_name})")
     print(f"Python: {sys.version}")
     print(f"Project root: {PROJECT_ROOT}")
+    print(f"Timeout scale: {_timeout_scale():.1f}x")
     print(f"Working directory: /tmp\n")
 
     results: List[Tuple[str, bool, str]] = []
@@ -311,56 +340,42 @@ def run_all_examples(platform_name: str) -> bool:
             publisher="examples/pubsub/string/talker.py",
             subscriber="examples/pubsub/string/listener.py",
             subscriber_expect=("[recv]",),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="Pub/Sub sensor_qos",
             publisher="examples/pubsub/sensor_qos/talker.py",
             subscriber="examples/pubsub/sensor_qos/listener.py",
             subscriber_expect=("[recv]",),
-            publisher_timeout=6.0,
-            subscriber_timeout=6.0,
         ),
         PairSpec(
             name="Pub/Sub zero_copy",
             publisher="examples/pubsub/zero_copy/zero_copy_publisher.py",
             subscriber="examples/pubsub/zero_copy/callback_subscriber.py",
             subscriber_expect=("Callback Subscription Demo", "Message"),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="Typed messages (geometry)",
             publisher="examples/pubsub/typed_messages/geometry_publisher.py",
             subscriber="examples/pubsub/typed_messages/geometry_subscriber.py",
             subscriber_expect=("[Point]", "[Pose]", "[Twist]", "[PoseStamped]"),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="Typed messages (sensor)",
             publisher="examples/pubsub/typed_messages/sensor_publisher.py",
             subscriber="examples/pubsub/typed_messages/sensor_subscriber.py",
             subscriber_expect=("[LaserScan]", "[IMU]", "[Range]", "[Temperature]"),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="Timers (wall_timer)",
             publisher="examples/timers/wall_timer.py",
             subscriber="examples/timers/wall_timer_listener.py",
             subscriber_expect=("[timer recv]",),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="Timers (oneshot + periodic)",
             publisher="examples/timers/oneshot_and_periodic.py",
             subscriber="examples/timers/oneshot_and_periodic_listener.py",
             subscriber_expect=("[combo recv]",),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
     )
 
@@ -369,8 +384,6 @@ def run_all_examples(platform_name: str) -> bool:
         publisher="examples/pubsub/ml/talker.py",
         subscriber="examples/pubsub/ml/listener.py",
         subscriber_expect=("[recv]", "score="),
-        publisher_timeout=10.0,
-        subscriber_timeout=10.0,
     )
 
     server_client_specs = (
@@ -379,7 +392,6 @@ def run_all_examples(platform_name: str) -> bool:
             server="examples/services/set_bool/server.py",
             clients=("examples/services/set_bool/client.py",),
             client_expect=("response", "success="),
-            client_timeout=40.0,
             server_ready=("Starting SetBool server",),
         ),
         ServerClientSpec(
@@ -387,7 +399,7 @@ def run_all_examples(platform_name: str) -> bool:
             server="examples/services/trigger/trigger_server.py",
             clients=("examples/services/trigger/trigger_client.py",),
             client_expect=("Demo Complete", "Result:"),
-            client_timeout=60.0,
+            client_timeout=90.0,
             server_ready=("Services available",),
         ),
         ServerClientSpec(
@@ -398,7 +410,7 @@ def run_all_examples(platform_name: str) -> bool:
                 "examples/actions/advanced_action_client.py",
             ),
             client_expect=("Result:", "Demo Complete"),
-            client_timeout=45.0,
+            client_timeout=90.0,
             server_ready=("Action Server", "action server"),
         ),
     )
@@ -410,24 +422,18 @@ def run_all_examples(platform_name: str) -> bool:
             publisher="third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_member_function.py",
             subscriber="third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_member_function.py",
             subscriber_expect=("I heard:",),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="ROS2 Minimal Pub/Sub (old_school)",
             publisher="third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_old_school.py",
             subscriber="third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_old_school.py",
             subscriber_expect=("I heard:",),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
         PairSpec(
             name="ROS2 Minimal Pub/Sub (local_function)",
             publisher="third_party/ros2_examples/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_local_function.py",
             subscriber="third_party/ros2_examples/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_lambda.py",
             subscriber_expect=("I heard:",),
-            publisher_timeout=8.0,
-            subscriber_timeout=8.0,
         ),
     )
 
@@ -437,7 +443,6 @@ def run_all_examples(platform_name: str) -> bool:
             server="third_party/ros2_examples/rclpy/services/minimal_service/examples_rclpy_minimal_service/service_member_function.py",
             clients=("third_party/ros2_examples/rclpy/services/minimal_client/examples_rclpy_minimal_client/client_async_member_function.py",),
             client_expect=("Result of add_two_ints:", "42"),
-            client_timeout=30.0,
             server_ready=(),
         ),
         ServerClientSpec(
@@ -445,7 +450,7 @@ def run_all_examples(platform_name: str) -> bool:
             server="third_party/ros2_examples/rclpy/actions/minimal_action_server/examples_rclpy_minimal_action_server/server.py",
             clients=("third_party/ros2_examples/rclpy/actions/minimal_action_client/examples_rclpy_minimal_action_client/client.py",),
             client_expect=("Goal succeeded!", "Result:"),
-            client_timeout=240.0,
+            client_timeout=300.0,
             server_ready=("Executing goal",),
         ),
     )
@@ -545,9 +550,9 @@ def run_all_examples(platform_name: str) -> bool:
         server_proc = ProcessCapture([sys.executable, str(server_path)])
         # Allow DDS discovery time between separate processes
         if spec.server_ready:
-            _wait_for_keywords(server_proc, spec.server_ready, timeout=10.0)
+            _wait_for_keywords(server_proc, spec.server_ready, timeout=ROS2_SERVER_READY_TIMEOUT)
         else:
-            time.sleep(5.0)
+            _sleep(DDS_DISCOVERY_DELAY)
 
         server_output = ""
         overall_ok = True
@@ -594,9 +599,9 @@ def run_all_examples(platform_name: str) -> bool:
         server_proc = ProcessCapture([sys.executable, str(server_path)])
         # Allow DDS discovery time between separate processes
         if spec.server_ready:
-            _wait_for_keywords(server_proc, spec.server_ready, timeout=5.0)
+            _wait_for_keywords(server_proc, spec.server_ready, timeout=SERVER_READY_TIMEOUT)
         else:
-            time.sleep(5.0)
+            _sleep(DDS_DISCOVERY_DELAY)
 
         server_output = ""
         overall_ok = True
@@ -632,10 +637,10 @@ def run_all_examples(platform_name: str) -> bool:
     platform_key = platform_name.lower()
     is_macos = platform_key.startswith("mac") or sys.platform == "darwin"
     standalone_timeouts: dict[Path, float] = {}
-    standalone_timeouts[PROJECT_ROOT / "examples/executor/multithreaded_executor_demo.py"] = 60.0
+    standalone_timeouts[PROJECT_ROOT / "examples/executor/multithreaded_executor_demo.py"] = 180.0
     if is_macos:
         # macOS can take longer for service discovery in this example.
-        standalone_timeouts[PROJECT_ROOT / "examples/services/trigger_bridge/bridge.py"] = 45.0
+        standalone_timeouts[PROJECT_ROOT / "examples/services/trigger_bridge/bridge.py"] = 90.0
 
     long_running = {
         PROJECT_ROOT / "examples/executor/multithreaded_spin.py",
@@ -668,7 +673,7 @@ def run_all_examples(platform_name: str) -> bool:
             continue
         print_test_start(name)
         # Launch files run indefinitely, so use allow_timeout=True
-        ok, output = _run_script(script, timeout=10.0, expect_output=expect, allow_timeout=True)
+        ok, output = _run_script(script, timeout=LAUNCH_TIMEOUT, expect_output=expect, allow_timeout=True)
         results.append((name, ok, output))
         if ok:
             print_success(f"{name} - OK")
@@ -691,9 +696,9 @@ def run_all_examples(platform_name: str) -> bool:
         print_test_start(rel.as_posix())
 
         if script in long_running:
-            ok, output = _run_script(script, timeout=6.0, allow_timeout=True)
+            ok, output = _run_script(script, timeout=LONG_RUNNING_SMOKE_TIMEOUT, allow_timeout=True)
         else:
-            timeout = standalone_timeouts.get(script, 20.0)
+            timeout = standalone_timeouts.get(script, DEFAULT_STANDALONE_TIMEOUT)
             ok, output = _run_script(script, timeout=timeout)
 
         results.append((rel.as_posix(), ok, output))

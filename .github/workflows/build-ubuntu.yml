@@ -23,6 +23,7 @@ jobs:
             build-jobs: 2
     name: Build Ubuntu ${{ matrix.platform.arch }} Wheel (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 150
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -91,6 +92,7 @@ jobs:
   post-build:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       run_id: ${{ steps.run_id.outputs.run_id }}
     steps:
