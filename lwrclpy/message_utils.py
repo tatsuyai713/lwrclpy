@@ -78,6 +78,29 @@ def _buffer_bytes(value):
     return None
 
 
+def _message_field_memoryview(msg, name: str):
+    helper = getattr(msg, f"_lwrclpy_{name}_memoryview", None)
+    if callable(helper):
+        try:
+            return memoryview(helper())
+        except Exception:
+            pass
+    return None
+
+
+def _message_field_bytes(msg, name: str):
+    helper = getattr(msg, f"_lwrclpy_{name}_bytes", None)
+    if callable(helper):
+        try:
+            return bytes(helper())
+        except Exception:
+            pass
+    view = _message_field_memoryview(msg, name)
+    if view is not None:
+        return view
+    return None
+
+
 def _get_field_names(msg_cls) -> tuple[str, ...]:
     """Return cacheable field names for a SWIG-generated message class.
 
@@ -266,6 +289,9 @@ def _get_value(src, name):
     """Extract a field value from *src* using fastddsgen conventions."""
     if name in _SKIP_FIELDS or name.startswith("_"):
         return None
+    fast_value = _message_field_bytes(src, name)
+    if fast_value is not None:
+        return fast_value
     try:
         v = getattr(src, name)
     except Exception:
@@ -436,6 +462,16 @@ def expose_callable_fields(msg):
             continue
         if not callable(attr):
             # Already replaced (e.g., by __setattr__ patch) -- skip
+            continue
+        fast_view = _message_field_memoryview(msg, name)
+        if fast_view is not None:
+            try:
+                setattr(msg, name, fast_view)
+            except Exception:
+                try:
+                    object.__setattr__(msg, name, fast_view)
+                except Exception:
+                    pass
             continue
         try:
             val = attr()

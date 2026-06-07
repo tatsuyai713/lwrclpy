@@ -73,6 +73,12 @@ def _copy_message_into(src, dst) -> bool:
     return copied
 
 
+def _write_checked(writer, msg) -> None:
+    rc = writer.write(msg)
+    if not _retcode_is_ok(rc, none_is_ok=True):
+        raise RuntimeError(f"Fast DDS DataWriter.write failed: retcode={rc!r}")
+
+
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> bool:
     """Prefer/force data sharing on the writer QoS when the API exists."""
     if os.environ.get("LWRCLPY_NO_DATASHARING") == "1":
@@ -211,13 +217,13 @@ class Publisher:
         # rclpy-style shadow attributes in-place and write the same instance.
         if isinstance(msg, target_ctor):
             _materialize_shadow_attributes(msg)
-            self._writer.write(msg)
+            _write_checked(self._writer, msg)
         else:
             try:
                 to_send = clone_message(msg, target_ctor)
             except Exception:
                 to_send = msg  # fall back to original on failure
-            self._writer.write(to_send)
+            _write_checked(self._writer, to_send)
         self._publish_count += 1
 
     @property
@@ -286,9 +292,11 @@ class Publisher:
             if not self._writer.lwrclpy_write_addr(loaned._addr):
                 raise RuntimeError("Failed to write middleware-loaned sample")
         elif loaned._from_middleware and hasattr(self._writer, "write_loaned"):
-            self._writer.write_loaned(msg)
+            rc = self._writer.write_loaned(msg)
+            if not _retcode_is_ok(rc, none_is_ok=True):
+                raise RuntimeError(f"Fast DDS DataWriter.write_loaned failed: retcode={rc!r}")
         else:
-            self._writer.write(msg)
+            _write_checked(self._writer, msg)
         loaned._published = True
         self._publish_count += 1
 
