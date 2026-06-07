@@ -35,6 +35,142 @@ def add_after_anchor(lines):
     if block:
         txt = txt[:ins] + "\n" + block + txt[ins:]
 
+
+def add_uint8_buffer_fast_paths():
+    """Add one-copy Python buffer setters for std::vector<uint8_t> fields.
+
+    fastddsgen's default SWIG conversion builds std::vector<uint8_t> through the
+    generic sequence path.  For ROS fields such as sensor_msgs/Image.data and
+    sensor_msgs/PointCloud2.data this is the dominant Python-side cost.  The
+    generated overload below accepts any Python buffer object and copies it into
+    the C++ vector with a single resize+memcpy.
+    """
+    global txt
+    if "/* __LWRCLPY_UINT8_BUFFER_FAST_PATHS__ */" in txt:
+        return
+
+    msg_match_local = re.search(r'Binding for class\s+([A-Za-z_][A-Za-z_0-9:]*)', txt)
+    if not msg_match_local:
+        return
+    fqcn = msg_match_local.group(1)
+    class_name = fqcn.split("::")[-1]
+
+    field_names: list[str] = []
+    for match in re.finditer(
+        rf'%ignore\s+{re.escape(fqcn)}::([A-Za-z_][A-Za-z_0-9]*)'
+        r'\(\s*std::vector\s*<\s*(?:uint8_t|octet|unsigned\s+char)\s*>\s*&&\s*\)\s*;',
+        txt,
+    ):
+        name = match.group(1)
+        if name not in field_names:
+            field_names.append(name)
+    if not field_names:
+        return
+
+    vector_extend = r'''
+%extend std::vector<uint8_t>
+{
+    PyObject* _lwrclpy_bytes() const
+    {
+        const char* data = self->empty()
+            ? ""
+            : reinterpret_cast<const char*>(self->data());
+        return PyBytes_FromStringAndSize(data, static_cast<Py_ssize_t>(self->size()));
+    }
+
+    PyObject* _lwrclpy_memoryview()
+    {
+        static char empty = 0;
+        char* data = self->empty()
+            ? &empty
+            : reinterpret_cast<char*>(self->data());
+        return PyMemoryView_FromMemory(data, static_cast<Py_ssize_t>(self->size()), PyBUF_READ);
+    }
+}
+'''
+
+    methods = []
+    ignore_lines = []
+    for field in field_names:
+        ignore_lines.append(f'%ignore {fqcn}::{field}(const std::vector<uint8_t>&);')
+        ignore_lines.append(f'%ignore {fqcn}::{field}(const std::vector<unsigned char>&);')
+        methods.append(f'''
+    void {field}(PyObject* obj)
+    {{
+        Py_buffer view;
+        if (PyObject_GetBuffer(obj, &view, PyBUF_CONTIG_RO) == 0)
+        {{
+            if (view.len < 0)
+            {{
+                PyBuffer_Release(&view);
+                throw std::runtime_error("negative buffer size");
+            }}
+            std::vector<uint8_t> tmp;
+            tmp.resize(static_cast<size_t>(view.len));
+            if (view.len > 0)
+            {{
+                std::memcpy(tmp.data(), view.buf, static_cast<size_t>(view.len));
+            }}
+            PyBuffer_Release(&view);
+            self->{field}(std::move(tmp));
+            return;
+        }}
+        PyErr_Clear();
+
+        std::vector<uint8_t>* ptr = nullptr;
+        int res = swig::asptr(obj, &ptr);
+        if (!SWIG_IsOK(res) || ptr == nullptr)
+        {{
+            throw std::runtime_error("expected a bytes-like object or uint8_t_vector");
+        }}
+        self->{field}(*ptr);
+        if (SWIG_IsNewObj(res))
+        {{
+            delete ptr;
+        }}
+    }}
+
+    PyObject* _lwrclpy_{field}_bytes()
+    {{
+        const auto& value = self->{field}();
+        const char* data = value.empty()
+            ? ""
+            : reinterpret_cast<const char*>(value.data());
+        return PyBytes_FromStringAndSize(data, static_cast<Py_ssize_t>(value.size()));
+    }}
+
+    PyObject* _lwrclpy_{field}_memoryview()
+    {{
+        static char empty = 0;
+        auto& value = self->{field}();
+        char* data = value.empty()
+            ? &empty
+            : reinterpret_cast<char*>(value.data());
+        return PyMemoryView_FromMemory(data, static_cast<Py_ssize_t>(value.size()), PyBUF_READ);
+    }}
+''')
+
+    helper = f'''
+/* __LWRCLPY_UINT8_BUFFER_FAST_PATHS__ */
+%{{
+#include <cstring>
+#include <stdexcept>
+%}}
+{vector_extend}
+{chr(10).join(ignore_lines)}
+%extend {fqcn}
+{{
+{''.join(methods)}
+}}
+'''
+
+    include_pat = rf'(?m)^\s*%include\s+"{re.escape(class_name)}\.hpp"\s*$'
+    m = re.search(include_pat, txt)
+    if m:
+        txt = txt[:m.start()] + helper + "\n" + txt[m.start():]
+    else:
+        txt = txt.rstrip() + "\n" + helper + "\n"
+
 # 1) Ensure we have a C++ insertion block %{ %}.
 if '%{' not in txt:
     m = re.search(r'(?m)^\s*%module[^\n]*\n', txt)
@@ -283,6 +419,9 @@ public:
         txt = txt[:m.end()] + "\n" + helper + txt[m.end():]
     else:
         txt = txt.rstrip() + "\n" + helper + "\n"
+
+# 5d) Add generic fast paths for large uint8/octet sequence fields.
+add_uint8_buffer_fast_paths()
 
 # 6) Clean up any known bad redefinition blocks (safe pattern).
 #    E.g., if someone injected a hand-written "struct SerializedPayload_t { … }" block into the .i, remove it.

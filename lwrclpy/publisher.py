@@ -9,7 +9,7 @@ import os
 from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _assign
-from .message_utils import _copy_val, _get_field_names, _get_value
+from .message_utils import _copy_val, _get_field_names, _get_value, _is_swig_vector
 from .duration import Duration
 from .utils import (
     _matched_handle_count,
@@ -61,6 +61,13 @@ def _copy_message_into(src, dst) -> bool:
             continue
         value = _get_value(src, name)
         if value is None:
+            continue
+        # Avoid materializing large fixed arrays as Python bytes when copying
+        # into a loaned sample.  The generated setter can copy the native SWIG
+        # vector directly, which keeps rclpy-visible behavior unchanged while
+        # removing a large intermediate allocation.
+        if _is_swig_vector(value) and _assign(dst, name, value):
+            copied = True
             continue
         copied = _assign(dst, name, _copy_val(value)) or copied
     return copied

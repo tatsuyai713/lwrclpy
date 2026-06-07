@@ -25,6 +25,59 @@ _callable_fields_cache: dict[type, tuple[str, ...]] = {}
 _EAGER_VECTOR_LIST_MAX_LEN = 4096
 
 
+def _is_swig_vector(value) -> bool:
+    return hasattr(value, '__iter__') and hasattr(value, 'size') and 'vector' in type(value).__name__
+
+
+def _swig_vector_len(value) -> int | None:
+    try:
+        return int(value.size())
+    except Exception:
+        return None
+
+
+def _buffer_view(value):
+    lwrclpy_memoryview = getattr(value, "_lwrclpy_memoryview", None)
+    if callable(lwrclpy_memoryview):
+        try:
+            return memoryview(lwrclpy_memoryview())
+        except Exception:
+            pass
+    get_buffer = getattr(value, "get_buffer", None)
+    if callable(get_buffer):
+        try:
+            buffer_obj = get_buffer()
+            if "SwigPyObject" in type(buffer_obj).__name__:
+                raise TypeError("raw SWIG pointer is not a Python buffer view")
+            view = memoryview(buffer_obj)
+            # Some generated bindings expose get_buffer() as a raw SWIG pointer
+            # object.  memoryview(pointer) can succeed but represents the
+            # pointer wrapper, not the vector contents.  Use it only when it
+            # reports the same byte size as the vector.
+            vector_len = _swig_vector_len(value)
+            if vector_len is None or view.nbytes == vector_len:
+                return view
+        except Exception:
+            pass
+    try:
+        return memoryview(value)
+    except Exception:
+        return None
+
+
+def _buffer_bytes(value):
+    lwrclpy_bytes = getattr(value, "_lwrclpy_bytes", None)
+    if callable(lwrclpy_bytes):
+        try:
+            return bytes(lwrclpy_bytes())
+        except Exception:
+            pass
+    view = _buffer_view(value)
+    if view is not None:
+        return view.tobytes()
+    return None
+
+
 def _get_field_names(msg_cls) -> tuple[str, ...]:
     """Return cacheable field names for a SWIG-generated message class.
 
@@ -107,8 +160,12 @@ class _ValueProxy:
             return getattr(self._v, name + '_')
 
     def __repr__(self):
-        # For SWIG vectors, convert to list for better display
-        if hasattr(self._v, '__iter__') and hasattr(self._v, 'size'):
+        # For small SWIG vectors, convert to list for better display.  Large
+        # payload fields such as sensor_msgs/Image.data must stay compact.
+        if _is_swig_vector(self._v):
+            vector_len = _swig_vector_len(self._v)
+            if vector_len is not None and vector_len > _EAGER_VECTOR_LIST_MAX_LEN:
+                return f"<{type(self._v).__name__} size={vector_len}>"
             try:
                 return repr(list(self._v))
             except Exception:
@@ -116,8 +173,12 @@ class _ValueProxy:
         return repr(self._v)
 
     def __str__(self):
-        # For SWIG vectors, convert to list for better display
-        if hasattr(self._v, '__iter__') and hasattr(self._v, 'size'):
+        # For small SWIG vectors, convert to list for better display.  Large
+        # payload fields such as sensor_msgs/Image.data must stay compact.
+        if _is_swig_vector(self._v):
+            vector_len = _swig_vector_len(self._v)
+            if vector_len is not None and vector_len > _EAGER_VECTOR_LIST_MAX_LEN:
+                return f"<{type(self._v).__name__} size={vector_len}>"
             try:
                 return str(list(self._v))
             except Exception:
@@ -128,9 +189,23 @@ class _ValueProxy:
         return format(self._v, spec)
 
     def __bytes__(self):
-        return bytes(self._v) if hasattr(self._v, "__bytes__") else bytes(str(self._v), "utf-8")
+        data = _buffer_bytes(self._v)
+        if data is not None:
+            return data
+        if _is_swig_vector(self._v):
+            try:
+                return bytes(bytearray(self._v))
+            except Exception:
+                pass
+        try:
+            return bytes(self._v)
+        except Exception:
+            return bytes(str(self._v), "utf-8")
 
     def __len__(self):
+        vector_len = _swig_vector_len(self._v)
+        if vector_len is not None:
+            return vector_len
         return len(self._v) if hasattr(self._v, "__len__") else 0
 
     def __iter__(self):
@@ -222,16 +297,44 @@ def _assign(target, name, val) -> bool:
     try:
         setter = getattr(target, name, None)
         if callable(setter):
+            assigned = False
+            candidates = [val]
+            view = _buffer_view(val)
+            if view is not None:
+                candidates.append(view)
+                try:
+                    candidates.append(view.cast("B"))
+                except Exception:
+                    pass
+                # Last-resort fallback for bindings that do not consume
+                # Py_buffer directly.  Prefer the buffer objects above so
+                # generated uint8/octet setters can do a single C++ copy.
+                candidates.append(view.tobytes())
+            seen_candidate_ids: set[int] = set()
+            for candidate in candidates:
+                candidate_id = id(candidate)
+                if candidate_id in seen_candidate_ids:
+                    continue
+                seen_candidate_ids.add(candidate_id)
+                try:
+                    setter(candidate)
+                except Exception:
+                    continue
+                else:
+                    assigned = True
+                    break
+            if not assigned:
+                raise RuntimeError("setter rejected value")
             try:
-                setter(val)
+                exposed_val = setter()
             except Exception:
-                pass
+                exposed_val = val
             # Expose rclpy-style attribute access while keeping callable behavior.
             try:
-                setattr(target, name, _ValueProxy(val))
+                setattr(target, name, _ValueProxy(exposed_val))
             except Exception:
                 try:
-                    object.__setattr__(target, name, _ValueProxy(val))
+                    object.__setattr__(target, name, _ValueProxy(exposed_val))
                 except Exception:
                     pass
             return True
@@ -299,6 +402,8 @@ def _copy_val(val):
             for fname in _get_field_names(sub_cls):
                 sub_val = _get_value(val, fname)
                 if sub_val is not None:
+                    if _is_swig_vector(sub_val) and _assign(sub_clone, fname, sub_val):
+                        continue
                     _assign(sub_clone, fname, _copy_val(sub_val))
             return sub_clone
         except Exception:
@@ -338,19 +443,30 @@ def expose_callable_fields(msg):
             continue
         except Exception:
             continue
-        # Convert only small SWIG vectors to Python lists.  Large vectors, most
-        # notably sensor_msgs/Image.data, are left as their native sequence to
-        # avoid an O(n) Python list allocation before every callback.
-        if hasattr(val, '__iter__') and hasattr(val, 'size') and 'vector' in type(val).__name__:
-            try:
-                vector_len = int(val.size())
-            except Exception:
+        # Convert only small SWIG vectors to Python lists for display
+        # convenience.  Large byte vectors are exposed as memoryview when the
+        # generated binding supports it, avoiding Python list allocation and
+        # enabling bytes-like consumers such as numpy.frombuffer().
+        if _is_swig_vector(val):
+            vector_len = _swig_vector_len(val)
+            if vector_len is None:
                 vector_len = _EAGER_VECTOR_LIST_MAX_LEN + 1
             if vector_len <= _EAGER_VECTOR_LIST_MAX_LEN:
                 try:
                     val = list(val)
                 except Exception:
                     pass
+            else:
+                view = _buffer_view(val)
+                if view is not None:
+                    try:
+                        setattr(msg, name, view)
+                    except Exception:
+                        try:
+                            object.__setattr__(msg, name, view)
+                        except Exception:
+                            pass
+                    continue
         try:
             setattr(msg, name, _ValueProxy(val))
         except Exception:
@@ -390,6 +506,8 @@ def clone_message(msg, msg_ctor):
         val = _get_value(msg, name)
         if val is None:
             continue
+        if _is_swig_vector(val) and _assign(clone, name, val):
+            continue
         copied = _copy_val(val)
         _assign(clone, name, copied)
 
@@ -401,6 +519,8 @@ def clone_message(msg, msg_ctor):
                 continue  # already processed
             val = _get_value(msg, name)
             if val is None:
+                continue
+            if _is_swig_vector(val) and _assign(clone, name, val):
                 continue
             copied = _copy_val(val)
             _assign(clone, name, copied)

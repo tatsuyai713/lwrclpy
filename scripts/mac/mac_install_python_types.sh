@@ -27,6 +27,7 @@ PY
 [[ -n "${INSTALL_BIN}" ]] || { log "[FATAL] 'install' command not found"; exit 1; }
 : "${INSTALL_NAME_TOOL:=$(command -v install_name_tool || true)}"
 : "${OTOOL:=$(command -v otool || true)}"
+: "${CODESIGN:=$(command -v codesign || true)}"
 
 mkdir -p "${INSTALL_ROOT}"
 
@@ -103,6 +104,16 @@ rewrite_dep_paths(){
   done < <("${OTOOL}" -L "${target}" 2>/dev/null | tail -n +2)
 }
 
+codesign_binary(){
+  local target="$1"
+  [[ -x "${CODESIGN}" ]] || return 0
+  case "$(uname -s)" in
+    Darwin)
+      codesign --force --sign - "${target}" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
 copy_local_deps(){
   local target="$1" dst_dir dep
   dst_dir="$(dirname "${target}")"
@@ -177,6 +188,7 @@ install_one(){
   fi
   "${INSTALL_BIN}" -m 0755 "${so_wrapper}" "${dst_pkg}/${wrapper_target}"
   set_rpaths "${dst_pkg}/${wrapper_target}"
+  codesign_binary "${dst_pkg}/${wrapper_target}"
   if [[ "${wrapper_target}" != "${wrapper_basename}" && -e "${dst_pkg}/${wrapper_basename}" ]]; then
     rm -f "${dst_pkg}/${wrapper_basename}"
   fi
@@ -185,6 +197,7 @@ install_one(){
     set_rpaths "${dst_pkg}/$(basename "${so_core}")"
     rewrite_dep_paths "${dst_pkg}/$(basename "${so_core}")"
     copy_local_deps "${dst_pkg}/$(basename "${so_core}")"
+    codesign_binary "${dst_pkg}/$(basename "${so_core}")"
   fi
 
   # Re-export the class at package level for ROS-like import:
@@ -230,9 +243,13 @@ rm -f "${TYPE_DIRS_SORTED}"
 # Final pass: ensure all installed .so/.dylib resolve to their own directory first
 if [[ -x "${INSTALL_NAME_TOOL}" ]]; then
   while IFS= read -r bin; do
+      case "${bin}" in
+        "${INSTALL_ROOT}/fastdds/"*) continue ;;
+      esac
       set_rpaths "${bin}"
       rewrite_dep_paths "${bin}"
       copy_local_deps "${bin}"
+      codesign_binary "${bin}"
   done < <(find "${INSTALL_ROOT}" -type f \( -name "*.so" -o -name "*.dylib" \))
 fi
 
