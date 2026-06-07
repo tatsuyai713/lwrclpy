@@ -82,19 +82,22 @@ def main():
         logger.info("Publisher done, waking executor...")
         executor.wake()  # Wake executor to check for shutdown
     
-    publish_thread = threading.Thread(target=publish_loop, name="PublisherThread")
+    publish_thread = threading.Thread(target=publish_loop, name="PublisherThread", daemon=True)
     publish_thread.start()
     
     # Spin in another thread
     logger.info("Starting executor spin...")
     executor_thread = threading.Thread(
         target=lambda: executor.spin(),
-        name="ExecutorThread"
+        name="ExecutorThread",
+        daemon=True,
     )
     executor_thread.start()
     
     # Wait for publisher to finish
-    publish_thread.join()
+    publish_thread.join(timeout=5.0)
+    if publish_thread.is_alive():
+        logger.warning("Publisher thread did not finish before timeout; continuing shutdown")
     
     # Give some time for remaining callbacks
     time.sleep(0.5)
@@ -105,6 +108,8 @@ def main():
     logger.info(f"Shutdown completed: {success}")
     
     executor_thread.join(timeout=2.0)
+    if executor_thread.is_alive():
+        logger.warning("Executor thread did not finish before timeout")
     
     # Report stats
     with count_lock:
