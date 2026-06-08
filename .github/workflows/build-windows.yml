@@ -1,6 +1,22 @@
 name: Build Windows Wheel
 
 on:
+  workflow_call:
+    inputs:
+      package_version:
+        description: "Package version, for example 0.5.1"
+        required: false
+        default: "0.5.1"
+        type: string
+      fastdds_python_repos_ref:
+        description: "Fast-DDS-python repos ref"
+        required: false
+        default: "v2.6.1"
+        type: string
+    outputs:
+      run_id:
+        description: "Run ID of the build workflow"
+        value: ${{ jobs.post-build.outputs.run_id }}
   workflow_dispatch:
     inputs:
       package_version:
@@ -21,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -46,7 +62,8 @@ jobs:
       - name: Prepare vcpkg
         shell: pwsh
         env:
-          VCPKG_ROOT: C:\vcpkg
+          LWRCLPY_WINDOWS_BUILD_ROOT: C:\lwrclpy_windows_build
+          VCPKG_ROOT: C:\lwrclpy_windows_build\vcpkg
         run: |
           if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
             if (-not (Test-Path "$env:VCPKG_ROOT")) {
@@ -65,16 +82,19 @@ jobs:
         env:
           PKG_VERSION: ${{ inputs.package_version }}
           FASTDDS_PYTHON_REPOS_REF: ${{ inputs.fastdds_python_repos_ref }}
-          FASTDDS_PREFIX: C:\fast-dds-v3
-          FASTDDSGEN_PREFIX: C:\fast-dds-gen-v3
-          BUILD_ROOT: ._types_python_build_v3
-          VCPKG_ROOT: C:\vcpkg
+          LWRCLPY_WINDOWS_BUILD_ROOT: C:\lwrclpy_windows_build
+          FASTDDS_PREFIX: C:\lwrclpy_windows_build\fastdds-prefix
+          FASTDDSGEN_PREFIX: C:\lwrclpy_windows_build\fastddsgen-prefix
+          FASTDDS_WS: C:\lwrclpy_windows_build\fastdds-workspace
+          BUILD_ROOT: C:\lwrclpy_windows_build\generated-types
+          VCPKG_ROOT: C:\lwrclpy_windows_build\vcpkg
           VCPKG_DEFAULT_TRIPLET: x64-windows
         run: |
           scripts/windows/build_all.ps1 `
             -PackageVersion "$env:PKG_VERSION" `
             -Prefix "$env:FASTDDS_PREFIX" `
             -GenPrefix "$env:FASTDDSGEN_PREFIX" `
+            -Workspace "$env:FASTDDS_WS" `
             -BuildRoot "$env:BUILD_ROOT" `
             -VcpkgRoot "$env:VCPKG_ROOT" `
             -VcpkgTriplet "$env:VCPKG_DEFAULT_TRIPLET"
@@ -85,3 +105,15 @@ jobs:
           name: wheel-windows-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
           retention-days: 30
+
+  post-build:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run_id: ${{ steps.run_id.outputs.run_id }}
+    steps:
+      - name: Export run id
+        id: run_id
+        run: |
+          echo "run_id=${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"

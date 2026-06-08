@@ -1,5 +1,6 @@
 param(
-    [string]$BuildRoot = $(if ($env:BUILD_ROOT) { $env:BUILD_ROOT } else { (Join-Path (Get-Location) "._types_python_build_v3") }),
+    [string]$BuildWorkRoot = $(if ($env:LWRCLPY_WINDOWS_BUILD_ROOT) { $env:LWRCLPY_WINDOWS_BUILD_ROOT } else { "C:\lwrclpy_windows_build" }),
+    [string]$BuildRoot = $(if ($env:BUILD_ROOT) { $env:BUILD_ROOT } else { (Join-Path $BuildWorkRoot "generated-types") }),
     [string]$InstallRoot = $(if ($env:INSTALL_ROOT) { $env:INSTALL_ROOT } else { python -c "import sysconfig; print(sysconfig.get_paths()['platlib'])" })
 )
 
@@ -38,7 +39,7 @@ foreach ($typeDir in $typeDirs) {
     $build = Join-Path $typeDir.FullName "build"
     $pySrc = Join-Path $build "$name.py"
     if (-not (Test-Path $pySrc)) {
-        Write-Host "[SKIP] $pkg/$ns/$name: missing $name.py"
+        Write-Host "[SKIP] ${pkg}/${ns}/${name}: missing ${name}.py"
         continue
     }
 
@@ -47,7 +48,7 @@ foreach ($typeDir in $typeDirs) {
         Sort-Object Name |
         Select-Object -First 1
     if (-not $wrapper) {
-        Write-Host "[SKIP] $pkg/$ns/$name: missing wrapper .pyd/.dll"
+        Write-Host "[SKIP] ${pkg}/${ns}/${name}: missing wrapper .pyd/.dll"
         continue
     }
 
@@ -69,7 +70,7 @@ foreach ($typeDir in $typeDirs) {
     }
     Copy-Item $wrapper.FullName (Join-Path $dstPkg $wrapperName) -Force
     if ($core) {
-        Copy-Item $core.FullName (Join-Path $dstPkg $core.Name) -Force
+        Copy-Item $core.FullName (Join-Path $dstPkg $core.Name.ToLowerInvariant()) -Force
     }
 
     $init = Join-Path $dstPkg "__init__.py"

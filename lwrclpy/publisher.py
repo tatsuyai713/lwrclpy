@@ -6,6 +6,7 @@
 from __future__ import annotations
 import fastdds  # type: ignore
 import os
+import sys
 from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _assign
@@ -82,6 +83,8 @@ def _write_checked(writer, msg) -> None:
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> bool:
     """Prefer/force data sharing on the writer QoS when the API exists."""
     if os.environ.get("LWRCLPY_NO_DATASHARING") == "1":
+        return False
+    if sys.platform == "win32" and os.environ.get("LWRCLPY_ENABLE_WINDOWS_DATASHARING") != "1":
         return False
     try:
         if hasattr(wq, "data_sharing"):

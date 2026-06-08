@@ -311,6 +311,18 @@ lwrclpyは、Fast DDS Python APIが対応している場合にwriter/reader QoS�
 loan helperがある場合は、通常の`publish(msg)`と通常のsubscription callbackのまま、
 内部でDataWriter/DataReader loanを自動利用します。
 
+Windowsでは、DataSharing/loaned-message経路は既定で無効です。これは未対応を
+隠すためではなく、WindowsのFast-DDS-python/fastddsgen生成bindingでは、生成型ごとの
+DLL/PYD境界をまたいで`lwrclpy_loan_sample_addr()`と`lwrclpy_<Type>_from_addr()`の
+raw address変換を使うと、loaned sampleを別の生成型として解釈してしまうケースがあるためです。
+確認済みの症状として、`geometry_msgs/msg/Point`のpublish中に別のgeometry型のsetterへ入り、
+Python例外ではなくWindowsのaccess violationでプロセスが終了します。
+
+そのためWindowsでは、標準の`publish(msg)`/subscription callbackは通常のFast DDS
+`DataWriter.write()`経路で動作させ、zero-copyを使用したと偽装しません。Windowsでこの
+実験的経路を調査する場合のみ、`LWRCLPY_ENABLE_WINDOWS_DATASHARING=1`を明示して有効化できます。
+安定動作を優先する通常利用やCIでは有効化しないでください。
+
 ```python
 msg = Image()
 msg.data = large_data

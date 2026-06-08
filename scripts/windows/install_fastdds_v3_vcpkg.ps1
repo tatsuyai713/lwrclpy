@@ -1,15 +1,18 @@
 param(
-    [string]$Prefix = $(if ($env:FASTDDS_PREFIX) { $env:FASTDDS_PREFIX } else { "C:\fast-dds-v3" }),
-    [string]$GenPrefix = $(if ($env:FASTDDSGEN_PREFIX) { $env:FASTDDSGEN_PREFIX } else { "C:\fast-dds-gen-v3" }),
-    [string]$Workspace = $(if ($env:FASTDDS_WS) { $env:FASTDDS_WS } else { Join-Path $env:USERPROFILE "fastdds_python_ws" }),
+    [string]$BuildWorkRoot = $(if ($env:LWRCLPY_WINDOWS_BUILD_ROOT) { $env:LWRCLPY_WINDOWS_BUILD_ROOT } else { "C:\lwrclpy_windows_build" }),
+    [string]$Prefix = $(if ($env:FASTDDS_PREFIX) { $env:FASTDDS_PREFIX } else { (Join-Path $BuildWorkRoot "fastdds-prefix") }),
+    [string]$GenPrefix = $(if ($env:FASTDDSGEN_PREFIX) { $env:FASTDDSGEN_PREFIX } else { (Join-Path $BuildWorkRoot "fastddsgen-prefix") }),
+    [string]$Workspace = $(if ($env:FASTDDS_WS) { $env:FASTDDS_WS } else { (Join-Path $BuildWorkRoot "fastdds-workspace") }),
     [string]$ReposRef = $(if ($env:FASTDDS_PYTHON_REPOS_REF) { $env:FASTDDS_PYTHON_REPOS_REF } else { "v2.6.1" }),
     [string]$FastDdsGenRef = $(if ($env:FASTDDSGEN_REF) { $env:FASTDDSGEN_REF } else { "master" }),
-    [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }),
+    [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { (Join-Path $BuildWorkRoot "vcpkg") }),
     [string]$VcpkgTriplet = $(if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows" }),
     [int]$Jobs = $(if ($env:JOBS) { [int]$env:JOBS } else { [Environment]::ProcessorCount })
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "build_env.ps1")
+Initialize-WindowsBuildEnvironment
 
 function Require-Command($Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -28,18 +31,18 @@ function Ensure-Vcpkg($Root) {
         return $exe
     }
 
-    if (-not (Test-Path $Root)) {
+    $bootstrap = Join-Path $Root "bootstrap-vcpkg.bat"
+    if (-not (Test-Path $Root) -or ((-not (Test-Path $bootstrap)) -and -not (Get-ChildItem -Path $Root -Force -ErrorAction SilentlyContinue))) {
         Invoke-Step "Cloning vcpkg to $Root" {
-            git clone https://github.com/microsoft/vcpkg.git $Root
+            git clone https://github.com/microsoft/vcpkg.git $Root | Out-Host
         }
     }
 
-    $bootstrap = Join-Path $Root "bootstrap-vcpkg.bat"
     if (-not (Test-Path $bootstrap)) {
         throw "vcpkg bootstrap script not found: $bootstrap"
     }
     Invoke-Step "Bootstrapping vcpkg" {
-        & $bootstrap -disableMetrics
+        & $bootstrap -disableMetrics | Out-Host
         if ($LASTEXITCODE -ne 0) {
             throw "vcpkg bootstrap failed"
         }
@@ -52,6 +55,7 @@ function Ensure-Vcpkg($Root) {
 
 function Install-VcpkgPackages($VcpkgExe, $Triplet) {
     Invoke-Step "Installing vcpkg Fast DDS for $Triplet" {
+        $env:VCPKG_ROOT = (Split-Path $VcpkgExe -Parent)
         & $VcpkgExe install "fastdds:$Triplet"
         if ($LASTEXITCODE -ne 0) {
             throw "vcpkg install fastdds failed"
@@ -60,22 +64,34 @@ function Install-VcpkgPackages($VcpkgExe, $Triplet) {
 }
 
 function Clone-Ref($Url, $Ref, $Destination, $Name) {
-    git clone --depth 1 --branch $Ref $Url $Destination
+    git clone --depth 1 --branch $Ref $Url $Destination | Out-Host
     if ($LASTEXITCODE -eq 0) {
         return
     }
 
     Remove-Item $Destination -Recurse -Force -ErrorAction SilentlyContinue
-    git clone $Url $Destination
+    git clone $Url $Destination | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "$Name clone failed"
     }
     Push-Location $Destination
-    git checkout $Ref
+    git checkout $Ref | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "$Name checkout failed: $Ref"
     }
     Pop-Location
+}
+
+function Patch-FastDdsPythonCMake($SourceDir) {
+    $cml = Join-Path $SourceDir "CMakeLists.txt"
+    if (-not (Test-Path $cml)) {
+        throw "Fast-DDS-python CMakeLists.txt not found: $cml"
+    }
+    $text = Get-Content $cml -Raw
+    if (-not $text.Contains("find_package(nlohmann_json CONFIG REQUIRED)")) {
+        $text = $text -replace "find_package\(fastdds 3 REQUIRED\)", "find_package(nlohmann_json CONFIG REQUIRED)`r`nfind_package(fastdds 3 REQUIRED)"
+        Set-Content -Path $cml -Value $text -Encoding UTF8
+    }
 }
 
 Require-Command git
@@ -86,6 +102,7 @@ if (-not (Get-Command swig -ErrorAction SilentlyContinue)) {
     Invoke-Step "Installing SWIG 4.1.1 for Fast-DDS-python compatibility" {
         python -m pip install --upgrade "swig==4.1.1"
     }
+    Add-PythonScriptsPath
 }
 if (-not (Get-Command swig -ErrorAction SilentlyContinue)) {
     throw "SWIG is required, but swig==4.1.1 was not found after pip install"
@@ -96,7 +113,13 @@ if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $repoRoot = $repoRoot.Path
+$Prefix = [System.IO.Path]::GetFullPath($Prefix)
+$GenPrefix = [System.IO.Path]::GetFullPath($GenPrefix)
+$Workspace = [System.IO.Path]::GetFullPath($Workspace)
 $srcDir = Join-Path $Workspace "src"
+$VcpkgRoot = [System.IO.Path]::GetFullPath($VcpkgRoot)
+$env:VCPKG_ROOT = $VcpkgRoot
+$env:VCPKG_DEFAULT_TRIPLET = $VcpkgTriplet
 $vcpkgExe = Ensure-Vcpkg $VcpkgRoot
 Install-VcpkgPackages $vcpkgExe $VcpkgTriplet
 $vcpkgInstalled = Join-Path $VcpkgRoot "installed\$VcpkgTriplet"
@@ -132,6 +155,10 @@ if (Test-Path $loanPatch) {
     Invoke-Step "Patching Fast-DDS-python loan helpers" {
         python $loanPatch $srcDir
     }
+}
+$fastDdsPythonSrc = Join-Path $srcDir "Fast-DDS-python\fastdds_python"
+Invoke-Step "Patching Fast-DDS-python CMake dependencies" {
+    Patch-FastDdsPythonCMake $fastDdsPythonSrc
 }
 
 $genSrc = Join-Path $srcDir "Fast-DDS-Gen"
@@ -190,15 +217,36 @@ $cmakeArgs = @(
 )
 
 Invoke-Step "Building fastdds_python against vcpkg Fast DDS" {
-    Push-Location $Workspace
-    colcon build `
-        --base-paths (Join-Path $srcDir "Fast-DDS-python\fastdds_python") `
-        --merge-install `
-        --install-base "$Prefix" `
-        --cmake-args @cmakeArgs `
-        --event-handlers console_cohesion+ status+ `
-        --executor sequential `
-        --parallel-workers $Jobs
+    $buildDir = Join-Path $Workspace "build\fastdds_python"
+    if (Test-Path $buildDir) {
+        Remove-Item $buildDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
+    Push-Location $buildDir
+    cmake $fastDdsPythonSrc `
+        -G Ninja `
+        -DCMAKE_BUILD_TYPE=Release `
+        -DCMAKE_INSTALL_PREFIX="$Prefix" `
+        -DCMAKE_TOOLCHAIN_FILE="$vcpkgToolchain" `
+        -DVCPKG_TARGET_TRIPLET="$VcpkgTriplet" `
+        -DCMAKE_PREFIX_PATH="$Prefix;$vcpkgInstalled" `
+        -DPython3_EXECUTABLE="$py" `
+        -DSWIG_EXECUTABLE="$swig" `
+        -Dnlohmann_json_DIR="$(Join-Path $vcpkgInstalled "share\nlohmann_json")"
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "fastdds_python configure failed"
+    }
+    cmake --build . --config Release --parallel $Jobs
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "fastdds_python build failed"
+    }
+    cmake --install . --config Release
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "fastdds_python install failed"
+    }
     Pop-Location
 }
 

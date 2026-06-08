@@ -25,6 +25,9 @@ jobs:
   build-macos-wheels:
     uses: ./.github/workflows/build-macos.yml
 
+  build-windows-wheels:
+    uses: ./.github/workflows/build-windows.yml
+
   test-ubuntu-wheels:
     needs: build-ubuntu-wheels
     uses: ./.github/workflows/test-ubuntu.yml
@@ -37,11 +40,18 @@ jobs:
     with:
       build_run_id: ${{ needs.build-macos-wheels.outputs.run_id }}
 
+  test-windows-wheels:
+    needs: build-windows-wheels
+    uses: ./.github/workflows/test-windows.yml
+    with:
+      build_run_id: ${{ needs.build-windows-wheels.outputs.run_id }}
+
   release-wheels:
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
     needs:
       - test-ubuntu-wheels
       - test-macos-wheels
+      - test-windows-wheels
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:

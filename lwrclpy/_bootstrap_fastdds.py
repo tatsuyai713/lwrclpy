@@ -4,6 +4,9 @@ import glob
 import ctypes
 import platform
 
+_dll_dir_handles = []
+_loaded_generated_dlls = set()
+
 def _python_xy():
     vi = sys.version_info
     return f"{vi.major}.{vi.minor}"
@@ -51,6 +54,45 @@ def _preload_libs(paths):
                 ctypes.CDLL(p, mode=getattr(ctypes, "RTLD_GLOBAL", getattr(os, "RTLD_GLOBAL", 0)))
         except Exception:
             pass
+
+def _add_dll_dir(path):
+    if not _is_windows() or not os.path.isdir(path):
+        return
+    try:
+        _dll_dir_handles.append(os.add_dll_directory(path))  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+def _resolve_generated_dll(relative_path):
+    rel = os.path.normpath(relative_path)
+    for base in list(sys.path):
+        if not base:
+            base = os.getcwd()
+        try:
+            candidate = os.path.abspath(os.path.join(base, rel))
+        except Exception:
+            continue
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+def preload_generated_dlls(relative_paths):
+    """Load generated ROS type DLL dependencies by package-relative path.
+
+    Windows generated wrappers call this before loading their own type DLL.
+    The paths are resolved through sys.path so editable/source-tree lwrclpy can
+    still cooperate with generated message packages installed in site-packages.
+    """
+    for relative_path in relative_paths:
+        path = _resolve_generated_dll(relative_path)
+        if not path or path in _loaded_generated_dlls:
+            continue
+        _add_dll_dir(os.path.dirname(path))
+        if _is_windows():
+            ctypes.WinDLL(path)
+        else:
+            ctypes.CDLL(path, mode=getattr(ctypes, "RTLD_GLOBAL", getattr(os, "RTLD_GLOBAL", 0)))
+        _loaded_generated_dlls.add(path)
 
 def _find_message_libs():
     """Find ROS message type libraries in Python site-packages."""

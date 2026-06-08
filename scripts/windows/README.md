@@ -6,11 +6,8 @@ Full build entry point:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/windows/build_all.ps1 `
-  -Prefix C:\fast-dds-v3 `
-  -GenPrefix C:\fast-dds-gen-v3 `
-  -VcpkgRoot C:\vcpkg `
+  -BuildWorkRoot C:\lwrclpy_windows_build `
   -VcpkgTriplet x64-windows `
-  -BuildRoot ._types_python_build_v3 `
   -PackageVersion 0.5.1
 ```
 
@@ -22,7 +19,8 @@ This runs:
 
 The Windows build uses vcpkg for the Fast DDS native stack. The default is:
 
-- `VcpkgRoot`: `C:\vcpkg`
+- `BuildWorkRoot`: `C:\lwrclpy_windows_build`
+- `VcpkgRoot`: `C:\lwrclpy_windows_build\vcpkg`
 - `VcpkgTriplet`: `x64-windows`
 
 `install_fastdds_v3_vcpkg.ps1` bootstraps vcpkg if needed and installs:
@@ -35,9 +33,7 @@ Packaging-only entry point:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/windows/make_pip_package_with_runtime.ps1 `
-  -BuildRoot ._types_python_build_v3 `
-  -FastDdsPrefix C:\fast-dds-v3 `
-  -VcpkgRoot C:\vcpkg `
+  -BuildWorkRoot C:\lwrclpy_windows_build `
   -VcpkgTriplet x64-windows `
   -PackageVersion 0.5.1
 ```
@@ -55,5 +51,19 @@ Output:
 - Repaired Windows wheel with vendored DLLs: `wheelhouse/`
 
 Use `delvewheel` for Windows DLL repair. This is the Windows equivalent of using `auditwheel` on Linux or `delocate` on macOS.
+
+## DataSharing / loaned-message status
+
+Windows wheels keep Fast DDS normal publish/subscribe enabled, but disable the automatic DataSharing/loaned-message path by default.
+
+This is a correctness guard, not a placeholder. The Windows generated bindings are split across many package-local `.dll`/`.pyd` files. The experimental loan path uses `lwrclpy_loan_sample_addr()` and `lwrclpy_<Type>_from_addr()` to reinterpret a middleware-loaned raw address as a generated Python/SWIG message. On Windows this can cross generated-DLL boundaries incorrectly. In local verification, publishing `geometry_msgs/msg/Point` through the automatic loan path entered a different geometry message setter and terminated the process with a native access violation instead of raising a Python exception.
+
+Because that failure is process-fatal, Windows defaults to the regular `DataWriter.write(msg)` path for `publish(msg)`. Do not enable Windows DataSharing in CI until the raw-address loan helper is made type-safe for the Windows generated DLL layout. For debugging that specific path only, set:
+
+```powershell
+$env:LWRCLPY_ENABLE_WINDOWS_DATASHARING = "1"
+```
+
+The explicit opt-in is intentionally unsafe and should not be used for normal wheel validation.
 
 `.github/workflows/build-windows.yml` is a manual workflow that runs the full build on `windows-2022`.

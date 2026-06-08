@@ -1,12 +1,180 @@
 param(
-    [string]$BuildRoot = $(if ($env:BUILD_ROOT) { $env:BUILD_ROOT } else { (Join-Path (Get-Location) "._types_python_build_v3") }),
-    [string]$FastDdsPrefix = $(if ($env:FASTDDS_PREFIX) { $env:FASTDDS_PREFIX } else { "C:\fast-dds-v3" }),
-    [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }),
+    [string]$BuildWorkRoot = $(if ($env:LWRCLPY_WINDOWS_BUILD_ROOT) { $env:LWRCLPY_WINDOWS_BUILD_ROOT } else { "C:\lwrclpy_windows_build" }),
+    [string]$BuildRoot = $(if ($env:BUILD_ROOT) { $env:BUILD_ROOT } else { (Join-Path $BuildWorkRoot "generated-types") }),
+    [string]$FastDdsPrefix = $(if ($env:FASTDDS_PREFIX) { $env:FASTDDS_PREFIX } else { (Join-Path $BuildWorkRoot "fastdds-prefix") }),
+    [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { (Join-Path $BuildWorkRoot "vcpkg") }),
     [string]$VcpkgTriplet = $(if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows" }),
     [string]$PackageVersion = $(if ($env:PKG_VERSION) { $env:PKG_VERSION.TrimStart("v") } else { "" })
 )
 
 $ErrorActionPreference = "Stop"
+
+function Write-Utf8NoBom($Path, $Value) {
+    $dir = Split-Path $Path -Parent
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Value, $encoding)
+}
+
+function Normalize-PythonFilesNoBom($Root) {
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    Get-ChildItem -Path $Root -Recurse -File -Include "*.py" | ForEach-Object {
+        $text = [System.IO.File]::ReadAllText($_.FullName)
+        $text = $text.Replace([string][char]0xFEFF, "")
+        [System.IO.File]::WriteAllText($_.FullName, $text, $encoding)
+    }
+}
+
+function Patch-FastDdsInit($FastDdsPackageDir) {
+    $init = Join-Path $FastDdsPackageDir "__init__.py"
+    if (-not (Test-Path $init)) {
+        return
+    }
+    $text = Get-Content $init -Raw
+    $old = "if __import__('os').name == 'nt': import win32api; win32api.LoadLibrary('fastdds-3.6.dll')"
+    if (-not $text.Contains($old)) {
+        return
+    }
+    $new = @'
+if __import__('os').name == 'nt':
+    import os as _fastdds_os, ctypes as _fastdds_ctypes
+    for _fastdds_dir in (
+        _fastdds_os.path.abspath(_fastdds_os.path.join(_fastdds_os.path.dirname(__file__), '..', 'lwrclpy', '_vendor', 'lib')),
+        _fastdds_os.path.abspath(_fastdds_os.path.join(_fastdds_os.path.dirname(__file__), '..', 'lib')),
+    ):
+        if _fastdds_os.path.isdir(_fastdds_dir):
+            try:
+                _fastdds_os.add_dll_directory(_fastdds_dir)
+            except Exception:
+                pass
+            _fastdds_dll = _fastdds_os.path.join(_fastdds_dir, 'fastdds-3.6.dll')
+            if _fastdds_os.path.exists(_fastdds_dll):
+                _fastdds_ctypes.WinDLL(_fastdds_dll)
+                break
+'@
+    $text = $text.Replace($old, $new.TrimEnd())
+    Write-Utf8NoBom $init $text
+}
+
+function Find-Dumpbin {
+    $cmd = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($installPath) {
+            $candidate = Get-ChildItem -Path (Join-Path $installPath "VC\Tools\MSVC") -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match "\\bin\\Hostx64\\x64\\dumpbin.exe$" } |
+                Sort-Object FullName -Descending |
+                Select-Object -First 1
+            if ($candidate) {
+                return $candidate.FullName
+            }
+        }
+    }
+    return $null
+}
+
+function Get-DllDependents($Dumpbin, $DllPath) {
+    $out = & $Dumpbin /DEPENDENTS $DllPath 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "dumpbin failed for $DllPath"
+    }
+    $deps = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $out) {
+        $name = $line.Trim()
+        if ($name -match '^[A-Za-z0-9_.+-]+\.dll$') {
+            $deps.Add($name)
+        }
+    }
+    return $deps
+}
+
+function Get-RelativePathForPython($Root, $Path) {
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    if (-not $pathFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path $Path is not under $Root"
+    }
+    return $pathFull.Substring($rootFull.Length).Replace('\', '/')
+}
+
+function Build-GeneratedDllDependencyMap($Root) {
+    $dumpbin = Find-Dumpbin
+    if (-not $dumpbin) {
+        throw "dumpbin.exe not found; run from a Visual Studio developer environment"
+    }
+    Write-Host "[INFO] Resolving generated DLL dependencies with $dumpbin"
+
+    $dlls = Get-ChildItem -Path $Root -Recurse -File -Filter "*.dll" |
+        Where-Object { $_.FullName -notmatch "\\lwrclpy\\_vendor\\" -and $_.FullName -notmatch "\\lwrclpy\.libs\\" }
+
+    $byName = @{}
+    foreach ($dll in $dlls) {
+        $key = $dll.Name.ToLowerInvariant()
+        if (-not $byName.ContainsKey($key)) {
+            $byName[$key] = New-Object System.Collections.Generic.List[object]
+        }
+        $byName[$key].Add($dll)
+    }
+
+    $map = @{}
+    foreach ($dll in $dlls) {
+        $deps = New-Object System.Collections.Generic.List[string]
+        $dllTopPackage = Get-RelativePathForPython $Root $dll.FullName
+        $dllTopPackage = $dllTopPackage.Split('/')[0]
+        foreach ($dep in (Get-DllDependents $dumpbin $dll.FullName)) {
+            $key = $dep.ToLowerInvariant()
+            if (-not $byName.ContainsKey($key)) {
+                continue
+            }
+            $candidates = @($byName[$key].ToArray())
+            $chosen = $null
+            $samePackage = @($candidates | Where-Object { (Get-RelativePathForPython $Root $_.FullName).Split('/')[0] -eq $dllTopPackage })
+            if ($samePackage.Count -eq 1) {
+                $chosen = $samePackage[0]
+            } elseif ($candidates.Count -eq 1) {
+                $chosen = $candidates[0]
+            }
+            if ($chosen) {
+                $deps.Add((Get-RelativePathForPython $Root $chosen.FullName))
+            } else {
+                Write-Warning "Ambiguous generated DLL dependency $dep for $($dll.FullName); relying on Windows loader search path"
+            }
+        }
+        $map[$dll.FullName.ToLowerInvariant()] = @($deps | Sort-Object -Unique)
+    }
+    return $map
+}
+
+function Patch-GeneratedDllLoaders($Root) {
+    $dependencyMap = Build-GeneratedDllDependencyMap $Root
+    $pattern = "if __import__\('os'\)\.name == 'nt': import win32api; win32api\.LoadLibrary\('([^']+\.dll)'\)"
+    Get-ChildItem -Path $Root -Recurse -File -Include "*.py" | ForEach-Object {
+        $pyFile = $_
+        $text = [System.IO.File]::ReadAllText($pyFile.FullName)
+        if ($text -notmatch $pattern) {
+            return
+        }
+        $patched = [regex]::Replace($text, $pattern, {
+            param($m)
+            $dllName = $m.Groups[1].Value.ToLowerInvariant()
+            $dllPath = Join-Path $pyFile.DirectoryName $dllName
+            $deps = @()
+            $key = [System.IO.Path]::GetFullPath($dllPath).ToLowerInvariant()
+            if ($dependencyMap.ContainsKey($key)) {
+                $deps = @($dependencyMap[$key])
+            }
+            $depLiteral = "[" + (($deps | ForEach-Object { "'" + $_.Replace("'", "\\'") + "'" }) -join ", ") + "]"
+            "if __import__('os').name == 'nt': from lwrclpy._bootstrap_fastdds import ensure_fastdds as _fastdds_ensure, preload_generated_dlls as _fastdds_preload; _fastdds_ensure(); _fastdds_preload($depLiteral); import os as _fastdds_os, ctypes as _fastdds_ctypes; _fastdds_dir = _fastdds_os.path.dirname(__file__); globals().setdefault('_fastdds_dll_dirs', []).append(_fastdds_os.add_dll_directory(_fastdds_dir)); _fastdds_ctypes.WinDLL(_fastdds_os.path.join(_fastdds_dir, '$dllName'))"
+        })
+        Write-Utf8NoBom $pyFile.FullName $patched
+    }
+}
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $repoRoot = $repoRoot.Path
@@ -117,6 +285,8 @@ foreach ($root in $dllRoots) {
             ForEach-Object { Copy-Item $_.FullName (Join-Path $vendorLib $_.Name) -Force }
     }
 }
+Patch-FastDdsInit $vendorFastdds
+Patch-FastDdsInit (Join-Path $stagingRoot "fastdds")
 
 $bootstrap = @'
 import os, sys, ctypes
@@ -124,16 +294,39 @@ import os, sys, ctypes
 _pkg_dir = os.path.dirname(__file__)
 _vendor_parent = os.path.join(_pkg_dir, "_vendor")
 _vendor_lib = os.path.join(_vendor_parent, "lib")
+_site_root = os.path.dirname(_pkg_dir)
+_dll_dir_handles = []
+_did_scan_dll_dirs = False
+_loaded_generated_dlls = set()
 
 def _add_dll_dir(path):
     if os.path.isdir(path):
         try:
-            os.add_dll_directory(path)
+            _dll_dir_handles.append(os.add_dll_directory(path))
         except Exception:
             pass
 
+def _add_generated_type_dirs():
+    global _did_scan_dll_dirs
+    if _did_scan_dll_dirs:
+        return
+    _did_scan_dll_dirs = True
+    for root, _dirs, files in os.walk(_site_root):
+        if any(name.lower().endswith(".dll") for name in files):
+            _add_dll_dir(root)
+
+def preload_generated_dlls(relative_paths):
+    for relative_path in relative_paths:
+        path = os.path.normpath(os.path.join(_site_root, relative_path))
+        if path in _loaded_generated_dlls:
+            continue
+        if os.path.exists(path):
+            ctypes.WinDLL(path)
+            _loaded_generated_dlls.add(path)
+
 def ensure_fastdds():
     _add_dll_dir(_vendor_lib)
+    _add_generated_type_dirs()
     if _vendor_parent not in sys.path:
         sys.path.insert(0, _vendor_parent)
     for name in ("fastcdr", "fastdds"):
@@ -145,23 +338,23 @@ def ensure_fastdds():
                     pass
     import fastdds  # noqa: F401
 '@
-Set-Content -Path (Join-Path $stagingRoot "lwrclpy\_bootstrap_fastdds.py") -Value $bootstrap -Encoding UTF8
+Write-Utf8NoBom (Join-Path $stagingRoot "lwrclpy\_bootstrap_fastdds.py") $bootstrap
 
 $init = Join-Path $stagingRoot "lwrclpy\__init__.py"
 if (-not (Test-Path $init)) {
-    "# auto-generated" | Set-Content -Path $init -Encoding UTF8
+    Write-Utf8NoBom $init "# auto-generated`n"
 }
 $initContent = Get-Content $init -Raw
 if (-not $initContent.Contains("ensure_fastdds()")) {
     $prefix = "from ._bootstrap_fastdds import ensure_fastdds`nensure_fastdds()`n"
-    Set-Content -Path $init -Value ($prefix + $initContent) -Encoding UTF8
+    Write-Utf8NoBom $init ($prefix + $initContent)
 }
 
 @"
 [build-system]
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta:__legacy__"
-"@ | Set-Content -Path (Join-Path $stagingRoot "pyproject.toml") -Encoding UTF8
+"@ | ForEach-Object { Write-Utf8NoBom (Join-Path $stagingRoot "pyproject.toml") $_ }
 
 @"
 [metadata]
@@ -174,12 +367,14 @@ long_description_content_type = text/plain
 [options]
 packages = find:
 python_requires = >=3.8
+install_requires =
+    pywin32
 include_package_data = True
 zip_safe = False
 
 [options.package_data]
 * = **/*.py, **/*.pyd, **/*.dll, **/*Wrapper.*
-"@ | Set-Content -Path (Join-Path $stagingRoot "setup.cfg") -Encoding UTF8
+"@ | ForEach-Object { Write-Utf8NoBom (Join-Path $stagingRoot "setup.cfg") $_ }
 
 @'
 from setuptools import setup
@@ -191,7 +386,10 @@ class BinaryDistribution(Distribution):
 
 if __name__ == "__main__":
     setup(distclass=BinaryDistribution)
-'@ | Set-Content -Path (Join-Path $stagingRoot "setup.py") -Encoding UTF8
+'@ | ForEach-Object { Write-Utf8NoBom (Join-Path $stagingRoot "setup.py") $_ }
+
+Patch-GeneratedDllLoaders $stagingRoot
+Normalize-PythonFilesNoBom $stagingRoot
 
 Write-Host "[INFO] Building wheel"
 Push-Location $stagingRoot
@@ -206,7 +404,10 @@ if (-not $wheel) {
 Write-Host "[INFO] Repairing wheel with delvewheel"
 $wheelhouse = Join-Path $repoRoot "wheelhouse"
 New-Item -ItemType Directory -Path $wheelhouse -Force | Out-Null
-python -m delvewheel repair $wheel.FullName -w $wheelhouse --add-path $vendorLib
+python -m delvewheel repair $wheel.FullName -w $wheelhouse --add-path $vendorLib --ignore-existing
+if ($LASTEXITCODE -ne 0) {
+    throw "delvewheel repair failed"
+}
 
 Write-Host "[OK] Windows wheel ready under $wheelhouse"
 Get-ChildItem $wheelhouse -Filter "$pkgName-*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 5

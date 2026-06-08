@@ -144,7 +144,10 @@ class ProcessCapture:
         if self.proc.poll() is not None:
             return
         try:
-            self.proc.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                self.proc.terminate()
+            else:
+                self.proc.send_signal(signal.SIGINT)
         except Exception:
             self.proc.terminate()
         try:
