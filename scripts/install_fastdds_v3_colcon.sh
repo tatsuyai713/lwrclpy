@@ -35,6 +35,24 @@ log(){ echo -e "\033[1;36m[INFO]\033[0m $*"; }
 warn(){ echo -e "\033[1;33m[WARN]\033[0m $*" >&2; }
 die(){ echo -e "\033[1;31m[FATAL]\033[0m $*" >&2; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "'$1' not found"; }
+retry() {
+  local attempts="$1"
+  local delay="$2"
+  shift 2
+  local n=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( n >= attempts )); then
+      return 1
+    fi
+    warn "Command failed (attempt ${n}/${attempts}); retrying in ${delay}s: $*"
+    sleep "${delay}"
+    n=$((n + 1))
+    delay=$((delay * 2))
+  done
+}
 
 # ===== Arch detection (amd64/arm64) =====
 ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m || true)"
@@ -42,8 +60,8 @@ log "Detected architecture: ${ARCH}"
 
 # ===== System dependencies (apt) =====
 log "Installing system dependencies (apt)…"
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
+retry 5 5 sudo apt-get update
+retry 5 5 sudo apt-get install -y --no-install-recommends \
   build-essential git pkg-config \
   "${PYBIN%-*}-venv" "${PYBIN%-*}-dev" \
   unzip wget curl \
@@ -53,7 +71,7 @@ sudo apt-get install -y --no-install-recommends \
   ca-certificates
 
 # Some toolchains on arm64 sometimes need these (harmless on amd64)
-sudo apt-get install -y --no-install-recommends \
+retry 5 5 sudo apt-get install -y --no-install-recommends \
   libatomic1 || true
 
 # ===== cmake 3.x (avoid 4.x series) =====
@@ -67,23 +85,23 @@ _install_cmake3() {
          | grep -E '^3\.' | sort -V | tail -n1 || true)"
   if [[ -n "${ver}" ]]; then
     log "Installing cmake 3.x from apt (${ver})…"
-    sudo apt-get install -y --no-install-recommends "cmake=${ver}" && return 0
+    retry 5 5 sudo apt-get install -y --no-install-recommends "cmake=${ver}" && return 0
   fi
   # Fallback: install via pip inside the build venv (pinned to <4)
   log "cmake 3.x not available in apt; installing via pip…"
-  pip install 'cmake>=3.16,<4'
+  retry 5 5 pip install 'cmake>=3.16,<4'
 }
 _install_cmake3
 
 # Java is required to build Fast-DDS-Gen (gradle). Fast-DDS-Gen v4.3.0 uses
 # Gradle 9.x, which requires Java 17 or newer.
 if ! dpkg -l | grep -qw openjdk-17-jre || ! dpkg -l | grep -qw openjdk-17-jdk; then
-  sudo apt-get update
-  sudo apt-get install -y openjdk-17-jre openjdk-17-jdk
+  retry 5 5 sudo apt-get update
+  retry 5 5 sudo apt-get install -y openjdk-17-jre openjdk-17-jdk
 fi
 
 # SWIG 4.* is recommended (avoid 4.2+ unless you have patches)
-sudo apt-get install -y 'swig4.*' || true
+retry 5 5 sudo apt-get install -y 'swig4.*' || true
 
 SWIG_EXECUTABLE="${SWIG_EXECUTABLE:-}"
 if [[ -z "${SWIG_EXECUTABLE}" ]]; then
@@ -153,19 +171,24 @@ log "Creating venv (.venv) with ${PYBIN}…"
 "${PYBIN}" -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
-python -m pip install -U pip setuptools wheel
-python -m pip install -U colcon-common-extensions vcstool empy
+retry 5 5 python -m pip install -U pip setuptools wheel
+retry 5 5 python -m pip install -U colcon-common-extensions vcstool empy
 
 # ===== Fetch repos (vcstool) =====
 if [[ ! -f "${REPOS_FILE}" ]]; then
   log "Fetching default repos file (Fast-DDS-python ${FASTDDS_PYTHON_REPOS_REF})…"
-  curl -fsSL -o "${REPOS_FILE}" \
+  retry 5 3 curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o "${REPOS_FILE}" \
     "https://raw.githubusercontent.com/eProsima/Fast-DDS-python/${FASTDDS_PYTHON_REPOS_REF}/fastdds_python.repos"
 fi
 [[ -f "${REPOS_FILE}" ]] || die "repos file not found: ${REPOS_FILE}"
 
 log "Importing repos into src/…"
-vcs import --recursive src < "${REPOS_FILE}"
+import_repos() {
+  rm -rf src
+  mkdir -p src
+  vcs import --recursive src < "${REPOS_FILE}"
+}
+retry 5 5 import_repos
 
 LOAN_HELPER_PATCH="${SCRIPT_DIR}/patch_fastdds_python_loan_helpers.py"
 if [[ -f "${LOAN_HELPER_PATCH}" ]]; then
@@ -180,9 +203,14 @@ log "Building fastddsgen from: ${GEN_SRC_DIR}"
 sudo mkdir -p "${GEN_PREFIX}"
 sudo chown "$(id -u)":"$(id -g)" "${GEN_PREFIX}"
 
+# GitHub Actions runners occasionally hit slow connections to services.gradle.org.
+# The Gradle wrapper defaults are too short for that path, so extend them here.
+export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=120000"
+log "Using GRADLE_OPTS=${GRADLE_OPTS}"
+
 pushd "${GEN_SRC_DIR}" >/dev/null
-  ./gradlew --no-daemon clean assemble
-  ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
+  retry 6 10 ./gradlew --no-daemon clean assemble
+  retry 6 10 ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
 popd >/dev/null
 
 # Make fastddsgen available in PATH for this shell
