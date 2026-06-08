@@ -203,9 +203,14 @@ log "Building fastddsgen from: ${GEN_SRC_DIR}"
 sudo mkdir -p "${GEN_PREFIX}"
 sudo chown "$(id -u)":"$(id -g)" "${GEN_PREFIX}"
 
+# GitHub Actions runners occasionally hit slow connections to services.gradle.org.
+# The Gradle wrapper defaults are too short for that path, so extend them here.
+export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=120000"
+log "Using GRADLE_OPTS=${GRADLE_OPTS}"
+
 pushd "${GEN_SRC_DIR}" >/dev/null
-  retry 4 5 ./gradlew --no-daemon clean assemble
-  retry 4 5 ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
+  retry 6 10 ./gradlew --no-daemon clean assemble
+  retry 6 10 ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
 popd >/dev/null
 
 # Make fastddsgen available in PATH for this shell

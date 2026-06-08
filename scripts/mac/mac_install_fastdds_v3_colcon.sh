@@ -230,9 +230,15 @@ log "Using JAVA_HOME=${JAVA_HOME}"
 java -version
 
 sudo mkdir -p "${GEN_PREFIX}"
+
+# GitHub Actions runners occasionally hit slow connections to services.gradle.org.
+# The Gradle wrapper defaults are too short for that path, so extend them here.
+export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=120000"
+log "Using GRADLE_OPTS=${GRADLE_OPTS}"
+
 pushd "${GEN_SRC_DIR}" >/dev/null
-  retry 4 5 ./gradlew --no-daemon clean assemble
-  retry 4 5 sudo JAVA_HOME="${JAVA_HOME}" ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
+  retry 6 10 ./gradlew --no-daemon clean assemble
+  retry 6 10 sudo JAVA_HOME="${JAVA_HOME}" GRADLE_OPTS="${GRADLE_OPTS}" ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
 popd >/dev/null
 
 export PATH="${GEN_PREFIX}/bin:${PATH}"

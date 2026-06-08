@@ -651,7 +651,6 @@ def run_all_examples(platform_name: str) -> bool:
     platform_key = platform_name.lower()
     is_macos = platform_key.startswith("mac") or sys.platform == "darwin"
     standalone_timeouts: dict[Path, float] = {}
-    standalone_timeouts[PROJECT_ROOT / "examples/executor/multithreaded_executor_demo.py"] = 180.0
     if is_macos:
         # macOS can take longer for service discovery in this example.
         standalone_timeouts[PROJECT_ROOT / "examples/services/trigger_bridge/bridge.py"] = 90.0
@@ -662,6 +661,10 @@ def run_all_examples(platform_name: str) -> bool:
         PROJECT_ROOT / "examples/pubsub/typed_messages/navigation_demo.py",
         PROJECT_ROOT / "examples/node/class_based_node.py",
         PROJECT_ROOT / "examples/services/advanced_client.py",
+        PROJECT_ROOT / "examples/executor/multithreaded_executor_demo.py",
+    }
+    long_running_expectations = {
+        PROJECT_ROOT / "examples/executor/multithreaded_executor_demo.py": ("Received:",),
     }
 
     # Launch examples - these are self-terminating
@@ -710,7 +713,12 @@ def run_all_examples(platform_name: str) -> bool:
         print_test_start(rel.as_posix())
 
         if script in long_running:
-            ok, output = _run_script(script, timeout=LONG_RUNNING_SMOKE_TIMEOUT, allow_timeout=True)
+            ok, output = _run_script(
+                script,
+                timeout=LONG_RUNNING_SMOKE_TIMEOUT,
+                expect_output=long_running_expectations.get(script),
+                allow_timeout=True,
+            )
         else:
             timeout = standalone_timeouts.get(script, DEFAULT_STANDALONE_TIMEOUT)
             ok, output = _run_script(script, timeout=timeout)
