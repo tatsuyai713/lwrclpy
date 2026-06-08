@@ -49,14 +49,21 @@ jobs:
         with:
           python-version: "${{ matrix.python-version }}"
 
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install build tools
         shell: pwsh
         run: |
-          choco install cmake ninja openjdk17 -y --no-progress
-          "C:\Program Files\OpenJDK\jdk-17\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          choco install cmake ninja -y --no-progress
+          "$env:JAVA_HOME\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          java -version
           python -m pip install --upgrade "swig==4.1.1"
 
       - name: Prepare vcpkg

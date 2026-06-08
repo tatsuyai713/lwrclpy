@@ -94,6 +94,24 @@ function Patch-FastDdsPythonCMake($SourceDir) {
     }
 }
 
+function Require-Java17ForGradle {
+    if (-not (Use-JavaHome $env:JAVA_HOME)) {
+        Add-JavaPath
+    }
+
+    $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
+    $major = Get-JavaMajorVersion $javaExe
+    if ($major -lt 17) {
+        throw "Fast-DDS-Gen requires Java 17 or newer, but JAVA_HOME=$env:JAVA_HOME resolves to Java $major"
+    }
+
+    $javaBin = Join-Path $env:JAVA_HOME "bin"
+    $env:PATH = "$javaBin;$env:PATH"
+    Write-Host "[INFO] Gradle JAVA_HOME=$env:JAVA_HOME"
+    & $javaExe -version 2>&1 | Out-Host
+    return "-Dorg.gradle.java.home=$env:JAVA_HOME"
+}
+
 Require-Command git
 Require-Command cmake
 Require-Command python
@@ -164,15 +182,16 @@ Invoke-Step "Patching Fast-DDS-python CMake dependencies" {
 $genSrc = Join-Path $srcDir "Fast-DDS-Gen"
 Invoke-Step "Building fastddsgen from $genSrc" {
     Push-Location $genSrc
+    $gradleJavaHomeArg = Require-Java17ForGradle
     if (Test-Path ".\gradlew.bat") {
-        .\gradlew.bat --no-daemon clean assemble
+        .\gradlew.bat --no-daemon $gradleJavaHomeArg clean assemble
         if ($LASTEXITCODE -ne 0) { throw "fastddsgen assemble failed" }
-        .\gradlew.bat --no-daemon install --install_path="$GenPrefix"
+        .\gradlew.bat --no-daemon $gradleJavaHomeArg install --install_path="$GenPrefix"
         if ($LASTEXITCODE -ne 0) { throw "fastddsgen install failed" }
     } else {
-        .\gradlew --no-daemon clean assemble
+        .\gradlew --no-daemon $gradleJavaHomeArg clean assemble
         if ($LASTEXITCODE -ne 0) { throw "fastddsgen assemble failed" }
-        .\gradlew --no-daemon install --install_path="$GenPrefix"
+        .\gradlew --no-daemon $gradleJavaHomeArg install --install_path="$GenPrefix"
         if ($LASTEXITCODE -ne 0) { throw "fastddsgen install failed" }
     }
     Pop-Location
