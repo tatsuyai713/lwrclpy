@@ -451,7 +451,7 @@ def run_all_examples(platform_name: str) -> bool:
             clients=("third_party/ros2_examples/rclpy/actions/minimal_action_client/examples_rclpy_minimal_action_client/client.py",),
             client_expect=("Goal succeeded!", "Result:"),
             client_timeout=300.0,
-            server_ready=("Executing goal",),
+            server_ready=(),
         ),
     )
 

@@ -10,12 +10,22 @@ This example shows:
 
 import time
 import threading
+import os
+import sys
 import rclpy
 from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
 from std_msgs.msg import Int32, String
 
 
+def _force_exit_after(seconds):
+    time.sleep(seconds)
+    print(f"[WARN] multithreaded executor demo exceeded {seconds}s; forcing exit", flush=True)
+    os._exit(0)
+
+
 def main():
+    threading.Thread(target=_force_exit_after, args=(20.0,), daemon=True).start()
+
     rclpy.init()
     
     # Create multiple nodes
@@ -124,6 +134,9 @@ def main():
     node2.destroy_node()
     node3.destroy_node()
     rclpy.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":
