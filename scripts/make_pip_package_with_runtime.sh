@@ -17,17 +17,36 @@
 #   python3 examples/talker_string.py
 set -euo pipefail
 
+retry() {
+  local attempts="$1"
+  local delay="$2"
+  shift 2
+  local n=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( n >= attempts )); then
+      return 1
+    fi
+    echo "[WARN] Command failed (attempt ${n}/${attempts}); retrying in ${delay}s: $*" >&2
+    sleep "${delay}"
+    n=$((n + 1))
+    delay=$((delay * 2))
+  done
+}
+
 # ----- Ensure build dependencies -----
 echo "[INFO] Ensuring build dependencies..."
-python3 -m pip install --upgrade pip setuptools wheel || true
+retry 5 5 python3 -m pip install --upgrade pip setuptools wheel || true
 
 # patchelf is only needed on Linux
 if [[ "$OSTYPE" != "darwin"* ]]; then
   command -v patchelf >/dev/null 2>&1 || {
     echo "[WARN] patchelf not found, attempting to install..."
     if command -v apt-get >/dev/null 2>&1; then
-      DEBIAN_FRONTEND=noninteractive sudo apt-get update -qq && \
-      DEBIAN_FRONTEND=noninteractive sudo apt-get install -qq -y patchelf
+      retry 5 5 sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
+      retry 5 5 sudo env DEBIAN_FRONTEND=noninteractive apt-get install -qq -y patchelf
     else
       echo "[ERROR] Please install patchelf manually"
       exit 1

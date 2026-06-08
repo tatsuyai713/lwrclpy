@@ -63,8 +63,8 @@ BREW_PREFIX="$(brew --prefix)"
 ASIO_INCLUDE_DIR="${ASIO_INCLUDE_DIR:-${BREW_PREFIX}/include}"
 
 log "Installing build deps via Homebrew…"
-brew update
-brew install ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio openjdk@17
+retry 5 5 brew update
+retry 5 5 brew install ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio openjdk@17
 
 # ===== cmake 3.x (avoid 4.x series) =====
 # Pin cmake to the latest 3.x to avoid incompatibilities with Fast DDS build scripts.
@@ -76,7 +76,7 @@ _install_cmake3_mac() {
     return 0
   fi
   # Try to install cmake@3 formula (Homebrew may provide versioned taps)
-  if brew install cmake@3 2>/dev/null; then
+  if retry 5 5 brew install cmake@3 2>/dev/null; then
     brew link --overwrite cmake@3 2>/dev/null || true
     return 0
   fi
@@ -84,8 +84,8 @@ _install_cmake3_mac() {
   log "cmake 3.x not available via Homebrew; installing via local venv…"
   local cmake_venv="${SCRIPT_DIR}/venv"
   "${PYBIN}" -m venv "${cmake_venv}"
-  "${cmake_venv}/bin/python" -m pip install -U pip wheel
-  "${cmake_venv}/bin/python" -m pip install 'cmake>=3.16,<4'
+  retry 5 5 "${cmake_venv}/bin/python" -m pip install -U pip wheel
+  retry 5 5 "${cmake_venv}/bin/python" -m pip install 'cmake>=3.16,<4'
   export PATH="${cmake_venv}/bin:${PATH}"
 }
 _install_cmake3_mac
@@ -118,8 +118,8 @@ log "Creating venv (.venv) with ${PYBIN}…"
 "${PYBIN}" -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
-python -m pip install -U pip wheel
-python -m pip install -U colcon-common-extensions vcstool empy
+retry 5 5 python -m pip install -U pip wheel
+retry 5 5 python -m pip install -U colcon-common-extensions vcstool empy
 
 # ===== Fetch repos =====
 if [[ ! -f "${REPOS_FILE}" ]]; then

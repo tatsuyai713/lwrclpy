@@ -10,9 +10,28 @@
 #   pip install dist/lwrclpy-*.whl
 set -euo pipefail
 
+retry() {
+  local attempts="$1"
+  local delay="$2"
+  shift 2
+  local n=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( n >= attempts )); then
+      return 1
+    fi
+    echo "[WARN] Command failed (attempt ${n}/${attempts}); retrying in ${delay}s: $*" >&2
+    sleep "${delay}"
+    n=$((n + 1))
+    delay=$((delay * 2))
+  done
+}
+
 # ----- Ensure build dependencies -----
 echo "[INFO] Ensuring build dependencies..."
-python3 -m pip install --upgrade pip setuptools wheel delocate || true
+retry 5 5 python3 -m pip install --upgrade pip setuptools wheel delocate || true
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS_DIR="${REPO_ROOT}/scripts"

@@ -60,8 +60,8 @@ log "Detected architecture: ${ARCH}"
 
 # ===== System dependencies (apt) =====
 log "Installing system dependencies (apt)…"
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
+retry 5 5 sudo apt-get update
+retry 5 5 sudo apt-get install -y --no-install-recommends \
   build-essential git pkg-config \
   "${PYBIN%-*}-venv" "${PYBIN%-*}-dev" \
   unzip wget curl \
@@ -71,7 +71,7 @@ sudo apt-get install -y --no-install-recommends \
   ca-certificates
 
 # Some toolchains on arm64 sometimes need these (harmless on amd64)
-sudo apt-get install -y --no-install-recommends \
+retry 5 5 sudo apt-get install -y --no-install-recommends \
   libatomic1 || true
 
 # ===== cmake 3.x (avoid 4.x series) =====
@@ -85,23 +85,23 @@ _install_cmake3() {
          | grep -E '^3\.' | sort -V | tail -n1 || true)"
   if [[ -n "${ver}" ]]; then
     log "Installing cmake 3.x from apt (${ver})…"
-    sudo apt-get install -y --no-install-recommends "cmake=${ver}" && return 0
+    retry 5 5 sudo apt-get install -y --no-install-recommends "cmake=${ver}" && return 0
   fi
   # Fallback: install via pip inside the build venv (pinned to <4)
   log "cmake 3.x not available in apt; installing via pip…"
-  pip install 'cmake>=3.16,<4'
+  retry 5 5 pip install 'cmake>=3.16,<4'
 }
 _install_cmake3
 
 # Java is required to build Fast-DDS-Gen (gradle). Fast-DDS-Gen v4.3.0 uses
 # Gradle 9.x, which requires Java 17 or newer.
 if ! dpkg -l | grep -qw openjdk-17-jre || ! dpkg -l | grep -qw openjdk-17-jdk; then
-  sudo apt-get update
-  sudo apt-get install -y openjdk-17-jre openjdk-17-jdk
+  retry 5 5 sudo apt-get update
+  retry 5 5 sudo apt-get install -y openjdk-17-jre openjdk-17-jdk
 fi
 
 # SWIG 4.* is recommended (avoid 4.2+ unless you have patches)
-sudo apt-get install -y 'swig4.*' || true
+retry 5 5 sudo apt-get install -y 'swig4.*' || true
 
 SWIG_EXECUTABLE="${SWIG_EXECUTABLE:-}"
 if [[ -z "${SWIG_EXECUTABLE}" ]]; then
@@ -171,8 +171,8 @@ log "Creating venv (.venv) with ${PYBIN}…"
 "${PYBIN}" -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
-python -m pip install -U pip setuptools wheel
-python -m pip install -U colcon-common-extensions vcstool empy
+retry 5 5 python -m pip install -U pip setuptools wheel
+retry 5 5 python -m pip install -U colcon-common-extensions vcstool empy
 
 # ===== Fetch repos (vcstool) =====
 if [[ ! -f "${REPOS_FILE}" ]]; then
