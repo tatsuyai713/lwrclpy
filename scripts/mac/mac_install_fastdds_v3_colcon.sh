@@ -36,6 +36,24 @@ log(){ echo -e "\033[1;36m[INFO]\033[0m $*"; }
 warn(){ echo -e "\033[1;33m[WARN]\033[0m $*" >&2; }
 die(){ echo -e "\033[1;31m[FATAL]\033[0m $*" >&2; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "'$1' not found"; }
+retry() {
+  local attempts="$1"
+  local delay="$2"
+  shift 2
+  local n=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( n >= attempts )); then
+      return 1
+    fi
+    warn "Command failed (attempt ${n}/${attempts}); retrying in ${delay}s: $*"
+    sleep "${delay}"
+    n=$((n + 1))
+    delay=$((delay * 2))
+  done
+}
 
 # ===== Homebrew & toolchain =====
 if ! command -v brew >/dev/null 2>&1; then
@@ -106,13 +124,18 @@ python -m pip install -U colcon-common-extensions vcstool empy
 # ===== Fetch repos =====
 if [[ ! -f "${REPOS_FILE}" ]]; then
   log "Fetching default repos file (Fast-DDS-python ${FASTDDS_PYTHON_REPOS_REF})…"
-  curl -fsSL -o "${REPOS_FILE}" \
+  retry 5 3 curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o "${REPOS_FILE}" \
     "https://raw.githubusercontent.com/eProsima/Fast-DDS-python/${FASTDDS_PYTHON_REPOS_REF}/fastdds_python.repos"
 fi
 [[ -f "${REPOS_FILE}" ]] || die "repos file not found: ${REPOS_FILE}"
 
 log "Importing repos into src/…"
-vcs import --recursive src < "${REPOS_FILE}"
+import_repos() {
+  rm -rf src
+  mkdir -p src
+  vcs import --recursive src < "${REPOS_FILE}"
+}
+retry 5 5 import_repos
 
 LOAN_HELPER_PATCH="${ROOT_DIR}/scripts/patch_fastdds_python_loan_helpers.py"
 if [[ -f "${LOAN_HELPER_PATCH}" ]]; then
@@ -208,8 +231,8 @@ java -version
 
 sudo mkdir -p "${GEN_PREFIX}"
 pushd "${GEN_SRC_DIR}" >/dev/null
-  ./gradlew --no-daemon clean assemble
-  sudo JAVA_HOME="${JAVA_HOME}" ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
+  retry 4 5 ./gradlew --no-daemon clean assemble
+  retry 4 5 sudo JAVA_HOME="${JAVA_HOME}" ./gradlew --no-daemon install --install_path="${GEN_PREFIX}"
 popd >/dev/null
 
 export PATH="${GEN_PREFIX}/bin:${PATH}"
