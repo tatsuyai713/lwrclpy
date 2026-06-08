@@ -1,0 +1,87 @@
+name: Build Windows Wheel
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: "Package version, for example 0.5.1"
+        required: true
+        default: "0.5.1"
+        type: string
+      fastdds_python_repos_ref:
+        description: "Fast-DDS-python repos ref"
+        required: true
+        default: "v2.6.1"
+        type: string
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python-version }}"
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install build tools
+        shell: pwsh
+        run: |
+          choco install cmake ninja openjdk17 -y --no-progress
+          "C:\Program Files\OpenJDK\jdk-17\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          python -m pip install --upgrade "swig==4.1.1"
+
+      - name: Prepare vcpkg
+        shell: pwsh
+        env:
+          VCPKG_ROOT: C:\vcpkg
+        run: |
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            if (-not (Test-Path "$env:VCPKG_ROOT")) {
+              git clone https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
+            }
+            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          } elseif (Test-Path "$env:VCPKG_ROOT\.git") {
+            git -C "$env:VCPKG_ROOT" pull --ff-only
+            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          }
+          "VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Windows wheel
+        shell: pwsh
+        env:
+          PKG_VERSION: ${{ inputs.package_version }}
+          FASTDDS_PYTHON_REPOS_REF: ${{ inputs.fastdds_python_repos_ref }}
+          FASTDDS_PREFIX: C:\fast-dds-v3
+          FASTDDSGEN_PREFIX: C:\fast-dds-gen-v3
+          BUILD_ROOT: ._types_python_build_v3
+          VCPKG_ROOT: C:\vcpkg
+          VCPKG_DEFAULT_TRIPLET: x64-windows
+        run: |
+          scripts/windows/build_all.ps1 `
+            -PackageVersion "$env:PKG_VERSION" `
+            -Prefix "$env:FASTDDS_PREFIX" `
+            -GenPrefix "$env:FASTDDSGEN_PREFIX" `
+            -BuildRoot "$env:BUILD_ROOT" `
+            -VcpkgRoot "$env:VCPKG_ROOT" `
+            -VcpkgTriplet "$env:VCPKG_DEFAULT_TRIPLET"
+
+      - name: Upload repaired wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-windows-py${{ matrix.python-version }}
+          path: wheelhouse/*.whl
+          retention-days: 30
