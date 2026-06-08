@@ -79,7 +79,7 @@ function Use-JavaHome {
     $env:JAVA_HOME = $JavaHome
     Add-PathEntry (Join-Path $env:JAVA_HOME "bin")
     Write-Host "[INFO] Using JAVA_HOME=$env:JAVA_HOME"
-    & $javaExe -version
+    & $javaExe -version 2>&1 | Out-Host
     return $true
 }
 
@@ -106,7 +106,7 @@ function Add-JavaPath {
         if ($major -ge 17) {
             Add-PathEntry (Split-Path $javaCommand.Source -Parent)
             Write-Host "[INFO] Using java from PATH: $($javaCommand.Source)"
-            & $javaCommand.Source -version
+            & $javaCommand.Source -version 2>&1 | Out-Host
             return
         }
         Write-Host "[WARN] Ignoring java from PATH because it is version $major"
