@@ -10,22 +10,13 @@ This example shows:
 
 import time
 import threading
-import os
 import sys
 import rclpy
-from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
-from std_msgs.msg import Int32, String
-
-
-def _force_exit_after(seconds):
-    time.sleep(seconds)
-    print(f"[WARN] multithreaded executor demo exceeded {seconds}s; forcing exit", flush=True)
-    os._exit(0)
+from rclpy.executors import MultiThreadedExecutor
+from std_msgs.msg import Int32
 
 
 def main():
-    threading.Thread(target=_force_exit_after, args=(20.0,), daemon=True).start()
-
     rclpy.init()
     
     # Create multiple nodes
@@ -39,6 +30,7 @@ def main():
     # Shared state with thread-safe access
     message_count = {'received': 0, 'processed': 0}
     count_lock = threading.Lock()
+    done = threading.Event()
     
     # Create publisher
     pub = node1.create_publisher(Int32, "/counter", 10)
@@ -50,6 +42,9 @@ def main():
             count = message_count['received']
         thread_name = threading.current_thread().name
         node2.get_logger().info(f"[Thread: {thread_name}] Received: {msg.data}")
+        if count >= 5:
+            done.set()
+            executor.wake()
     
     sub = node2.create_subscription(Int32, "/counter", on_receive, 10)
     
@@ -79,21 +74,25 @@ def main():
         logger.info(f"  - {node.get_name()}")
     logger.info("")
     
-    # Publish in a separate thread
-    def publish_loop():
-        counter = 0
-        while rclpy.ok() and counter < 10:
+    counter = {'value': 0}
+
+    def publish_once():
+        if done.is_set():
+            return
+        with count_lock:
+            value = counter['value']
+            counter['value'] += 1
+        if value < 10:
             msg = Int32()
-            msg.data = counter
+            msg.data = value
             pub.publish(msg)
-            logger.info(f"Published: {counter}")
-            counter += 1
-            time.sleep(0.15)
-        logger.info("Publisher done, waking executor...")
-        executor.wake()  # Wake executor to check for shutdown
-    
-    publish_thread = threading.Thread(target=publish_loop, name="PublisherThread", daemon=True)
-    publish_thread.start()
+            logger.info(f"Published: {value}")
+        else:
+            logger.info("Publisher done, waking executor...")
+            done.set()
+            executor.wake()
+
+    publish_timer = node1.create_timer(0.15, publish_once)
     
     # Spin in another thread
     logger.info("Starting executor spin...")
@@ -104,10 +103,13 @@ def main():
     )
     executor_thread.start()
     
-    # Wait for publisher to finish
-    publish_thread.join(timeout=5.0)
-    if publish_thread.is_alive():
-        logger.warning("Publisher thread did not finish before timeout; continuing shutdown")
+    # Wait until subscriber progress is observed.  Keep this bounded so the
+    # example is deterministic in slow CI runners.
+    deadline = time.monotonic() + 12.0
+    while rclpy.ok() and not done.is_set() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not done.is_set():
+        logger.warning("Timed out waiting for subscriber progress; continuing shutdown")
     
     # Give some time for remaining callbacks
     time.sleep(0.5)
@@ -130,14 +132,15 @@ def main():
     logger.info("\n=== Demo Complete ===")
     
     # Cleanup
+    node1.destroy_timer(publish_timer)
     node1.destroy_node()
     node2.destroy_node()
     node3.destroy_node()
     rclpy.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()
-    os._exit(0)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

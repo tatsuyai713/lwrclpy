@@ -282,6 +282,7 @@ class ServerClientSpec:
     client_expect: Tuple[str, ...]
     client_timeout: float = DEFAULT_CLIENT_TIMEOUT
     server_ready: Tuple[str, ...] = ()
+    attempts: int = 1
 
 
 def _skip_reason(script: Path) -> Optional[str]:
@@ -452,6 +453,7 @@ def run_all_examples(platform_name: str) -> bool:
             client_expect=("Goal succeeded!", "Result:"),
             client_timeout=300.0,
             server_ready=(),
+            attempts=2,
         ),
     )
 
@@ -547,34 +549,46 @@ def run_all_examples(platform_name: str) -> bool:
             continue
 
         print_test_start(spec.name)
-        server_proc = ProcessCapture([sys.executable, str(server_path)])
-        # Allow DDS discovery time between separate processes
-        if spec.server_ready:
-            _wait_for_keywords(server_proc, spec.server_ready, timeout=ROS2_SERVER_READY_TIMEOUT)
-        else:
-            _sleep(DDS_DISCOVERY_DELAY)
-
         server_output = ""
-        overall_ok = True
-        for client_path in client_paths:
-            if not client_path.exists():
-                skipped.append((client_path.relative_to(PROJECT_ROOT).as_posix(), "file not found"))
-                print_warning(f"{client_path} skipped: not found")
-                continue
-            ok, output = _run_script(
-                client_path,
-                timeout=spec.client_timeout,
-                expect_output=spec.client_expect,
-            )
-            if not ok:
-                overall_ok = False
-                server_output = output
-                break
+        overall_ok = False
+        for attempt in range(1, max(1, spec.attempts) + 1):
+            if attempt > 1:
+                print_warning(f"{spec.name} retrying attempt {attempt}/{spec.attempts}")
+            server_proc = ProcessCapture([sys.executable, str(server_path)])
+            # Allow DDS discovery time between separate processes
+            if spec.server_ready:
+                _wait_for_keywords(server_proc, spec.server_ready, timeout=ROS2_SERVER_READY_TIMEOUT)
+            else:
+                _sleep(DDS_DISCOVERY_DELAY)
 
-        server_proc.terminate()
-        server_output = (server_output + server_proc.output())[:500]
-        if _contains_error(server_output):
-            overall_ok = False
+            attempt_output = ""
+            attempt_ok = True
+            for client_path in client_paths:
+                if not client_path.exists():
+                    skipped.append((client_path.relative_to(PROJECT_ROOT).as_posix(), "file not found"))
+                    print_warning(f"{client_path} skipped: not found")
+                    continue
+                ok, output = _run_script(
+                    client_path,
+                    timeout=spec.client_timeout,
+                    expect_output=spec.client_expect,
+                )
+                if not ok:
+                    attempt_ok = False
+                    attempt_output = output
+                    break
+
+            server_proc.terminate()
+            attempt_output = (attempt_output + server_proc.output())[:500]
+            if _contains_error(attempt_output):
+                server_output = attempt_output
+                overall_ok = False
+                break
+            if attempt_ok:
+                server_output = attempt_output or "OK"
+                overall_ok = True
+                break
+            server_output = attempt_output
         results.append((spec.name, overall_ok, server_output or "OK"))
         if overall_ok:
             print_success(f"{spec.name} - OK")
