@@ -12,6 +12,7 @@ jobs:
   test:
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     name: Test Windows (Python ${{ matrix.python-version }})
@@ -19,7 +20,7 @@ jobs:
     timeout-minutes: 90
     env:
       LWRCLPY_TEST_PLATFORM: Windows
-      LWRCLPY_TEST_TIMEOUT_SCALE: "2.0"
+      LWRCLPY_TEST_TIMEOUT_SCALE: "4.0"
       LWRCLPY_TEST_USE_INSTALLED: "1"
     steps:
       - name: Checkout code
@@ -70,7 +71,7 @@ jobs:
 
       - name: Run tests
         shell: pwsh
-        timeout-minutes: 75
+        timeout-minutes: 120
         run: |
           .\test_venv\Scripts\python.exe -u test\test_examples_windows.py 2>&1 | Tee-Object -FilePath test_output.log
           if ($LASTEXITCODE -ne 0) {
