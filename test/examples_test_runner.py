@@ -73,7 +73,7 @@ def print_test_start(name: str) -> None:
 
 
 def _display_symbol(symbol: str, fallback: str) -> str:
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
     try:
         symbol.encode(encoding)
         return symbol
