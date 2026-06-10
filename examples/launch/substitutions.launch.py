@@ -66,7 +66,9 @@ def generate_launch_description():
         # Using substitutions in ExecuteProcess
         ExecuteProcess(
             cmd=[
-                FindExecutable(name='echo'),
+                FindExecutable(name='python3'),
+                '-c',
+                'import sys; print(" ".join(sys.argv[1:]))',
                 'Hello from',
                 LaunchConfiguration('robot_name'),
             ],

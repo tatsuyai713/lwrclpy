@@ -25,6 +25,9 @@ jobs:
   build-macos-wheels:
     uses: ./.github/workflows/build-macos.yml
 
+  build-windows-wheels:
+    uses: ./.github/workflows/build-windows.yml
+
   test-ubuntu-wheels:
     needs: build-ubuntu-wheels
     uses: ./.github/workflows/test-ubuntu.yml
@@ -42,6 +45,7 @@ jobs:
     needs:
       - test-ubuntu-wheels
       - test-macos-wheels
+      - build-windows-wheels
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:

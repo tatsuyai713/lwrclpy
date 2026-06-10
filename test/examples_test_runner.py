@@ -72,16 +72,28 @@ def print_test_start(name: str) -> None:
     print("-" * 70)
 
 
+def _display_symbol(symbol: str, fallback: str) -> str:
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        symbol.encode(encoding)
+        return symbol
+    except UnicodeEncodeError:
+        return fallback
+
+
 def print_success(message: str) -> None:
-    print(f"{Colors.GREEN}✓ {message}{Colors.RESET}")
+    symbol = _display_symbol("✓", "OK")
+    print(f"{Colors.GREEN}{symbol} {message}{Colors.RESET}")
 
 
 def print_error(message: str) -> None:
-    print(f"{Colors.RED}✗ {message}{Colors.RESET}")
+    symbol = _display_symbol("✗", "X")
+    print(f"{Colors.RED}{symbol} {message}{Colors.RESET}")
 
 
 def print_warning(message: str) -> None:
-    print(f"{Colors.YELLOW}⚠ {message}{Colors.RESET}")
+    symbol = _display_symbol("⚠", "!")
+    print(f"{Colors.YELLOW}{symbol} {message}{Colors.RESET}")
 
 
 def _module_available(module_name: str) -> bool:
@@ -144,7 +156,10 @@ class ProcessCapture:
         if self.proc.poll() is not None:
             return
         try:
-            self.proc.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                self.proc.terminate()
+            else:
+                self.proc.send_signal(signal.SIGINT)
         except Exception:
             self.proc.terminate()
         try:

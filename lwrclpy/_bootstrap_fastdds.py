@@ -4,12 +4,18 @@ import glob
 import ctypes
 import platform
 
+_dll_dir_handles = []
+_loaded_generated_dlls = set()
+
 def _python_xy():
     vi = sys.version_info
     return f"{vi.major}.{vi.minor}"
 
 def _is_macos():
     return platform.system() == "Darwin"
+
+def _is_windows():
+    return platform.system() == "Windows"
 
 def _prepend_sys_path(path):
     # Only add absolute, normalized, existing paths
@@ -42,9 +48,51 @@ def _preload_libs(paths):
             # Only load absolute paths that exist
             if not os.path.isabs(p) or not os.path.exists(p):
                 continue
-            ctypes.CDLL(p, mode=getattr(ctypes, "RTLD_GLOBAL", os.RTLD_GLOBAL))
+            if _is_windows():
+                ctypes.WinDLL(p)
+            else:
+                ctypes.CDLL(p, mode=getattr(ctypes, "RTLD_GLOBAL", getattr(os, "RTLD_GLOBAL", 0)))
         except Exception:
             pass
+
+def _add_dll_dir(path):
+    if not _is_windows() or not os.path.isdir(path):
+        return
+    try:
+        _dll_dir_handles.append(os.add_dll_directory(path))  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+def _resolve_generated_dll(relative_path):
+    rel = os.path.normpath(relative_path)
+    for base in list(sys.path):
+        if not base:
+            base = os.getcwd()
+        try:
+            candidate = os.path.abspath(os.path.join(base, rel))
+        except Exception:
+            continue
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+def preload_generated_dlls(relative_paths):
+    """Load generated ROS type DLL dependencies by package-relative path.
+
+    Windows generated wrappers call this before loading their own type DLL.
+    The paths are resolved through sys.path so editable/source-tree lwrclpy can
+    still cooperate with generated message packages installed in site-packages.
+    """
+    for relative_path in relative_paths:
+        path = _resolve_generated_dll(relative_path)
+        if not path or path in _loaded_generated_dlls:
+            continue
+        _add_dll_dir(os.path.dirname(path))
+        if _is_windows():
+            ctypes.WinDLL(path)
+        else:
+            ctypes.CDLL(path, mode=getattr(ctypes, "RTLD_GLOBAL", getattr(os, "RTLD_GLOBAL", 0)))
+        _loaded_generated_dlls.add(path)
 
 def _find_message_libs():
     """Find ROS message type libraries in Python site-packages."""
@@ -62,7 +110,12 @@ def _find_message_libs():
             candidates.append(sp)
     
     # Determine library extension based on platform
-    lib_ext = '.dylib' if _is_macos() else '.so'
+    if _is_windows():
+        lib_ext = '.dll'
+    elif _is_macos():
+        lib_ext = '.dylib'
+    else:
+        lib_ext = '.so'
     
     # Known ROS message package patterns
     ros_msg_packages = {
@@ -90,7 +143,7 @@ def _find_message_libs():
                     continue
                 if not os.path.isabs(pkg_path):
                     continue
-                # Find lib*.so or lib*.dylib files recursively
+                # Find native message libraries recursively.
                 try:
                     for root, dirs, files in os.walk(pkg_path, followlinks=False):
                         # Only process absolute paths
@@ -125,7 +178,15 @@ def ensure_fastdds():
         vendor_lib = os.path.join(vendor_parent, "lib")
         vendor_fastdds = os.path.join(vendor_parent, "fastdds")
         
-        if os.path.isdir(vendor_lib) and (_is_macos() or os.environ.get("LWRCLPY_PRELOAD_FASTDDS_LIBS") == "1"):
+        if os.path.isdir(vendor_lib):
+            try:
+                # On Windows/Python>=3.8 this is required before importing
+                # extension modules that depend on vendored DLLs.
+                os.add_dll_directory(vendor_lib)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        if os.path.isdir(vendor_lib) and (_is_macos() or _is_windows() or os.environ.get("LWRCLPY_PRELOAD_FASTDDS_LIBS") == "1"):
             # Preload Fast-DDS libs in dependency order: fastcdr -> fastdds
             if _is_macos():
                 # Load libfastcdr first (dependency of libfastdds)
@@ -134,16 +195,15 @@ def ensure_fastdds():
                 # Then load libfastdds
                 dds_libs = glob.glob(os.path.join(vendor_lib, "libfastdds*.dylib"))
                 _preload_libs(dds_libs)
+            elif _is_windows():
+                cdr_libs = glob.glob(os.path.join(vendor_lib, "fastcdr*.dll")) + glob.glob(os.path.join(vendor_lib, "*fastcdr*.dll"))
+                _preload_libs(cdr_libs)
+                dds_libs = glob.glob(os.path.join(vendor_lib, "fastdds*.dll")) + glob.glob(os.path.join(vendor_lib, "*fastdds*.dll"))
+                _preload_libs(dds_libs)
             else:
                 # On Linux, preload all Fast-DDS libraries
                 libs = glob.glob(os.path.join(vendor_lib, "libfast*.so*"))
                 _preload_libs(libs)
-            
-            try:
-                # On Windows/Python>=3.8 this is required; harmless elsewhere
-                os.add_dll_directory(vendor_lib)  # type: ignore[attr-defined]
-            except Exception:
-                pass
         
         if os.path.isdir(vendor_fastdds):
             _prepend_sys_path(vendor_parent)
@@ -173,7 +233,14 @@ def ensure_fastdds():
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
         vendor_lib = os.path.join(pkg_dir, "_vendor", "lib")
         if os.path.isdir(vendor_lib):
-            libs = glob.glob(os.path.join(vendor_lib, "libfast*.so*"))
+            if _is_windows():
+                try:
+                    os.add_dll_directory(vendor_lib)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                libs = glob.glob(os.path.join(vendor_lib, "*fast*.dll"))
+            else:
+                libs = glob.glob(os.path.join(vendor_lib, "libfast*.so*"))
             _preload_libs(libs)
             import fastdds  # noqa: F401
             return
