@@ -7,6 +7,7 @@ param(
     [string]$FastDdsGenRef = $(if ($env:FASTDDSGEN_REF) { $env:FASTDDSGEN_REF } else { "master" }),
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { (Join-Path $BuildWorkRoot "vcpkg") }),
     [string]$VcpkgTriplet = $(if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows" }),
+    [string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }),
     [int]$Jobs = $(if ($env:JOBS) { [int]$env:JOBS } else { [Environment]::ProcessorCount })
 )
 
@@ -23,4 +24,5 @@ Write-Host "[WARN] install_fastdds_v3_colcon.ps1 is kept for compatibility. Wind
     -FastDdsGenRef $FastDdsGenRef `
     -VcpkgRoot $VcpkgRoot `
     -VcpkgTriplet $VcpkgTriplet `
+    -BuildArch $BuildArch `
     -Jobs $Jobs

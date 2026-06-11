@@ -32,13 +32,68 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2022
     timeout-minutes: 240
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - arch: x64
+            runner: windows-2022
+            python-architecture: x64
+            vcpkg-triplet: x64-windows
+            build-root: C:\lwrclpy_windows_build_x64
+            python-version: "3.10"
+          - arch: x64
+            runner: windows-2022
+            python-architecture: x64
+            vcpkg-triplet: x64-windows
+            build-root: C:\lwrclpy_windows_build_x64
+            python-version: "3.11"
+          - arch: x64
+            runner: windows-2022
+            python-architecture: x64
+            vcpkg-triplet: x64-windows
+            build-root: C:\lwrclpy_windows_build_x64
+            python-version: "3.12"
+          - arch: x64
+            runner: windows-2022
+            python-architecture: x64
+            vcpkg-triplet: x64-windows
+            build-root: C:\lwrclpy_windows_build_x64
+            python-version: "3.13"
+          - arch: x64
+            runner: windows-2022
+            python-architecture: x64
+            vcpkg-triplet: x64-windows
+            build-root: C:\lwrclpy_windows_build_x64
+            python-version: "3.14"
+          - arch: arm64
+            runner: windows-11-arm
+            python-architecture: arm64
+            vcpkg-triplet: arm64-windows
+            build-root: C:\lwrclpy_windows_build_arm64
+            python-version: "3.11"
+          - arch: arm64
+            runner: windows-11-arm
+            python-architecture: arm64
+            vcpkg-triplet: arm64-windows
+            build-root: C:\lwrclpy_windows_build_arm64
+            python-version: "3.12"
+          - arch: arm64
+            runner: windows-11-arm
+            python-architecture: arm64
+            vcpkg-triplet: arm64-windows
+            build-root: C:\lwrclpy_windows_build_arm64
+            python-version: "3.13"
+          - arch: arm64
+            runner: windows-11-arm
+            python-architecture: arm64
+            vcpkg-triplet: arm64-windows
+            build-root: C:\lwrclpy_windows_build_arm64
+            python-version: "3.14"
+    name: Build Windows ${{ matrix.arch }} Wheel (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -49,15 +104,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
+          architecture: "${{ matrix.python-architecture }}"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install build tools
         shell: pwsh
@@ -66,12 +119,17 @@ jobs:
           "$env:JAVA_HOME\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           java -version
           python -m pip install --upgrade "swig==4.1.1"
+          if ($LASTEXITCODE -ne 0) {
+            choco install swig -y --no-progress
+          }
 
       - name: Prepare vcpkg
         shell: pwsh
         env:
-          LWRCLPY_WINDOWS_BUILD_ROOT: C:\lwrclpy_windows_build
-          VCPKG_ROOT: C:\lwrclpy_windows_build\vcpkg
+          LWRCLPY_WINDOWS_BUILD_ROOT: ${{ matrix.build-root }}
+          VCPKG_ROOT: ${{ matrix.build-root }}\vcpkg
+          VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg-triplet }}
+          LWRCLPY_WINDOWS_BUILD_ARCH: ${{ matrix.arch }}
         run: |
           if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
             if (-not (Test-Path "$env:VCPKG_ROOT")) {
@@ -83,20 +141,22 @@ jobs:
             & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
           }
           "VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DEFAULT_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LWRCLPY_WINDOWS_BUILD_ARCH=$env:LWRCLPY_WINDOWS_BUILD_ARCH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Windows wheel
         shell: pwsh
         env:
           PKG_VERSION: ${{ inputs.package_version }}
           FASTDDS_PYTHON_REPOS_REF: ${{ inputs.fastdds_python_repos_ref }}
-          LWRCLPY_WINDOWS_BUILD_ROOT: C:\lwrclpy_windows_build
-          FASTDDS_PREFIX: C:\lwrclpy_windows_build\fastdds-prefix
-          FASTDDSGEN_PREFIX: C:\lwrclpy_windows_build\fastddsgen-prefix
-          FASTDDS_WS: C:\lwrclpy_windows_build\fastdds-workspace
-          BUILD_ROOT: C:\lwrclpy_windows_build\generated-types
-          VCPKG_ROOT: C:\lwrclpy_windows_build\vcpkg
-          VCPKG_DEFAULT_TRIPLET: x64-windows
+          LWRCLPY_WINDOWS_BUILD_ROOT: ${{ matrix.build-root }}
+          FASTDDS_PREFIX: ${{ matrix.build-root }}\fastdds-prefix
+          FASTDDSGEN_PREFIX: ${{ matrix.build-root }}\fastddsgen-prefix
+          FASTDDS_WS: ${{ matrix.build-root }}\fastdds-workspace
+          BUILD_ROOT: ${{ matrix.build-root }}\generated-types
+          VCPKG_ROOT: ${{ matrix.build-root }}\vcpkg
+          VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg-triplet }}
+          LWRCLPY_WINDOWS_BUILD_ARCH: ${{ matrix.arch }}
           JOBS: "2"
         run: |
           scripts/windows/build_all.ps1 `
@@ -107,12 +167,13 @@ jobs:
             -BuildRoot "$env:BUILD_ROOT" `
             -VcpkgRoot "$env:VCPKG_ROOT" `
             -VcpkgTriplet "$env:VCPKG_DEFAULT_TRIPLET" `
+            -BuildArch "$env:LWRCLPY_WINDOWS_BUILD_ARCH" `
             -Jobs 2
 
       - name: Upload repaired wheel
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-windows-py${{ matrix.python-version }}
+          name: wheel-windows-${{ matrix.arch }}-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
           retention-days: 30
 

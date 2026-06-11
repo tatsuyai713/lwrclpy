@@ -8,6 +8,7 @@ Full build entry point:
 powershell -ExecutionPolicy Bypass -File scripts/windows/build_all.ps1 `
   -BuildWorkRoot C:\lwrclpy_windows_build `
   -VcpkgTriplet x64-windows `
+  -BuildArch x64 `
   -PackageVersion 0.5.1
 ```
 
@@ -22,12 +23,23 @@ The Windows build uses vcpkg for the Fast DDS native stack. The default is:
 - `BuildWorkRoot`: `C:\lwrclpy_windows_build`
 - `VcpkgRoot`: `C:\lwrclpy_windows_build\vcpkg`
 - `VcpkgTriplet`: `x64-windows`
+- `BuildArch`: `x64`
+
+For Windows ARM64, run on a native Windows ARM64 environment and use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/build_all.ps1 `
+  -BuildWorkRoot C:\lwrclpy_windows_build_arm64 `
+  -VcpkgTriplet arm64-windows `
+  -BuildArch arm64 `
+  -PackageVersion 0.5.1
+```
 
 `install_fastdds_v3_vcpkg.ps1` bootstraps vcpkg if needed and installs:
 
 - `fastdds`
 
-The `fastdds` port pulls in `fastcdr`, `foonathan-memory`, `asio`, `tinyxml2`, OpenSSL, zlib, and the other native dependencies required by Fast DDS. Use the dynamic `x64-windows` triplet so required DLLs can be copied into the wheel and repaired by `delvewheel`.
+The `fastdds` port pulls in `fastcdr`, `foonathan-memory`, `asio`, `tinyxml2`, OpenSSL, zlib, and the other native dependencies required by Fast DDS. Use the dynamic `x64-windows` or `arm64-windows` triplet so required DLLs can be copied into the wheel and repaired by `delvewheel`.
 
 Packaging-only entry point:
 
@@ -35,6 +47,7 @@ Packaging-only entry point:
 powershell -ExecutionPolicy Bypass -File scripts/windows/make_pip_package_with_runtime.ps1 `
   -BuildWorkRoot C:\lwrclpy_windows_build `
   -VcpkgTriplet x64-windows `
+  -BuildArch x64 `
   -PackageVersion 0.5.1
 ```
 
@@ -66,4 +79,4 @@ $env:LWRCLPY_ENABLE_WINDOWS_DATASHARING = "1"
 
 The explicit opt-in is intentionally unsafe and should not be used for normal wheel validation.
 
-`.github/workflows/build-windows.yml` is a manual workflow that runs the full build on `windows-2022`.
+`.github/workflows/build-windows.yml` is a manual workflow that runs the full x64 build on `windows-2022` and the ARM64 build on GitHub's `windows-11-arm` hosted runner. The ARM64 GitHub runner label is available for public repositories; private repositories need a compatible larger or self-hosted ARM64 Windows runner.

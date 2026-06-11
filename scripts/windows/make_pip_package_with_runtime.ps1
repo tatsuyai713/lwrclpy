@@ -4,10 +4,13 @@ param(
     [string]$FastDdsPrefix = $(if ($env:FASTDDS_PREFIX) { $env:FASTDDS_PREFIX } else { (Join-Path $BuildWorkRoot "fastdds-prefix") }),
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { (Join-Path $BuildWorkRoot "vcpkg") }),
     [string]$VcpkgTriplet = $(if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows" }),
+    [string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }),
     [string]$PackageVersion = $(if ($env:PKG_VERSION) { $env:PKG_VERSION.TrimStart("v") } else { "" })
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "build_env.ps1")
+$BuildArch = Normalize-WindowsBuildArch $BuildArch
 
 function Write-Utf8NoBom($Path, $Value) {
     $dir = Split-Path $Path -Parent
@@ -65,10 +68,15 @@ function Find-Dumpbin {
     }
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhere) {
-        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        $requiredComponent = Get-VsRequiredComponent $BuildArch
+        $installPath = & $vswhere -latest -products * -requires $requiredComponent -property installationPath
+        if (-not $installPath -and $BuildArch -eq "arm64") {
+            $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        }
         if ($installPath) {
+            $toolArch = $(if ($BuildArch -eq "arm64") { "arm64" } else { "x64" })
             $candidate = Get-ChildItem -Path (Join-Path $installPath "VC\Tools\MSVC") -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -match "\\bin\\Hostx64\\x64\\dumpbin.exe$" } |
+                Where-Object { $_.FullName -match "\\bin\\Host$toolArch\\$toolArch\\dumpbin.exe$" } |
                 Sort-Object FullName -Descending |
                 Select-Object -First 1
             if ($candidate) {
@@ -214,6 +222,7 @@ Write-Host "[INFO] Build root: $BuildRoot"
 Write-Host "[INFO] Fast DDS prefix: $FastDdsPrefix"
 Write-Host "[INFO] vcpkg root: $VcpkgRoot"
 Write-Host "[INFO] vcpkg triplet: $VcpkgTriplet"
+Write-Host "[INFO] build arch: $BuildArch"
 
 python -m pip install --upgrade pip setuptools wheel build delvewheel
 

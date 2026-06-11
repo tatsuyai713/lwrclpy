@@ -10,21 +10,63 @@ function Add-PathEntry {
     }
 }
 
+function Normalize-WindowsBuildArch {
+    param([string]$BuildArch)
+    if (-not $BuildArch) {
+        $BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" })
+    }
+
+    switch ($BuildArch.ToLowerInvariant()) {
+        "x64" { return "x64" }
+        "amd64" { return "x64" }
+        "arm64" { return "arm64" }
+        "aarch64" { return "arm64" }
+        default { throw "Unsupported Windows build architecture: $BuildArch" }
+    }
+}
+
+function Get-VsDevCmdArch {
+    param([string]$BuildArch)
+    if ((Normalize-WindowsBuildArch $BuildArch) -eq "arm64") {
+        return "arm64"
+    }
+    return "amd64"
+}
+
+function Get-VsRequiredComponent {
+    param([string]$BuildArch)
+    if ((Normalize-WindowsBuildArch $BuildArch) -eq "arm64") {
+        return "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+    }
+    return "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+}
+
 function Import-VisualStudioEnvironment {
+    param([string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }))
+
+    $BuildArch = Normalize-WindowsBuildArch $BuildArch
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) {
         return
     }
 
-    $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    $requiredComponent = Get-VsRequiredComponent $BuildArch
+    $installPath = & $vswhere -latest -products * -requires $requiredComponent -property installationPath
+    if (-not $installPath -and $BuildArch -eq "arm64") {
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    }
     if (-not $installPath) {
         return
     }
 
     $devCmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
     if (Test-Path $devCmd) {
-        Write-Host "[INFO] Loading Visual Studio build environment: $installPath"
-        $envLines = cmd /s /c "`"$devCmd`" -arch=amd64 -host_arch=amd64 >nul && set"
+        $vsArch = Get-VsDevCmdArch $BuildArch
+        Write-Host "[INFO] Loading Visual Studio build environment: $installPath ($BuildArch)"
+        $envLines = cmd /s /c "`"$devCmd`" -arch=$vsArch -host_arch=$vsArch >nul && set"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to load Visual Studio build environment for $BuildArch"
+        }
         foreach ($line in $envLines) {
             $idx = $line.IndexOf("=")
             if ($idx -gt 0) {
@@ -134,7 +176,11 @@ function Add-JavaPath {
 }
 
 function Initialize-WindowsBuildEnvironment {
-    Import-VisualStudioEnvironment
+    param([string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }))
+
+    $BuildArch = Normalize-WindowsBuildArch $BuildArch
+    $env:LWRCLPY_WINDOWS_BUILD_ARCH = $BuildArch
+    Import-VisualStudioEnvironment $BuildArch
     Add-PythonScriptsPath
     Add-JavaPath
 }

@@ -7,12 +7,14 @@ param(
     [string]$FastDdsGenRef = $(if ($env:FASTDDSGEN_REF) { $env:FASTDDSGEN_REF } else { "master" }),
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { (Join-Path $BuildWorkRoot "vcpkg") }),
     [string]$VcpkgTriplet = $(if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows" }),
+    [string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }),
     [int]$Jobs = $(if ($env:JOBS) { [int]$env:JOBS } else { [Environment]::ProcessorCount })
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "build_env.ps1")
-Initialize-WindowsBuildEnvironment
+$BuildArch = Normalize-WindowsBuildArch $BuildArch
+Initialize-WindowsBuildEnvironment $BuildArch
 
 function Require-Command($Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -119,6 +121,10 @@ Require-Command python
 if (-not (Get-Command swig -ErrorAction SilentlyContinue)) {
     Invoke-Step "Installing SWIG 4.1.1 for Fast-DDS-python compatibility" {
         python -m pip install --upgrade "swig==4.1.1"
+        if ($LASTEXITCODE -ne 0 -and (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Write-Host "[WARN] pip SWIG install failed; trying Chocolatey SWIG package"
+            choco install swig -y --no-progress
+        }
     }
     Add-PythonScriptsPath
 }
@@ -273,6 +279,7 @@ Write-Host ""
 Write-Host "[OK] Windows Fast DDS Python installation completed"
 Write-Host "  FASTDDS_PREFIX=$Prefix"
 Write-Host "  FASTDDSGEN_BIN=$fastddsgen"
+Write-Host "  LWRCLPY_WINDOWS_BUILD_ARCH=$BuildArch"
 Write-Host "  VCPKG_ROOT=$VcpkgRoot"
 Write-Host "  VCPKG_DEFAULT_TRIPLET=$VcpkgTriplet"
 Write-Host "  VCPKG_FASTDDS=$vcpkgInstalled"
