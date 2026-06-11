@@ -41,54 +41,63 @@ jobs:
           - arch: x64
             runner: windows-2022
             python-architecture: x64
+            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.10"
           - arch: x64
             runner: windows-2022
             python-architecture: x64
+            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.11"
           - arch: x64
             runner: windows-2022
             python-architecture: x64
+            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.12"
           - arch: x64
             runner: windows-2022
             python-architecture: x64
+            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.13"
           - arch: x64
             runner: windows-2022
             python-architecture: x64
+            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.14"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
+            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.11"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
+            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.12"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
+            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.13"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
+            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.14"
@@ -110,7 +119,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "${{ matrix.java-version }}"
 
       - name: Install build tools
         shell: pwsh

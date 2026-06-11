@@ -179,8 +179,13 @@ function Initialize-WindowsBuildEnvironment {
     param([string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }))
 
     $BuildArch = Normalize-WindowsBuildArch $BuildArch
+    if ($env:LWRCLPY_WINDOWS_BUILD_ENV_INITIALIZED -eq $BuildArch) {
+        return
+    }
+
     $env:LWRCLPY_WINDOWS_BUILD_ARCH = $BuildArch
     Import-VisualStudioEnvironment $BuildArch
     Add-PythonScriptsPath
     Add-JavaPath
+    $env:LWRCLPY_WINDOWS_BUILD_ENV_INITIALIZED = $BuildArch
 }
