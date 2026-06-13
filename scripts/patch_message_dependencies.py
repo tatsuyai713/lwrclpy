@@ -12,16 +12,10 @@ The script:
 3. Analyzes dependencies to determine which lib*.so files need to be preloaded
 4. Inserts preload code for dependencies before the main lib preload
 
-Known dependencies (from ROS2 IDL definitions):
-- action_msgs.msg.GoalInfo → unique_identifier_msgs.msg.UUID
-- action_msgs.msg.GoalStatus → action_msgs.msg.GoalInfo → unique_identifier_msgs.msg.UUID
-- All ROS2 actions → action_msgs.msg.GoalInfo → unique_identifier_msgs.msg.UUID
-- Many message types → builtin_interfaces.msg.Time/Duration
-
 The script is designed to be:
 - Idempotent: Can be run multiple times safely
-- Generic: Works with any ROS 2 message/action definition
-- Extensible: Easy to add new dependency mappings
+- Generic: Works from generated SWIG Python modules without a hand-maintained
+  dependency table
 
 Usage:
     python patch_message_dependencies.py <install_root>
@@ -29,70 +23,17 @@ Usage:
 Example:
     python patch_message_dependencies.py /opt/fast-dds-v3-libs/python/src
 """
-import os
 import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Set
 
 
-# Known message dependencies (package.msg_type -> [dependencies])
-# This mapping is based on ROS2 IDL definitions
-KNOWN_DEPENDENCIES: Dict[str, List[str]] = {
-    # action_msgs dependencies
-    'action_msgs.GoalInfo': ['unique_identifier_msgs.UUID', 'builtin_interfaces.Time'],
-    'action_msgs.GoalStatus': ['action_msgs.GoalInfo'],  # Transitively includes UUID and Time
-    'action_msgs.GoalStatusArray': ['action_msgs.GoalStatus'],
-    
-    # action_msgs service dependencies
-    'action_msgs.CancelGoal': ['action_msgs.GoalInfo', 'unique_identifier_msgs.UUID', 'builtin_interfaces.Time'],
-    
-    # All ROS2 action types depend on action_msgs (SendGoal, GetResult use GoalInfo)
-    # This is a generic pattern - any action in any package will need these
-    '__action__': ['action_msgs.GoalInfo', 'unique_identifier_msgs.UUID', 'builtin_interfaces.Time'],
-    
-    # sensor_msgs with builtin_interfaces
-    'sensor_msgs.BatteryState': ['std_msgs.Header'],
-    'sensor_msgs.CameraInfo': ['std_msgs.Header'],
-    'sensor_msgs.CompressedImage': ['std_msgs.Header'],
-    'sensor_msgs.FluidPressure': ['std_msgs.Header'],
-    'sensor_msgs.Illuminance': ['std_msgs.Header'],
-    'sensor_msgs.Image': ['std_msgs.Header'],
-    'sensor_msgs.JointState': ['std_msgs.Header'],
-    'sensor_msgs.Joy': ['std_msgs.Header'],
-    'sensor_msgs.LaserScan': ['std_msgs.Header'],
-    'sensor_msgs.MagneticField': ['std_msgs.Header', 'geometry_msgs.Vector3'],
-    'sensor_msgs.MultiDOFJointState': ['std_msgs.Header', 'geometry_msgs.Transform', 'geometry_msgs.Twist', 'geometry_msgs.Wrench'],
-    'sensor_msgs.MultiEchoLaserScan': ['std_msgs.Header'],
-    'sensor_msgs.Imu': ['std_msgs.Header', 'geometry_msgs.Quaternion', 'geometry_msgs.Vector3'],
-    'sensor_msgs.NavSatFix': ['std_msgs.Header', 'sensor_msgs.NavSatStatus'],
-    'sensor_msgs.PointCloud': ['std_msgs.Header', 'geometry_msgs.Point32'],
-    'sensor_msgs.PointCloud2': ['std_msgs.Header'],
-    'sensor_msgs.Range': ['std_msgs.Header'],
-    'sensor_msgs.RelativeHumidity': ['std_msgs.Header'],
-    'sensor_msgs.Temperature': ['std_msgs.Header'],
-    'sensor_msgs.TimeReference': ['std_msgs.Header', 'builtin_interfaces.Time'],
-    
-    # std_msgs.Header is special - it contains builtin_interfaces.Time
-    'std_msgs.Header': ['builtin_interfaces.Time'],
-    
-    # geometry_msgs dependencies
-    'geometry_msgs.PoseStamped': ['std_msgs.Header', 'geometry_msgs.Pose'],
-    'geometry_msgs.TwistStamped': ['std_msgs.Header', 'geometry_msgs.Twist'],
-    'geometry_msgs.TransformStamped': ['std_msgs.Header', 'geometry_msgs.Transform'],
-    'geometry_msgs.AccelStamped': ['std_msgs.Header', 'geometry_msgs.Accel'],
-    'geometry_msgs.WrenchStamped': ['std_msgs.Header', 'geometry_msgs.Wrench'],
-    
-    # nav_msgs dependencies
-    'nav_msgs.GridCells': ['std_msgs.Header', 'geometry_msgs.Point'],
-    'nav_msgs.MapMetaData': ['builtin_interfaces.Time', 'geometry_msgs.Pose'],
-    'nav_msgs.OccupancyGrid': ['std_msgs.Header', 'nav_msgs.MapMetaData'],
-    'nav_msgs.Odometry': ['std_msgs.Header', 'geometry_msgs.PoseWithCovariance', 'geometry_msgs.TwistWithCovariance'],
-    'nav_msgs.Path': ['std_msgs.Header', 'geometry_msgs.PoseStamped'],
-}
-
-
-def get_transitive_dependencies(msg_type: str, visited: Set[str] = None) -> List[str]:
+def get_transitive_dependencies(
+    msg_type: str,
+    dependency_map: Dict[str, List[str]],
+    visited: Set[str] = None,
+) -> List[str]:
     """Get all transitive dependencies for a message type in load order (deepest first)."""
     if visited is None:
         visited = set()
@@ -103,14 +44,102 @@ def get_transitive_dependencies(msg_type: str, visited: Set[str] = None) -> List
     visited.add(msg_type)
     deps = []
     
-    if msg_type in KNOWN_DEPENDENCIES:
-        for dep in KNOWN_DEPENDENCIES[msg_type]:
+    direct_deps = dependency_map.get(msg_type, [])
+
+    if direct_deps:
+        for dep in direct_deps:
             # Recursively get transitive dependencies first (depth-first)
-            deps.extend(get_transitive_dependencies(dep, visited))
+            for transitive_dep in get_transitive_dependencies(dep, dependency_map, visited):
+                if transitive_dep not in deps:
+                    deps.append(transitive_dep)
             # Then add the dependency itself
-            deps.append(dep)
+            if dep not in deps:
+                deps.append(dep)
     
     return deps
+
+
+def _type_from_generated_path(path: Path) -> tuple[str, str, str] | None:
+    parts = path.parts
+    for subdir in ("msg", "srv", "action"):
+        if subdir not in parts:
+            continue
+        idx = parts.index(subdir)
+        if idx <= 0:
+            continue
+        return parts[idx - 1], subdir, path.stem
+    return None
+
+
+def build_library_index(install_root: Path) -> Dict[str, List[str]]:
+    """Map generated type names to package-qualified dependency names."""
+
+    index: Dict[str, List[str]] = {}
+    for lib in install_root.rglob("lib*.so"):
+        info = _type_from_generated_path(lib)
+        if info is None:
+            continue
+        pkg, subdir, _stem = info
+        if subdir != "msg":
+            continue
+        typ = lib.stem.removeprefix("lib")
+        index.setdefault(typ, [])
+        qualified = f"{pkg}.{typ}"
+        if qualified not in index[typ]:
+            index[typ].append(qualified)
+    return index
+
+
+def infer_dependencies_from_generated_python(
+    py_file: Path,
+    library_index: Dict[str, List[str]],
+) -> List[str]:
+    """Infer dependent message libraries embedded in a SWIG-generated file.
+
+    fastddsgen emits proxy classes for included message types into the generated
+    Python module.  If a proxy class name has a corresponding ``lib<Type>.so`` in
+    another generated message package, preload that library before the current
+    module's own library.  This keeps custom packages such as fixedsized_msgs
+    maintainable without hand-maintaining one entry per message.
+    """
+
+    type_info = _type_from_generated_path(py_file)
+    if type_info is None:
+        return []
+    own_pkg, _own_subdir, own_type = type_info
+    own_qualified = f"{own_pkg}.{own_type}"
+    content = py_file.read_text()
+
+    deps: List[str] = []
+    for match in re.finditer(r"(?m)^class\s+([A-Za-z_][A-Za-z_0-9]*)\b", content):
+        cls = match.group(1)
+        if (
+            cls == own_type
+            or cls.startswith("_")
+            or cls.endswith("Seq")
+            or cls.endswith("PubSubType")
+            or cls in {"SwigPyIterator", "SwigPyObject"}
+        ):
+            continue
+        for dep in library_index.get(cls, []):
+            if dep == own_qualified or dep in deps:
+                continue
+            deps.append(dep)
+    return deps
+
+
+def build_auto_dependency_map(install_root: Path, message_files: List[Path]) -> Dict[str, List[str]]:
+    library_index = build_library_index(install_root)
+    dependency_map: Dict[str, List[str]] = {}
+    for py_file in message_files:
+        type_info = _type_from_generated_path(py_file)
+        if type_info is None:
+            continue
+        pkg, _subdir, typ = type_info
+        deps = infer_dependencies_from_generated_python(py_file, library_index)
+        if deps:
+            dependency_map[f"{pkg}.{typ}"] = deps
+    return dependency_map
 
 
 def find_message_files(install_root: str) -> List[Path]:
@@ -207,7 +236,7 @@ if os.path.exists(_dep_lib_{typ.lower()}):
     return ''.join(preload_lines)
 
 
-def patch_file(py_file: Path, install_root: Path) -> bool:
+def patch_file(py_file: Path, install_root: Path, dependency_map: Dict[str, List[str]]) -> bool:
     """Patch a single message/action file to add dependency preloads."""
     msg_type_result = extract_message_type(py_file)
     
@@ -221,19 +250,11 @@ def patch_file(py_file: Path, install_root: Path) -> bool:
         print(f"  [SKIP] {py_file.relative_to(install_root)}: cannot determine type")
         return False
     
-    # Check if this message/action has dependencies
-    deps = get_transitive_dependencies(msg_type)
-    
-    # For action files, also add generic action dependencies
-    if is_action and '__action__' in KNOWN_DEPENDENCIES:
-        generic_deps = KNOWN_DEPENDENCIES['__action__']
-        # Add generic action dependencies
-        for dep in generic_deps:
-            if dep not in deps:
-                deps.append(dep)
+    # Check if this message/action has inferred dependencies.
+    deps = get_transitive_dependencies(msg_type, dependency_map)
     
     if not deps:
-        print(f"  [SKIP] {py_file.relative_to(install_root)}: no known dependencies")
+        print(f"  [SKIP] {py_file.relative_to(install_root)}: no inferred dependencies")
         return False
     
     content = py_file.read_text()
@@ -294,10 +315,12 @@ def main():
     print(f"[INFO] Scanning for message/action/service files in {install_root}")
     message_files = find_message_files(install_root)
     print(f"[INFO] Found {len(message_files)} files with preload sections")
+    dependency_map = build_auto_dependency_map(install_root, message_files)
+    print(f"[INFO] Inferred dependencies for {len(dependency_map)} generated files")
     
     patched = 0
     for py_file in sorted(message_files):
-        if patch_file(py_file, install_root):
+        if patch_file(py_file, install_root, dependency_map):
             patched += 1
     
     print(f"\n[INFO] Patched {patched}/{len(message_files)} files")

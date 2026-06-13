@@ -289,7 +289,21 @@ def _get_value(src, name):
     """Extract a field value from *src* using fastddsgen conventions."""
     if name in _SKIP_FIELDS or name.startswith("_"):
         return None
-    fast_value = _message_field_bytes(src, name)
+    try:
+        inst_dict = getattr(src, "__dict__", None)
+        if inst_dict and name in inst_dict:
+            v = inst_dict[name]
+            if not callable(v):
+                return v
+            try:
+                return v()
+            except Exception:
+                return v
+    except Exception:
+        pass
+    fast_value = _message_field_memoryview(src, name)
+    if fast_value is None:
+        fast_value = _message_field_bytes(src, name)
     if fast_value is not None:
         return fast_value
     try:
@@ -542,6 +556,9 @@ def clone_message(msg, msg_ctor):
         val = _get_value(msg, name)
         if val is None:
             continue
+        view = _buffer_view(val)
+        if view is not None and _assign(clone, name, view):
+            continue
         if _is_swig_vector(val) and _assign(clone, name, val):
             continue
         copied = _copy_val(val)
@@ -555,6 +572,9 @@ def clone_message(msg, msg_ctor):
                 continue  # already processed
             val = _get_value(msg, name)
             if val is None:
+                continue
+            view = _buffer_view(val)
+            if view is not None and _assign(clone, name, view):
                 continue
             if _is_swig_vector(val) and _assign(clone, name, val):
                 continue

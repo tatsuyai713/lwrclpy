@@ -36,17 +36,18 @@ def add_after_anchor(lines):
         txt = txt[:ins] + "\n" + block + txt[ins:]
 
 
-def add_uint8_buffer_fast_paths():
-    """Add one-copy Python buffer setters for std::vector<uint8_t> fields.
+def add_primitive_sequence_buffer_fast_paths():
+    """Add buffer-oriented helpers for primitive std::vector<T> fields.
 
     fastddsgen's default SWIG conversion builds std::vector<uint8_t> through the
     generic sequence path.  For ROS fields such as sensor_msgs/Image.data and
     sensor_msgs/PointCloud2.data this is the dominant Python-side cost.  The
-    generated overload below accepts any Python buffer object and copies it into
-    the C++ vector with a single resize+memcpy.
+    generated overloads below accept Python buffer objects and copy them into
+    C++ vectors with a single resize+memcpy.  They also expose writable
+    memoryviews so users can fill large ROS-compatible sequence fields in place.
     """
     global txt
-    if "/* __LWRCLPY_UINT8_BUFFER_FAST_PATHS__ */" in txt:
+    if "/* __LWRCLPY_PRIMITIVE_SEQUENCE_BUFFER_FAST_PATHS__ */" in txt:
         return
 
     msg_match_local = re.search(r'Binding for class\s+([A-Za-z_][A-Za-z_0-9:]*)', txt)
@@ -55,45 +56,52 @@ def add_uint8_buffer_fast_paths():
     fqcn = msg_match_local.group(1)
     class_name = fqcn.split("::")[-1]
 
-    field_names: list[str] = []
+    primitive_types = {
+        "uint8_t": "uint8_t",
+        "octet": "uint8_t",
+        "unsignedchar": "uint8_t",
+        "int8_t": "int8_t",
+        "char": "char",
+        "uint16_t": "uint16_t",
+        "unsignedshort": "uint16_t",
+        "int16_t": "int16_t",
+        "short": "int16_t",
+        "uint32_t": "uint32_t",
+        "unsignedint": "uint32_t",
+        "unsignedlong": "uint32_t",
+        "int32_t": "int32_t",
+        "int": "int32_t",
+        "long": "int32_t",
+        "uint64_t": "uint64_t",
+        "unsignedlonglong": "uint64_t",
+        "int64_t": "int64_t",
+        "longlong": "int64_t",
+        "float": "float",
+        "double": "double",
+    }
+
+    fields: list[tuple[str, str]] = []
+    seen_fields: set[str] = set()
     for match in re.finditer(
         rf'%ignore\s+{re.escape(fqcn)}::([A-Za-z_][A-Za-z_0-9]*)'
-        r'\(\s*std::vector\s*<\s*(?:uint8_t|octet|unsigned\s+char)\s*>\s*&&\s*\)\s*;',
+        r'\(\s*std::vector\s*<\s*([^>]+?)\s*>\s*&&\s*\)\s*;',
         txt,
     ):
         name = match.group(1)
-        if name not in field_names:
-            field_names.append(name)
-    if not field_names:
+        raw_type = match.group(2)
+        key = re.sub(r'\s+', '', raw_type)
+        ctype = primitive_types.get(key)
+        if ctype is None or name in seen_fields:
+            continue
+        seen_fields.add(name)
+        fields.append((name, ctype))
+    if not fields:
         return
-
-    vector_extend = r'''
-%extend std::vector<uint8_t>
-{
-    PyObject* _lwrclpy_bytes() const
-    {
-        const char* data = self->empty()
-            ? ""
-            : reinterpret_cast<const char*>(self->data());
-        return PyBytes_FromStringAndSize(data, static_cast<Py_ssize_t>(self->size()));
-    }
-
-    PyObject* _lwrclpy_memoryview()
-    {
-        static char empty = 0;
-        char* data = self->empty()
-            ? &empty
-            : reinterpret_cast<char*>(self->data());
-        return PyMemoryView_FromMemory(data, static_cast<Py_ssize_t>(self->size()), PyBUF_READ);
-    }
-}
-'''
 
     methods = []
     ignore_lines = []
-    for field in field_names:
-        ignore_lines.append(f'%ignore {fqcn}::{field}(const std::vector<uint8_t>&);')
-        ignore_lines.append(f'%ignore {fqcn}::{field}(const std::vector<unsigned char>&);')
+    for field, ctype in fields:
+        ignore_lines.append(f'%ignore {fqcn}::{field}(const std::vector<{ctype}>&);')
         methods.append(f'''
     void {field}(PyObject* obj)
     {{
@@ -105,11 +113,19 @@ def add_uint8_buffer_fast_paths():
                 PyBuffer_Release(&view);
                 throw std::runtime_error("negative buffer size");
             }}
-            std::vector<uint8_t> tmp;
-            tmp.resize(static_cast<size_t>(view.len));
+            if ((static_cast<size_t>(view.len) % sizeof({ctype})) != 0)
+            {{
+                PyBuffer_Release(&view);
+                throw std::runtime_error("buffer size is not aligned to sequence element size");
+            }}
+            std::vector<{ctype}> tmp;
+            tmp.resize(static_cast<size_t>(view.len) / sizeof({ctype}));
             if (view.len > 0)
             {{
-                std::memcpy(tmp.data(), view.buf, static_cast<size_t>(view.len));
+                std::memcpy(
+                    reinterpret_cast<void*>(tmp.data()),
+                    view.buf,
+                    static_cast<size_t>(view.len));
             }}
             PyBuffer_Release(&view);
             self->{field}(std::move(tmp));
@@ -117,11 +133,11 @@ def add_uint8_buffer_fast_paths():
         }}
         PyErr_Clear();
 
-        std::vector<uint8_t>* ptr = nullptr;
+        std::vector<{ctype}>* ptr = nullptr;
         int res = swig::asptr(obj, &ptr);
         if (!SWIG_IsOK(res) || ptr == nullptr)
         {{
-            throw std::runtime_error("expected a bytes-like object or uint8_t_vector");
+            throw std::runtime_error("expected a bytes-like object or compatible std::vector");
         }}
         self->{field}(*ptr);
         if (SWIG_IsNewObj(res))
@@ -136,7 +152,9 @@ def add_uint8_buffer_fast_paths():
         const char* data = value.empty()
             ? ""
             : reinterpret_cast<const char*>(value.data());
-        return PyBytes_FromStringAndSize(data, static_cast<Py_ssize_t>(value.size()));
+        return PyBytes_FromStringAndSize(
+            data,
+            static_cast<Py_ssize_t>(value.size() * sizeof({ctype})));
     }}
 
     PyObject* _lwrclpy_{field}_memoryview()
@@ -146,17 +164,39 @@ def add_uint8_buffer_fast_paths():
         char* data = value.empty()
             ? &empty
             : reinterpret_cast<char*>(value.data());
-        return PyMemoryView_FromMemory(data, static_cast<Py_ssize_t>(value.size()), PyBUF_READ);
+        return PyMemoryView_FromMemory(
+            data,
+            static_cast<Py_ssize_t>(value.size() * sizeof({ctype})),
+            PyBUF_WRITE);
+    }}
+
+    void _lwrclpy_{field}_resize(size_t size)
+    {{
+        auto value = self->{field}();
+        value.resize(size);
+        self->{field}(std::move(value));
+    }}
+
+    size_t _lwrclpy_{field}_size()
+    {{
+        const auto& value = self->{field}();
+        return value.size();
+    }}
+
+    size_t _lwrclpy_{field}_nbytes()
+    {{
+        const auto& value = self->{field}();
+        return value.size() * sizeof({ctype});
     }}
 ''')
 
     helper = f'''
-/* __LWRCLPY_UINT8_BUFFER_FAST_PATHS__ */
+/* __LWRCLPY_PRIMITIVE_SEQUENCE_BUFFER_FAST_PATHS__ */
 %{{
 #include <cstring>
+#include <cstdint>
 #include <stdexcept>
 %}}
-{vector_extend}
 {chr(10).join(ignore_lines)}
 %extend {fqcn}
 {{
@@ -420,8 +460,8 @@ public:
     else:
         txt = txt.rstrip() + "\n" + helper + "\n"
 
-# 5d) Add generic fast paths for large uint8/octet sequence fields.
-add_uint8_buffer_fast_paths()
+# 5d) Add generic fast paths for large primitive sequence fields.
+add_primitive_sequence_buffer_fast_paths()
 
 # 6) Clean up any known bad redefinition blocks (safe pattern).
 #    E.g., if someone injected a hand-written "struct SerializedPayload_t { … }" block into the .i, remove it.

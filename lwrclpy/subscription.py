@@ -263,6 +263,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         reader_lock=None,
         loaned_samples_cls=None,
         auto_loan_receive: bool = False,
+        cuda_attach_fn=None,
     ):
         super().__init__()
         self._enqueue_cb = enqueue_cb
@@ -280,6 +281,19 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._expose_fn = None if raw_mode else expose_callable_fields
         self._has_callback = callable(user_cb)
         self._with_message_info = self._has_callback and _callback_accepts_message_info(user_cb)
+        self._cuda_attach_fn = cuda_attach_fn
+
+    def set_cuda_attach_fn(self, fn) -> None:
+        self._cuda_attach_fn = fn
+
+    def _attach_cuda_ipc(self, data) -> None:
+        fn = self._cuda_attach_fn
+        if fn is None or data is None:
+            return
+        try:
+            fn(data)
+        except Exception:
+            pass
 
     def set_auto_loan_receive(self, enabled: bool) -> None:
         self._auto_loan_receive = bool(enabled and self._loaned_samples_cls is not None)
@@ -317,6 +331,7 @@ class _ReaderListener(fastdds.DataReaderListener):
                 expose_fn(data)
             except Exception:
                 pass
+        self._attach_cuda_ipc(data)
         msg_info = MessageInfo(info) if include_message_info else None
         return data, msg_info
 
@@ -341,6 +356,7 @@ class _ReaderListener(fastdds.DataReaderListener):
             if sample is None:
                 loaned.return_loan()
                 return _SKIP_SAMPLE
+            self._attach_cuda_ipc(sample)
             msg_info = loaned.info(0) if self._with_message_info else None
             callback_owned_loan = None if _attach_loan_to_sample(sample, loaned) else loaned
             self._auto_loan_receive_count += 1
@@ -536,6 +552,32 @@ class Subscription:
             raise RuntimeError("Failed to create DataReader")
         self._reader = reader
         self._listener.set_auto_loan_receive(self._automatic_loaned_receive_enabled)
+        self._cuda_ipc_topic_name = ""
+        self._cuda_ipc_latest_by_field = {}
+
+    def _set_cuda_ipc_topic(self, topic_name: str) -> None:
+        self._cuda_ipc_topic_name = topic_name
+        self._listener.set_cuda_attach_fn(self._attach_latest_cuda_ipc)
+
+    def _update_cuda_ipc_metadata(self, metadata_text: str) -> None:
+        try:
+            from .cuda_ipc import CudaIpcMetadata
+            metadata = CudaIpcMetadata.from_json(metadata_text)
+        except Exception:
+            return
+        if self._cuda_ipc_topic_name and metadata.topic != self._cuda_ipc_topic_name:
+            return
+        self._cuda_ipc_latest_by_field[metadata.field] = metadata
+
+    def _attach_latest_cuda_ipc(self, msg) -> None:
+        if not self._cuda_ipc_latest_by_field:
+            return
+        try:
+            from .cuda_ipc import attach_cuda_buffer
+            for metadata in tuple(self._cuda_ipc_latest_by_field.values()):
+                attach_cuda_buffer(msg, metadata)
+        except Exception:
+            pass
 
     def take(self, max_count: int = 1) -> List[Tuple[Any, MessageInfo]]:
         """Take messages directly from the DataReader (polling mode).

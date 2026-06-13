@@ -7,10 +7,11 @@ from __future__ import annotations
 import fastdds  # type: ignore
 import os
 import sys
+import threading
 from typing import TypeVar, Generic
 from .qos import QoSProfile
 from .message_utils import clone_message, _assign
-from .message_utils import _copy_val, _get_field_names, _get_value, _is_swig_vector
+from .message_utils import _buffer_view, _copy_val, _get_field_names, _get_value, _is_swig_vector
 from .duration import Duration
 from .utils import (
     _matched_handle_count,
@@ -63,10 +64,14 @@ def _copy_message_into(src, dst) -> bool:
         value = _get_value(src, name)
         if value is None:
             continue
-        # Avoid materializing large fixed arrays as Python bytes when copying
-        # into a loaned sample.  The generated setter can copy the native SWIG
-        # vector directly, which keeps rclpy-visible behavior unchanged while
-        # removing a large intermediate allocation.
+        view = _buffer_view(value)
+        if view is not None and _assign(dst, name, view):
+            copied = True
+            continue
+        # Avoid materializing large arrays as Python bytes when copying into a
+        # loaned sample.  The generated setter can copy the native SWIG vector
+        # directly, which keeps rclpy-visible behavior unchanged while removing
+        # a large intermediate allocation.
         if _is_swig_vector(value) and _assign(dst, name, value):
             copied = True
             continue
@@ -173,6 +178,10 @@ class Publisher:
         self._msg_module = msg_module
         self._destroyed = False
         self._publish_count = 0
+        self._cuda_ipc_metadata_pub = None
+        self._cuda_ipc_topic_name = ""
+        self._cuda_ipc_keepalive = {}
+        self._cuda_ipc_lock = threading.Lock()
 
         # Create Publisher
         pub_qos = fastdds.PublisherQos()
@@ -202,6 +211,10 @@ class Publisher:
         if self._writer is None:
             raise RuntimeError("Failed to create DataWriter")
 
+    def _set_cuda_ipc_metadata_publisher(self, publisher, topic_name: str) -> None:
+        self._cuda_ipc_metadata_pub = publisher
+        self._cuda_ipc_topic_name = topic_name
+
     def publish(self, msg) -> None:
         """Publish a message instance generated from the SWIG type."""
         target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
@@ -228,6 +241,59 @@ class Publisher:
                 to_send = msg  # fall back to original on failure
             _write_checked(self._writer, to_send)
         self._publish_count += 1
+
+    def publish_cuda(
+        self,
+        msg,
+        cuda_array,
+        *,
+        field: str = "data",
+        publish_ros_payload: bool = True,
+        nbytes: int | None = None,
+        device_id: int | None = None,
+    ) -> bool:
+        """Publish a ROS-compatible message with an optional CUDA IPC side channel.
+
+        The normal DDS payload is still published by default, preserving ROS 2
+        interoperability.  When ``cuda_array`` exposes ``__cuda_array_interface__``
+        and CUDA IPC export succeeds, lwrclpy subscribers on the same host can
+        open the device allocation from metadata on a hidden topic.
+
+        Returns True when CUDA IPC metadata was published.  If CUDA IPC is not
+        available, the method falls back to the normal ROS-compatible publish and
+        returns False.
+        """
+
+        metadata = None
+        try:
+            from .cuda_ipc import export_cuda_ipc_metadata
+            metadata = export_cuda_ipc_metadata(
+                cuda_array,
+                topic=self._cuda_ipc_topic_name,
+                field=field,
+                nbytes=nbytes,
+                device_id=device_id,
+            )
+        except Exception:
+            metadata = None
+
+        if metadata is not None and self._cuda_ipc_metadata_pub is not None:
+            try:
+                from .cuda_ipc import set_string_data
+                meta_msg = self._cuda_ipc_metadata_pub._msg_ctor()
+                set_string_data(meta_msg, metadata.to_json())
+                self._cuda_ipc_metadata_pub.publish(meta_msg)
+                with self._cuda_ipc_lock:
+                    self._cuda_ipc_keepalive[metadata.token] = cuda_array
+                    if len(self._cuda_ipc_keepalive) > 32:
+                        oldest = next(iter(self._cuda_ipc_keepalive))
+                        self._cuda_ipc_keepalive.pop(oldest, None)
+            except Exception:
+                metadata = None
+
+        if publish_ros_payload or metadata is None:
+            self.publish(msg)
+        return metadata is not None
 
     @property
     def _automatic_loaned_publish_enabled(self) -> bool:

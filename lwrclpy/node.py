@@ -272,6 +272,8 @@ class Node:
         self._clock = Clock()
         self._default_callback_group = None
         self._callback_groups: List[Any] = []
+        self._cuda_ipc_metadata_publishers: dict[str, Publisher] = {}
+        self._cuda_ipc_metadata_subscriptions: List[Subscription] = []
 
         if parameters:
             self.declare_parameters("", [(p.name, p.value) if isinstance(p, Parameter) else p for p in parameters])
@@ -408,6 +410,7 @@ class Node:
         topic_obj, owned = self._create_topic(resolved_topic, type_name)
         self._topics[resolved_topic] = (topic_obj, owned)
         pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls, msg_module=_mod, pubsub_cls=_pubsub_cls)
+        self._configure_cuda_ipc_publisher(pub, resolved_topic, qos)
         self._publishers.append(pub)
         return pub
 
@@ -463,6 +466,7 @@ class Node:
             pubsub_cls=_pubsub_cls,
             msg_module=_mod,
         )
+        self._configure_cuda_ipc_subscription(sub, resolved_topic, qos)
         self._subscriptions.append(sub)
         return sub
 
@@ -602,6 +606,111 @@ class Node:
         # double-free issues. Fast DDS will clean them up when the participant
         # is destroyed.
         self._topics.clear()
+
+    def _resolve_std_msgs_string(self):
+        try:
+            from std_msgs.msg import String
+        except Exception:
+            return None
+        try:
+            mod, msg_cls, pubsub_cls = resolve_generated_type(String)
+        except Exception:
+            return None
+        return mod, msg_cls, pubsub_cls
+
+    def _ensure_registered_type(self, msg_cls) -> str | None:
+        key = self._cache_key(msg_cls)
+        type_name = self._type_cache.get(key)
+        if type_name:
+            return type_name
+        try:
+            ts = RegisteredType(msg_cls)
+            type_name = ts.register()
+        except Exception:
+            return None
+        self._type_cache[key] = type_name
+        return type_name
+
+    def _create_cuda_ipc_metadata_publisher(self, source_topic: str, qos: QoSProfile) -> Publisher | None:
+        try:
+            from .cuda_ipc import cuda_metadata_topic
+            metadata_topic = cuda_metadata_topic(source_topic)
+        except Exception:
+            return None
+        cached = self._cuda_ipc_metadata_publishers.get(metadata_topic)
+        if cached is not None:
+            return cached
+        resolved = self._resolve_std_msgs_string()
+        if resolved is None:
+            return None
+        mod, msg_cls, pubsub_cls = resolved
+        type_name = self._ensure_registered_type(msg_cls)
+        if not type_name:
+            return None
+        topic_obj, owned = self._create_topic(metadata_topic, type_name)
+        self._topics[metadata_topic] = (topic_obj, owned)
+        try:
+            pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls, msg_module=mod, pubsub_cls=pubsub_cls)
+        except Exception:
+            return None
+        self._cuda_ipc_metadata_publishers[metadata_topic] = pub
+        self._publishers.append(pub)
+        return pub
+
+    def _create_cuda_ipc_metadata_subscription(self, source_topic: str, qos: QoSProfile, callback) -> Subscription | None:
+        try:
+            from .cuda_ipc import cuda_metadata_topic, get_string_data
+            metadata_topic = cuda_metadata_topic(source_topic)
+        except Exception:
+            return None
+        resolved = self._resolve_std_msgs_string()
+        if resolved is None:
+            return None
+        mod, msg_cls, pubsub_cls = resolved
+        type_name = self._ensure_registered_type(msg_cls)
+        if not type_name:
+            return None
+        topic_obj, owned = self._create_topic(metadata_topic, type_name)
+        self._topics[metadata_topic] = (topic_obj, owned)
+
+        def on_metadata(msg):
+            callback(get_string_data(msg))
+
+        try:
+            sub = Subscription(
+                self._participant,
+                topic_obj,
+                qos,
+                on_metadata,
+                msg_cls,
+                self._enqueue_callback,
+                raw=False,
+                pubsub_cls=pubsub_cls,
+                msg_module=mod,
+            )
+        except Exception:
+            return None
+        self._cuda_ipc_metadata_subscriptions.append(sub)
+        self._subscriptions.append(sub)
+        return sub
+
+    def _configure_cuda_ipc_publisher(self, pub: Publisher, resolved_topic: str, qos: QoSProfile) -> None:
+        try:
+            from .cuda_ipc import cuda_metadata_topic
+            metadata_pub = self._create_cuda_ipc_metadata_publisher(resolved_topic, qos)
+            if metadata_pub is not None:
+                pub._set_cuda_ipc_metadata_publisher(metadata_pub, cuda_metadata_topic(resolved_topic))
+        except Exception:
+            pass
+
+    def _configure_cuda_ipc_subscription(self, sub: Subscription, resolved_topic: str, qos: QoSProfile) -> None:
+        try:
+            from .cuda_ipc import cuda_metadata_topic
+            metadata_topic = cuda_metadata_topic(resolved_topic)
+            sub._set_cuda_ipc_topic(metadata_topic)
+            self._create_cuda_ipc_metadata_subscription(resolved_topic, qos, sub._update_cuda_ipc_metadata)
+        except Exception:
+            pass
 
     # ------------- internal helpers -----------------
     def _create_topic(self, name: str, type_name: str):

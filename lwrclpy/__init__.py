@@ -50,6 +50,8 @@ from .future import Future
 from .clock import Clock, ClockType, Time
 from .duration import Duration
 from .subscription import MessageInfo
+from .buffers import RosidlBuffer, sequence_buffer, data_buffer
+from .cuda_ipc import CudaIpcBuffer, CudaIpcMetadata, get_cuda_buffer
 
 if os.environ.get("LWRCLPY_EAGER_SERVICE_ALIASES") == "1":
     try:
@@ -70,4 +72,6 @@ __all__ = [
     "timer", "ActionServer", "ActionClient", "GoalResponse", "CancelResponse",
     "Future", "Clock", "ClockType", "Time", "Duration", "MessageInfo",
     "get_participant", "get_domain_id", "try_shutdown", "Context",
+    "RosidlBuffer", "sequence_buffer", "data_buffer",
+    "CudaIpcBuffer", "CudaIpcMetadata", "get_cuda_buffer",
 ]
