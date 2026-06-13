@@ -304,6 +304,11 @@ def _skip_reason(script: Path) -> Optional[str]:
     rel = script.relative_to(PROJECT_ROOT)
     if rel.name.endswith("_benchmark.py") and os.environ.get("LWRCLPY_TEST_BENCHMARKS") != "1":
         return "benchmark examples disabled (set LWRCLPY_TEST_BENCHMARKS=1 to run)"
+    if rel.parts[:2] == ("examples", "cuda_ipc"):
+        if os.environ.get("LWRCLPY_TEST_CUDA_IPC") != "1":
+            return "CUDA IPC examples disabled (set LWRCLPY_TEST_CUDA_IPC=1 on CUDA hosts)"
+        if not (_module_available("cupy") or _module_available("cuda")):
+            return "CUDA IPC examples require CuPy or cuda-python"
     if rel.parts[:2] == ("examples", "video"):
         if os.environ.get("LWRCLPY_TEST_VIDEO") != "1":
             return "video examples disabled (set LWRCLPY_TEST_VIDEO=1 and provide assets)"
