@@ -556,6 +556,9 @@ class Node:
 
         return enqueue, bind
 
+    def _enqueue_callback_for_callback_owner(self, owner_callback, cb, msg):
+        self._enqueue_callback(cb, msg, getattr(owner_callback, "__self__", None))
+
     # ------------------- Publisher / Subscription 等 -------------------
     def create_publisher(
         self,
@@ -931,6 +934,9 @@ class Node:
         def on_metadata(msg):
             callback(get_string_data(msg))
 
+        def enqueue_metadata_callback(cb, msg):
+            self._enqueue_callback_for_callback_owner(callback, cb, msg)
+
         try:
             sub = Subscription(
                 self._participant,
@@ -938,7 +944,7 @@ class Node:
                 qos,
                 on_metadata,
                 msg_cls,
-                self._enqueue_callback,
+                enqueue_metadata_callback,
                 raw=False,
                 pubsub_cls=pubsub_cls,
                 msg_module=mod,
@@ -994,6 +1000,9 @@ class Node:
         def on_metadata(msg):
             callback(get_string_data(msg))
 
+        def enqueue_metadata_callback(cb, msg):
+            self._enqueue_callback_for_callback_owner(callback, cb, msg)
+
         try:
             sub = Subscription(
                 self._participant,
@@ -1001,7 +1010,7 @@ class Node:
                 qos,
                 on_metadata,
                 msg_cls,
-                self._enqueue_callback,
+                enqueue_metadata_callback,
                 raw=False,
                 pubsub_cls=pubsub_cls,
                 msg_module=mod,

@@ -107,6 +107,7 @@ def _module_available(module_name: str) -> bool:
 def _env_with_project() -> dict:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env.setdefault("LWRCLPY_AUTO_SHM_THRESHOLD", "1024")
     if env.get("LWRCLPY_TEST_USE_INSTALLED") == "1":
         return env
     pythonpath = env.get("PYTHONPATH", "")
@@ -373,6 +374,14 @@ def run_all_examples(platform_name: str) -> bool:
             publisher="examples/pubsub/zero_copy/zero_copy_publisher.py",
             subscriber="examples/pubsub/zero_copy/callback_subscriber.py",
             subscriber_expect=("Callback Subscription Demo", "Message"),
+        ),
+        PairSpec(
+            name="Shared memory image",
+            publisher="examples/shared_memory/image_shared_memory_publisher.py",
+            subscriber="examples/shared_memory/image_shared_memory_subscriber.py",
+            subscriber_expect=("[recv]", "shared_memory=True"),
+            publisher_args=("--width", "64", "--height", "48", "--rate", "20"),
+            subscriber_args=("--read-byte",),
         ),
         PairSpec(
             name="Typed messages (geometry)",

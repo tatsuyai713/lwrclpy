@@ -930,17 +930,17 @@ class Subscription:
             if self._destroyed or self._reader is None:
                 return 0
             reader = self._reader
-        status_method = getattr(reader, "get_subscription_matched_status", None)
-        if status_method is not None:
-            count = _matched_status_count(status_method, getattr(fastdds, "SubscriptionMatchedStatus", None))
-            if count is not None:
-                return count
-        handles_method = getattr(reader, "get_matched_publications", None)
-        if handles_method is not None:
-            count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
-            if count is not None:
-                return count
-        return 0
+            status_method = getattr(reader, "get_subscription_matched_status", None)
+            if status_method is not None:
+                count = _matched_status_count(status_method, getattr(fastdds, "SubscriptionMatchedStatus", None))
+                if count is not None:
+                    return count
+            handles_method = getattr(reader, "get_matched_publications", None)
+            if handles_method is not None:
+                count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
+                if count is not None:
+                    return count
+            return 0
 
     @property
     def _automatic_loaned_receive_enabled(self) -> bool:
