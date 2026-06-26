@@ -534,6 +534,28 @@ class Node:
         if callable(ending_execution):
             ending_execution(entity)
 
+    def _make_deferred_entity_enqueue(self):
+        state = {"entity": None, "pending": []}
+        lock = threading.Lock()
+
+        def enqueue(cb, msg):
+            with lock:
+                entity = state["entity"]
+                if entity is None:
+                    state["pending"].append((cb, msg))
+                    return
+            self._enqueue_callback(cb, msg, entity)
+
+        def bind(entity):
+            with lock:
+                state["entity"] = entity
+                pending = state["pending"]
+                state["pending"] = []
+            for cb, msg in pending:
+                self._enqueue_callback(cb, msg, entity)
+
+        return enqueue, bind
+
     # ------------------- Publisher / Subscription 等 -------------------
     def create_publisher(
         self,
@@ -614,10 +636,7 @@ class Node:
         self._topics[resolved_topic] = (topic_obj, owned)
         # メッセージ生成
         msg_ctor = msg_cls
-        entity_ref = {}
-
-        def enqueue_subscription_callback(cb, msg):
-            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+        enqueue_subscription_callback, bind_subscription_callback = self._make_deferred_entity_enqueue()
 
         sub = Subscription(
             self._participant,
@@ -634,41 +653,35 @@ class Node:
             batch_callback=batch_callback,
             batch_size=batch_size,
         )
-        entity_ref["entity"] = sub
         self._register_entity_callback_group(sub, group)
         self._configure_cuda_ipc_subscription(sub, resolved_topic, qos)
         self._configure_shared_memory_subscription(sub, resolved_topic, qos)
         self._subscriptions.append(sub)
+        bind_subscription_callback(sub)
         return sub
 
     def create_client(self, srv_type, srv_name: str, qos_profile: QoSProfile | int = 10, *, callback_group=None):
         group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        entity_ref = {}
-
-        def enqueue_client_callback(cb, msg):
-            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+        enqueue_client_callback, bind_client_callback = self._make_deferred_entity_enqueue()
 
         client = Client(srv_type, resolved, qos, topic_prefix=self._service_prefix, enqueue_cb=enqueue_client_callback)
-        entity_ref["entity"] = client
         self._clients.append(client)
         self._register_entity_callback_group(client, group)
+        bind_client_callback(client)
         return client
 
     def create_service(self, srv_type, srv_name: str, callback, qos_profile: QoSProfile | int = 10, *, callback_group=None):
         group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        entity_ref = {}
-
-        def enqueue_service_callback(cb, msg):
-            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+        enqueue_service_callback, bind_service_callback = self._make_deferred_entity_enqueue()
 
         service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix, enqueue_cb=enqueue_service_callback)
-        entity_ref["entity"] = service
         self._services.append(service)
         self._register_entity_callback_group(service, group)
+        bind_service_callback(service)
         return service
 
     def create_action_server(self, action_type, action_name: str, execute_callback, **kwargs):
@@ -686,16 +699,13 @@ class Node:
     def create_timer(self, period_sec: float, callback, *, callback_group=None, oneshot: bool = False):
         from .timer import create_timer
         group = self._resolve_callback_group(callback_group)
-        entity_ref = {}
-
-        def enqueue_timer_callback(cb, msg):
-            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+        enqueue_timer_callback, bind_timer_callback = self._make_deferred_entity_enqueue()
 
         # Enqueue timer callbacks into the node's callback queue
         t = create_timer(period_sec, callback, oneshot=oneshot, enqueue_cb=enqueue_timer_callback)
-        entity_ref["entity"] = t
         self._timers.append(t)
         self._register_entity_callback_group(t, group)
+        bind_timer_callback(t)
         return t
 
     def create_wall_timer(self, period_sec: float, callback):
@@ -703,15 +713,12 @@ class Node:
 
     def create_guard_condition(self, callback, *, callback_group=None):
         group = self._resolve_callback_group(callback_group)
-        entity_ref = {}
-
-        def enqueue_guard_callback(cb, msg):
-            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+        enqueue_guard_callback, bind_guard_callback = self._make_deferred_entity_enqueue()
 
         gc = GuardCondition(callback, enqueue_guard_callback)
-        entity_ref["entity"] = gc
         self._guard_conditions.append(gc)
         self._register_entity_callback_group(gc, group)
+        bind_guard_callback(gc)
         return gc
 
     def destroy_publisher(self, pub):
