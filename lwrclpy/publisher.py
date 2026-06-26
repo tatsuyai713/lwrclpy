@@ -309,6 +309,8 @@ class Publisher:
         try:
             self._publish_loaned(loaned)
         finally:
+            if not loaned._published:
+                loaned.release()
             self._end_writer_use()
 
     def publish(self, msg) -> None:
@@ -621,10 +623,12 @@ class Publisher:
     @property
     def _can_loan_messages(self) -> bool:
         """Return whether this publisher can use the true loaned write path."""
+        with self._state_lock:
+            writer = self._writer
         return (
-            self._writer is not None
-            and hasattr(self._writer, "lwrclpy_loan_sample_addr")
-            and hasattr(self._writer, "lwrclpy_write_addr")
+            writer is not None
+            and hasattr(writer, "lwrclpy_loan_sample_addr")
+            and hasattr(writer, "lwrclpy_write_addr")
             and self._loan_from_addr is not None
         )
 
@@ -784,7 +788,7 @@ class Publisher:
     def destroy(self) -> None:
         """Destroy the Fast DDS DataWriter and Publisher owned by this object."""
         with self._state_lock:
-            if self._destroyed:
+            if self._destroyed and self._writer is None and self._publisher is None:
                 return
             self._destroyed = True
             deadline = time.monotonic() + max(0.0, self._destroy_loan_timeout)

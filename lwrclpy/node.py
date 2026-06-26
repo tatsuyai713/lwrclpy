@@ -271,6 +271,7 @@ class Node:
         self._action_clients: List[Any] = []
         self._timers: List[Any] = []
         self._guard_conditions: List[GuardCondition] = []
+        self._destroyed = False
         self._callback_queue: deque = deque()
         self._callback_lock = threading.Lock()
         self._callback_queue_maxsize = _env_int("LWRCLPY_NODE_CALLBACK_QUEUE_MAXSIZE", 0)
@@ -298,6 +299,10 @@ class Node:
     def _cache_key(self, msg_cls):
         return f"{msg_cls.__module__}.{msg_cls.__name__}"
 
+    def _raise_if_destroyed(self) -> None:
+        if self._destroyed:
+            raise RuntimeError("Node has been destroyed")
+
     def _resolve_topic_name(self, name: str) -> str:
         """Apply ROS 2 name resolution and DDS topic prefix (rt/)."""
         resolved = resolve_name(name, self._namespace, self._name).lstrip("/")
@@ -308,6 +313,7 @@ class Node:
     # ------------------- rclpy 風の Rate / sleep -------------------
     def create_rate(self, hz: float) -> _WallRate:
         """rclpy.create_rate に相当（Node メソッド版）。壁時計ベース。"""
+        self._raise_if_destroyed()
         return _WallRate(hz)
 
     # 好みで使えるエイリアス（rclpy.rate(...) 風）
@@ -570,6 +576,7 @@ class Node:
         event_callbacks=None,
         qos_overriding_options=None,
     ):
+        self._raise_if_destroyed()
         if event_callbacks is not None:
             raise NotImplementedError("create_publisher() does not support event_callbacks")
         if qos_overriding_options is not None:
@@ -610,6 +617,7 @@ class Node:
         batch_callback: bool = False,
         batch_size: Optional[int] = None,
     ):
+        self._raise_if_destroyed()
         if raw:
             raise NotImplementedError(
                 "create_subscription(raw=True) is not supported: rclpy raw "
@@ -664,6 +672,7 @@ class Node:
         return sub
 
     def create_client(self, srv_type, srv_name: str, qos_profile: QoSProfile | int = 10, *, callback_group=None):
+        self._raise_if_destroyed()
         group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
@@ -676,6 +685,7 @@ class Node:
         return client
 
     def create_service(self, srv_type, srv_name: str, callback, qos_profile: QoSProfile | int = 10, *, callback_group=None):
+        self._raise_if_destroyed()
         group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
@@ -688,18 +698,21 @@ class Node:
         return service
 
     def create_action_server(self, action_type, action_name: str, execute_callback, **kwargs):
+        self._raise_if_destroyed()
         from .action import ActionServer
         server = ActionServer(self, action_type, action_name, execute_callback, **kwargs)
         self._action_servers.append(server)
         return server
 
     def create_action_client(self, action_type, action_name: str, **kwargs):
+        self._raise_if_destroyed()
         from .action import ActionClient
         client = ActionClient(self, action_type, action_name, **kwargs)
         self._action_clients.append(client)
         return client
 
     def create_timer(self, period_sec: float, callback, *, callback_group=None, oneshot: bool = False):
+        self._raise_if_destroyed()
         from .timer import create_timer
         group = self._resolve_callback_group(callback_group)
         enqueue_timer_callback, bind_timer_callback = self._make_deferred_entity_enqueue()
@@ -715,6 +728,7 @@ class Node:
         return self.create_timer(period_sec, callback)
 
     def create_guard_condition(self, callback, *, callback_group=None):
+        self._raise_if_destroyed()
         group = self._resolve_callback_group(callback_group)
         enqueue_guard_callback, bind_guard_callback = self._make_deferred_entity_enqueue()
 
@@ -789,6 +803,10 @@ class Node:
         return self._name
 
     def destroy_node(self):
+        with self._callback_lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
         # Cancel timers first
         for t in self._timers:
             try:
@@ -1069,6 +1087,8 @@ class Node:
     def _enqueue_callback(self, cb, msg, entity=None):
         dropped_new = False
         with self._callback_lock:
+            if self._destroyed:
+                return
             if self._callback_queue_maxsize and len(self._callback_queue) >= self._callback_queue_maxsize:
                 if self._callback_queue_drop_policy == "drop_newest":
                     self._callback_drop_count += 1

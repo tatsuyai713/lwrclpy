@@ -8,6 +8,7 @@ from typing import Optional, List, Tuple, Any, Iterator
 import inspect
 import fastdds  # type: ignore
 import os
+import logging
 import threading
 import time
 from ._async import run_coroutine
@@ -20,6 +21,9 @@ from .utils import (
     _pubsub_type_supports_data_sharing,
     _retcode_is_ok,
 )
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -257,12 +261,13 @@ class _LoanedSamples:
     manager when possible so Fast DDS reader resources are returned promptly.
     """
 
-    __slots__ = ("_native", "_expose_fn", "_returned")
+    __slots__ = ("_native", "_expose_fn", "_returned", "_release_cb")
 
-    def __init__(self, native, *, raw_mode: bool = False, expose_fields: bool = True):
+    def __init__(self, native, *, raw_mode: bool = False, expose_fields: bool = True, release_cb=None):
         self._native = native
         self._expose_fn = expose_callable_fields if (expose_fields and not raw_mode) else None
         self._returned = False
+        self._release_cb = release_cb
 
     def __len__(self) -> int:
         if self._returned:
@@ -325,11 +330,22 @@ class _LoanedSamples:
     def return_loan(self) -> bool:
         if self._returned:
             return True
+        returned = False
         try:
-            ok = bool(self._native.return_loan())
+            rc = self._native.return_loan()
+            ok = True if rc is None else bool(rc)
+            returned = ok
         except Exception:
             ok = False
-        self._returned = True
+        if returned:
+            self._returned = True
+            release_cb = self._release_cb
+            if release_cb is not None:
+                self._release_cb = None
+                try:
+                    release_cb()
+                except Exception:
+                    pass
         return ok
 
     def __enter__(self) -> "_LoanedSamples":
@@ -358,6 +374,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         reader_lock=None,
         loaned_samples_cls=None,
         auto_loan_receive: bool = False,
+        loan_activate_fn=None,
         cuda_attach_fn=None,
         expose_fields: bool = True,
         batch_callback: bool = False,
@@ -371,6 +388,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._reader_lock = reader_lock
         self._loaned_samples_cls = loaned_samples_cls
         self._auto_loan_receive = bool(auto_loan_receive and loaned_samples_cls is not None)
+        self._loan_activate_fn = loan_activate_fn
         self._auto_loan_receive_count = 0
         self._pending_lock = threading.Lock()
         self._callback_pending = False
@@ -388,11 +406,15 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._batch_size = max(1, int(batch_size or _MAX_CALLBACKS_PER_DRAIN))
 
     def close(self) -> None:
-        self._closed = True
-        self._has_callback = False
         with self._pending_lock:
+            self._closed = True
+            self._has_callback = False
             self._callback_pending = False
             self._reschedule_requested = False
+
+    def _is_closed(self) -> bool:
+        with self._pending_lock:
+            return self._closed
 
     def set_cuda_attach_fn(self, fn) -> None:
         self._cuda_attach_fn = fn
@@ -479,13 +501,20 @@ class _ReaderListener(fastdds.DataReaderListener):
         try:
             with self._reader_lock if self._reader_lock is not None else _NullContext():
                 ok = loaned._native.take(reader, 1)
-            if not ok or len(loaned) <= 0:
-                loaned.return_loan()
-                return None
-            sample = loaned[0]
-            if sample is None:
-                loaned.return_loan()
-                return _SKIP_SAMPLE
+                if not ok or len(loaned) <= 0:
+                    loaned.return_loan()
+                    return None
+                sample = loaned[0]
+                if sample is None:
+                    loaned.return_loan()
+                    return _SKIP_SAMPLE
+                activate = self._loan_activate_fn
+                if activate is not None:
+                    try:
+                        loaned = activate(loaned)
+                    except Exception:
+                        loaned.return_loan()
+                        return None
             self._attach_cuda_ipc(sample)
             msg_info = loaned.info(0) if self._with_message_info else None
             callback_owned_loan = None if _attach_loan_to_sample(sample, loaned) else loaned
@@ -503,20 +532,30 @@ class _ReaderListener(fastdds.DataReaderListener):
         try:
             with self._reader_lock if self._reader_lock is not None else _NullContext():
                 ok = loaned._native.take(reader, max_count)
-            if not ok or len(loaned) <= 0:
-                loaned.return_loan()
-                return []
-            results = []
-            for index in range(len(loaned)):
-                sample = loaned[index]
-                if sample is None:
-                    continue
+                if not ok or len(loaned) <= 0:
+                    loaned.return_loan()
+                    return []
+                results = []
+                for index in range(len(loaned)):
+                    sample = loaned[index]
+                    if sample is None:
+                        continue
+                    msg_info = loaned.info(index) if self._with_message_info else None
+                    self._auto_loan_receive_count += 1
+                    results.append((sample, msg_info, loaned))
+                if not results:
+                    loaned.return_loan()
+                else:
+                    activate = self._loan_activate_fn
+                    if activate is not None:
+                        try:
+                            loaned = activate(loaned)
+                        except Exception:
+                            loaned.return_loan()
+                            return []
+                        results = [(sample, msg_info, loaned) for sample, msg_info, _old in results]
+            for sample, _msg_info, _loaned in results:
                 self._attach_cuda_ipc(sample)
-                msg_info = loaned.info(index) if self._with_message_info else None
-                self._auto_loan_receive_count += 1
-                results.append((sample, msg_info, loaned))
-            if not results:
-                loaned.return_loan()
             return results
         except Exception:
             loaned.return_loan()
@@ -533,35 +572,49 @@ class _ReaderListener(fastdds.DataReaderListener):
     def _enqueue_user_callback(self, data, msg_info, loaned: Optional[_LoanedSamples] = None):
         if loaned is not None:
             if self._with_message_info:
-                def callback_with_loan(_msg=None, user_cb=self._user_cb, sample=data, info=msg_info, samples=loaned):
+                def callback_with_loan(_msg=None, listener=self, user_cb=self._user_cb, sample=data, info=msg_info, samples=loaned):
                     try:
-                        result = user_cb(sample, info)
-                        if inspect.iscoroutine(result):
-                            run_coroutine(result)
+                        if not listener._is_closed():
+                            result = user_cb(sample, info)
+                            if inspect.iscoroutine(result):
+                                run_coroutine(result)
                     finally:
                         samples.return_loan()
             else:
-                def callback_with_loan(_msg=None, user_cb=self._user_cb, sample=data, samples=loaned):
+                def callback_with_loan(_msg=None, listener=self, user_cb=self._user_cb, sample=data, samples=loaned):
                     try:
-                        result = user_cb(sample)
-                        if inspect.iscoroutine(result):
-                            run_coroutine(result)
+                        if not listener._is_closed():
+                            result = user_cb(sample)
+                            if inspect.iscoroutine(result):
+                                run_coroutine(result)
                     finally:
                         samples.return_loan()
 
-            self._enqueue_cb(callback_with_loan, None)
-            self._enqueued_callback_count += 1
+            try:
+                self._enqueue_cb(callback_with_loan, None)
+                self._enqueued_callback_count += 1
+            except Exception:
+                loaned.return_loan()
             return
 
         if self._with_message_info:
-            def callback_with_info(_msg=None, user_cb=self._user_cb, sample=data, info=msg_info):
+            def callback_with_info(_msg=None, listener=self, user_cb=self._user_cb, sample=data, info=msg_info):
+                if listener._is_closed():
+                    return
                 result = user_cb(sample, info)
                 if inspect.iscoroutine(result):
                     run_coroutine(result)
 
-            self._enqueue_cb(callback_with_info, None)
+            callback = callback_with_info
         else:
-            self._enqueue_cb(self._user_cb, data)
+            def callback(_msg=None, listener=self, user_cb=self._user_cb, sample=data):
+                if listener._is_closed():
+                    return
+                result = user_cb(sample)
+                if inspect.iscoroutine(result):
+                    run_coroutine(result)
+
+        self._enqueue_cb(callback, None)
         self._enqueued_callback_count += 1
 
     def _enqueue_user_batch_callback(self, items):
@@ -578,11 +631,12 @@ class _ReaderListener(fastdds.DataReaderListener):
                 if len(item) == 3 and item[2] is not None and item[2] not in loans:
                     loans.append(item[2])
 
-            def callback_batch(_msg=None, user_cb=self._user_cb, payload=messages, info_payload=infos, loaned=tuple(loans)):
+            def callback_batch(_msg=None, listener=self, user_cb=self._user_cb, payload=messages, info_payload=infos, loaned=tuple(loans)):
                 try:
-                    result = user_cb(payload, info_payload)
-                    if inspect.iscoroutine(result):
-                        run_coroutine(result)
+                    if not listener._is_closed():
+                        result = user_cb(payload, info_payload)
+                        if inspect.iscoroutine(result):
+                            run_coroutine(result)
                 finally:
                     for samples in loaned:
                         samples.return_loan()
@@ -593,20 +647,25 @@ class _ReaderListener(fastdds.DataReaderListener):
                 if len(item) == 3 and item[2] is not None and item[2] not in loans:
                     loans.append(item[2])
 
-            def callback_batch(_msg=None, user_cb=self._user_cb, payload=batch, loaned=tuple(loans)):
+            def callback_batch(_msg=None, listener=self, user_cb=self._user_cb, payload=batch, loaned=tuple(loans)):
                 try:
-                    result = user_cb(payload)
-                    if inspect.iscoroutine(result):
-                        run_coroutine(result)
+                    if not listener._is_closed():
+                        result = user_cb(payload)
+                        if inspect.iscoroutine(result):
+                            run_coroutine(result)
                 finally:
                     for samples in loaned:
                         samples.return_loan()
 
-        self._enqueue_cb(callback_batch, None)
-        self._enqueued_callback_count += 1
+        try:
+            self._enqueue_cb(callback_batch, None)
+            self._enqueued_callback_count += 1
+        except Exception:
+            for samples in loans:
+                samples.return_loan()
 
     def _drain_reader_callbacks(self, reader):
-        if self._closed:
+        if self._is_closed():
             return
         hit_drain_limit = False
         try:
@@ -646,7 +705,10 @@ class _ReaderListener(fastdds.DataReaderListener):
         finally:
             schedule_again = False
             with self._pending_lock:
-                if hit_drain_limit or self._reschedule_requested:
+                if self._closed:
+                    self._reschedule_requested = False
+                    self._callback_pending = False
+                elif hit_drain_limit or self._reschedule_requested:
                     self._reschedule_requested = False
                     schedule_again = True
                 else:
@@ -658,12 +720,19 @@ class _ReaderListener(fastdds.DataReaderListener):
         def drain_task(_msg=None, listener=self, reader=reader):
             listener._drain_reader_callbacks(reader)
 
-        self._enqueue_cb(drain_task, None)
+        if self._is_closed():
+            return
+        try:
+            self._enqueue_cb(drain_task, None)
+        except Exception:
+            with self._pending_lock:
+                self._callback_pending = False
+                self._reschedule_requested = False
     
     def on_data_available(self, reader):
-        if self._closed or not self._has_callback:
-            return
         with self._pending_lock:
+            if self._closed or not self._has_callback:
+                return
             if self._callback_pending:
                 self._reschedule_requested = True
                 self._dropped_reschedules += 1
@@ -716,6 +785,10 @@ class Subscription:
         self._take_count = 0
         self._stats_started_at = time.monotonic()
         self._reader_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._no_active_loans = threading.Condition(self._state_lock)
+        self._active_loans = 0
+        self._destroy_loan_timeout = float(os.environ.get("LWRCLPY_DESTROY_LOAN_TIMEOUT", "1.0"))
 
         # Create Subscriber
         sub_qos = fastdds.SubscriberQos()
@@ -745,6 +818,7 @@ class Subscription:
             reader_lock=self._reader_lock,
             loaned_samples_cls=self._loaned_samples_cls_value,
             auto_loan_receive=False,
+            loan_activate_fn=self._activate_loaned_samples,
             expose_fields=expose_fields,
             batch_callback=batch_callback,
             batch_size=batch_size,
@@ -787,6 +861,24 @@ class Subscription:
             if field.strip()
         )
         self._max_callbacks_per_drain = _MAX_CALLBACKS_PER_DRAIN
+
+    def _register_loan(self) -> None:
+        with self._state_lock:
+            if self._destroyed:
+                raise RuntimeError("Cannot loan messages from a destroyed Subscription")
+            self._active_loans += 1
+
+    def _release_loan(self) -> None:
+        with self._state_lock:
+            if self._active_loans > 0:
+                self._active_loans -= 1
+            if self._active_loans == 0:
+                self._no_active_loans.notify_all()
+
+    def _activate_loaned_samples(self, loaned: _LoanedSamples) -> _LoanedSamples:
+        self._register_loan()
+        loaned._release_cb = self._release_loan
+        return loaned
 
     def _set_cuda_ipc_topic(self, topic_name: str) -> None:
         self._cuda_ipc_topic_name = topic_name
@@ -913,13 +1005,18 @@ class Subscription:
                     pass
                 return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
             ok = native.read(self._reader, max_count) if read else native.take(self._reader, max_count)
-        if not ok:
+            if not ok:
+                try:
+                    native.return_loan()
+                except Exception:
+                    pass
+                return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
+            loaned = _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
             try:
-                native.return_loan()
+                return self._activate_loaned_samples(loaned)
             except Exception:
-                pass
-            return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
-        return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
+                loaned.return_loan()
+                raise
 
     def _loaned_read(self, max_count: int = 1) -> _LoanedSamples:
         return self._loaned_take(max_count, read=True)
@@ -983,9 +1080,10 @@ class Subscription:
 
     def destroy(self) -> None:
         """Destroy the Fast DDS DataReader and Subscriber owned by this object."""
-        if self._destroyed:
-            return
-        self._destroyed = True
+        with self._state_lock:
+            if self._destroyed and self._reader is None and self._subscriber is None:
+                return
+            self._destroyed = True
 
         registration = getattr(self, "_shm_local_registration", None)
         if registration is not None:
@@ -1000,6 +1098,22 @@ class Subscription:
             close = getattr(listener, "close", None)
             if callable(close):
                 close()
+
+        with self._state_lock:
+            deadline = time.monotonic() + max(0.0, self._destroy_loan_timeout)
+            while self._active_loans > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._no_active_loans.wait(timeout=remaining)
+            timed_out = self._active_loans > 0
+            if timed_out:
+                _logger.warning(
+                    "Subscription.destroy timed out waiting for active receive loans "
+                    "(loans=%d); skipping DDS entity deletion",
+                    self._active_loans,
+                )
+                return
 
         with self._reader_lock:
             reader = self._reader

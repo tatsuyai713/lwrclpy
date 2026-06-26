@@ -1,3 +1,4 @@
+import asyncio
 import concurrent.futures
 import functools
 import inspect
@@ -120,6 +121,12 @@ class Executor:
             self._stopped = True
         self._wake_event.set()
         self._shutdown_event.set()
+        with self._task_queue_lock:
+            queued_tasks = list(self._task_queue)
+            self._task_queue.clear()
+        for _cb, _msg, _node, future in queued_tasks:
+            if future is not None and not future.done():
+                future.cancel()
         # Disconnect wake events from nodes
         with self._nodes_lock:
             for node in self._nodes:
@@ -137,7 +144,13 @@ class Executor:
         """Queue a callback for executor execution and return a Future."""
         task = functools.partial(callback, *args, **kwargs)
         future: concurrent.futures.Future = concurrent.futures.Future()
+        if self._is_stopped():
+            future.cancel()
+            return future
         with self._task_queue_lock:
+            if self._is_stopped():
+                future.cancel()
+                return future
             self._task_queue.append((task, None, None, future))
         self._wake_event.set()
         return future
@@ -363,7 +376,7 @@ def _execute_callback(cb, msg, future=None, *, node=None, entity=None, group=Non
     try:
         try:
             result = _invoke_callback(cb, msg)
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             if future is not None and not future.done():
                 future.set_exception(exc)
             else:

@@ -99,7 +99,7 @@ class Future(Generic[T]):
         if run_now:
             try:
                 callback(self)
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 pass
 
     def remove_done_callback(self, callback: Callable[["Future[T]"], None]) -> int:
@@ -119,7 +119,7 @@ class Future(Generic[T]):
         for cb in callbacks:
             try:
                 cb(self)
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 continue
 
     def cancel(self) -> bool:

@@ -11,6 +11,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 from typing import Any, Dict, IO, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 from .action import Action
@@ -93,6 +94,13 @@ class ExecuteProcess(Action):
         self._returncode: Optional[int] = None
         self._completed = False
         self._respawn_count = 0
+        self._popen: Optional[subprocess.Popen] = None
+        self._process_name = "process"
+        self._launch_service = None
+        self._stdout_cache: List[str] = []
+        self._stderr_cache: List[str] = []
+        self._io_threads: List[threading.Thread] = []
+        self._state_lock = threading.Lock()
 
     @property
     def process(self) -> Optional[asyncio.subprocess.Process]:
@@ -116,19 +124,17 @@ class ExecuteProcess(Action):
         """Resolve environment variables."""
         # Start with current environment
         if self._env is not None:
-            env = {}
+            env = dict(context.environment)
             for key, value in self._env.items():
                 env[key] = context.perform_substitution(value)
         else:
             env = dict(os.environ)
+            env.update(context.environment)
 
         # Add additional environment variables
         if self._additional_env is not None:
             for key, value in self._additional_env.items():
                 env[key] = context.perform_substitution(value)
-
-        # Add context environment
-        env.update(context.environment)
 
         return env
 
@@ -196,7 +202,11 @@ class ExecuteProcess(Action):
             
             # Register with launch service for cleanup
             if hasattr(context, '_launch_service') and context._launch_service is not None:
-                context._launch_service.register_process(self)
+                self._launch_service = context._launch_service
+                self._launch_service.register_process(self)
+
+            self._start_io_threads()
+            threading.Thread(target=self._monitor_process, args=(context,), daemon=True).start()
             
             if self._output == 'screen':
                 print(f"[INFO] [{name}] process started with pid [{self._popen.pid}]")
@@ -208,17 +218,88 @@ class ExecuteProcess(Action):
             print(f"[ERROR] [{name}] failed to start: {e}", file=sys.stderr)
             raise
 
+    def _read_stream(self, stream: Optional[IO[str]], sink: List[str], *, is_stderr: bool = False, limit: int = 2000) -> None:
+        if stream is None:
+            return
+        try:
+            for line in iter(stream.readline, ""):
+                sink.append(line)
+                if len(sink) > limit:
+                    sink.pop(0)
+                if self._output == "both":
+                    print(line, end="", file=sys.stderr if is_stderr else sys.stdout)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _start_io_threads(self) -> None:
+        if self._popen is None:
+            return
+        for stream, sink, is_stderr in (
+            (self._popen.stdout, self._stdout_cache, False),
+            (self._popen.stderr, self._stderr_cache, True),
+        ):
+            if stream is None:
+                continue
+            thread = threading.Thread(
+                target=self._read_stream,
+                args=(stream, sink),
+                kwargs={"is_stderr": is_stderr},
+                daemon=True,
+            )
+            thread.start()
+            self._io_threads.append(thread)
+
+    def _monitor_process(self, context: 'LaunchContext') -> None:
+        if self._popen is None:
+            return
+        returncode = self._popen.wait()
+        with self._state_lock:
+            self._returncode = returncode
+            self._completed = True
+        launch_service = self._launch_service
+        if launch_service is not None:
+            try:
+                launch_service.unregister_process(self)
+            except Exception:
+                pass
+        self._run_on_exit(context)
+
+    def _run_on_exit(self, context: 'LaunchContext') -> None:
+        on_exit = self._on_exit
+        if on_exit is None:
+            return
+        try:
+            if callable(on_exit):
+                on_exit(self, context)
+                return
+            actions = on_exit if isinstance(on_exit, (list, tuple)) else [on_exit]
+            for action in actions:
+                execute = getattr(action, "execute", None)
+                if callable(execute):
+                    execute(context)
+        except Exception as exc:
+            print(f"[ERROR] [{self._process_name}] on_exit failed: {exc}", file=sys.stderr)
+
     async def wait(self) -> int:
         """Wait for the process to complete."""
-        if hasattr(self, '_popen') and self._popen is not None:
+        if self._popen is not None:
             self._returncode = self._popen.wait()
             self._completed = True
+            launch_service = self._launch_service
+            if launch_service is not None:
+                try:
+                    launch_service.unregister_process(self)
+                except Exception:
+                    pass
             return self._returncode
         return -1
 
     async def shutdown(self) -> None:
         """Shutdown the process."""
-        if hasattr(self, '_popen') and self._popen is not None:
+        if self._popen is not None:
             if self._popen.poll() is None:  # Still running
                 name = getattr(self, '_process_name', 'process')
                 try:
@@ -244,6 +325,15 @@ class ExecuteProcess(Action):
                             self._popen.kill()
                         except Exception:
                             pass
+            launch_service = self._launch_service
+            if launch_service is not None:
+                try:
+                    launch_service.unregister_process(self)
+                except Exception:
+                    pass
+            for thread in list(self._io_threads):
+                if thread is not threading.current_thread():
+                    thread.join(timeout=0.2)
 
     def describe(self) -> str:
         """Return a description of this action."""

@@ -296,6 +296,7 @@ class ActionServer:
         self._results: dict[bytes, tuple[int, object | None, object | None, float]] = {}
         self._pending_result_requests: dict[bytes, float] = {}
         self._status_entries: dict[bytes, tuple[object, int]] = {}
+        self._destroyed = False
 
         types = resolve_action_type(action_type)
         self._goal_cls = types["goal"]
@@ -397,7 +398,20 @@ class ActionServer:
         topic_obj, _ = get_or_create_topic(self._participant, name, type_name)
         return topic_obj
 
+    def _publish_if_alive(self, publisher, msg) -> bool:
+        with self._lock:
+            if self._destroyed:
+                return False
+        try:
+            publisher.publish(msg)
+            return True
+        except Exception:
+            return False
+
     def _on_send_goal(self, request_msg):
+        with self._lock:
+            if self._destroyed:
+                return
         goal_id = getattr(request_msg, "goal_id", None)
         goal_attr = getattr(request_msg, "goal", None)
         # If goal is callable, call it to get the actual message
@@ -430,6 +444,8 @@ class ActionServer:
         if accepted:
             handle = _ServerGoalHandle(self, _copy_goal_id(goal_id), goal_msg)
             with self._lock:
+                if self._destroyed:
+                    return
                 self._goal_handles[key] = handle
             self._set_status(goal_id, _STATUS_ACCEPTED)
             if self._handle_accepted_callback:
@@ -439,13 +455,15 @@ class ActionServer:
                     pass
             else:
                 handle.execute()
-        self._send_goal_res_pub.publish(response)
+        self._publish_if_alive(self._send_goal_res_pub, response)
 
     def _on_get_result(self, request_msg):
         goal_id = getattr(request_msg, "goal_id", None)
         key = _uuid_bytes(goal_id)
         publish_now = False
         with self._lock:
+            if self._destroyed:
+                return
             self._prune_results_locked(time.monotonic())
             if key in self._results:
                 publish_now = True
@@ -460,6 +478,8 @@ class ActionServer:
         goal_id = getattr(goal_info, "goal_id", goal_info)
         key = _uuid_bytes(goal_id)
         with self._lock:
+            if self._destroyed:
+                return
             handle = self._goal_handles.get(key)
         allowed = False
         if handle and self._cancel_callback:
@@ -476,11 +496,14 @@ class ActionServer:
                 _swig_set(response, "return_code", CancelResponse.ACCEPT.value if allowed else CancelResponse.REJECT.value)
         except Exception:
             pass
-        self._cancel_res_pub.publish(response)
+        self._publish_if_alive(self._cancel_res_pub, response)
 
     def _start_execute(self, goal_handle: _ServerGoalHandle):
         def _run():
             try:
+                with self._lock:
+                    if self._destroyed:
+                        return
                 result = self._execute_callback(goal_handle)
                 # Check if result is a coroutine (handle async execute_callback)
                 # Skip iscoroutine for SWIG objects (they're not hashable)
@@ -508,6 +531,9 @@ class ActionServer:
         threading.Thread(target=_run, daemon=True).start()
 
     def _publish_feedback(self, goal_id, feedback_msg=None):
+        with self._lock:
+            if self._destroyed:
+                return
         msg = self._feedback_msg_cls()
         try:
             if hasattr(msg, "goal_id"):
@@ -516,7 +542,7 @@ class ActionServer:
                 _swig_set(msg, "feedback", feedback_msg)
         except Exception:
             pass
-        self._feedback_pub.publish(msg)
+        self._publish_if_alive(self._feedback_pub, msg)
 
     def _build_result_obj(self, result):
         """Build result object from provided result, copying attributes."""
@@ -542,6 +568,8 @@ class ActionServer:
         result_obj = self._build_result_obj(result)
         goal_id_copy = _copy_goal_id(goal_id)
         with self._lock:
+            if self._destroyed:
+                return
             now = time.monotonic()
             self._prune_results_locked(now)
             self._results[key] = (status_code, result_obj, goal_id_copy, now)
@@ -554,6 +582,8 @@ class ActionServer:
     def _publish_result_for_goal(self, key: bytes):
         entry = None
         with self._lock:
+            if self._destroyed:
+                return
             self._prune_results_locked(time.monotonic())
             entry = self._results.get(key)
             if entry is None:
@@ -571,7 +601,8 @@ class ActionServer:
                 _swig_set(res_msg, "goal_id", _copy_goal_id(goal_id_copy))
         except Exception:
             pass
-        self._get_result_res_pub.publish(res_msg)
+        if not self._publish_if_alive(self._get_result_res_pub, res_msg):
+            return
         if status in (_STATUS_SUCCEEDED, _STATUS_ABORTED, _STATUS_CANCELED):
             self._clear_status_entry(key)
 
@@ -604,6 +635,8 @@ class ActionServer:
         key = _uuid_bytes(goal_id)
         goal_id_copy = _copy_goal_id(goal_id)
         with self._lock:
+            if self._destroyed:
+                return
             existing = self._status_entries.get(key)
             if existing is not None:
                 goal_id_copy = existing[0]
@@ -615,6 +648,8 @@ class ActionServer:
         if self._status_pub is None:
             return
         with self._lock:
+            if self._destroyed:
+                return
             removed = self._status_entries.pop(key, None)
             snapshot = list(self._status_entries.values()) if removed is not None else None
         if removed is not None and snapshot is not None:
@@ -623,6 +658,9 @@ class ActionServer:
     def _publish_status_snapshot(self, entries):
         if self._status_pub is None or self._status_msg_ctor is None or self._goal_status_ctor is None:
             return
+        with self._lock:
+            if self._destroyed:
+                return
         try:
             msg = self._status_msg_ctor()
         except Exception:
@@ -651,7 +689,7 @@ class ActionServer:
             _swig_set(msg, "status_list", status_list)
         except Exception:
             pass
-        self._status_pub.publish(msg)
+        self._publish_if_alive(self._status_pub, msg)
 
     def destroy(self):
         try:
@@ -659,6 +697,9 @@ class ActionServer:
         except Exception:
             pass
         with self._lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
             self._goal_handles.clear()
             self._results.clear()
             self._pending_result_requests.clear()

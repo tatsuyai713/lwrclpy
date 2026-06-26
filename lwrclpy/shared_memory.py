@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -80,7 +81,7 @@ def write_latest_metadata(metadata: SharedMemoryMetadata) -> None:
     directory = _metadata_dir(metadata.topic)
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, f"{_sanitize_topic_name(metadata.field)}.json")
-    tmp_path = f"{path}.{os.getpid()}.tmp"
+    tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(metadata.to_json())
     os.replace(tmp_path, path)
@@ -101,7 +102,7 @@ def read_latest_metadata(topic: str, field: str) -> SharedMemoryMetadata | None:
 
 
 class LocalSharedMemoryRegistration:
-    __slots__ = ("path", "_closed")
+    __slots__ = ("path", "_closed", "_lock")
 
     def __init__(self, topic: str):
         directory = _registration_dir(topic)
@@ -110,11 +111,13 @@ class LocalSharedMemoryRegistration:
         with open(self.path, "w", encoding="ascii") as f:
             f.write(local_host_id())
         self._closed = False
+        self._lock = threading.Lock()
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
         try:
             os.unlink(self.path)
         except FileNotFoundError:
@@ -172,11 +175,12 @@ def count_local_shared_memory_subscribers(topic: str) -> int:
 class SharedMemoryBuffer:
     """Subscriber-side shared-memory buffer descriptor."""
 
-    __slots__ = ("metadata", "_shm")
+    __slots__ = ("metadata", "_shm", "_lock")
 
     def __init__(self, metadata: SharedMemoryMetadata):
         self.metadata = metadata
         self._shm: shared_memory.SharedMemory | None = None
+        self._lock = threading.Lock()
 
     @property
     def nbytes(self) -> int:
@@ -189,17 +193,21 @@ class SharedMemoryBuffer:
     def open_memoryview(self) -> memoryview:
         """Open the shared-memory block and return a read/write memoryview."""
 
-        if self._shm is None:
-            self._shm = _shared_memory_open(name=self.metadata.name, create=False, track=False)
-        return self._shm.buf[: self.metadata.nbytes]
+        with self._lock:
+            if self._shm is None:
+                self._shm = _shared_memory_open(name=self.metadata.name, create=False, track=False)
+            return self._shm.buf[: self.metadata.nbytes]
 
     def tobytes(self) -> bytes:
         return bytes(self.open_memoryview())
 
     def close(self) -> None:
-        if self._shm is not None:
+        with self._lock:
+            shm = self._shm
+            if shm is None:
+                return
             try:
-                self._shm.close()
+                shm.close()
             except BufferError:
                 return
             self._shm = None
@@ -214,21 +222,23 @@ class SharedMemoryBuffer:
 class SharedMemoryAllocation:
     """Publisher-side allocation kept alive while subscribers may open it."""
 
-    __slots__ = ("metadata", "_shm", "_closed")
+    __slots__ = ("metadata", "_shm", "_closed", "_lock")
 
     def __init__(self, metadata: SharedMemoryMetadata, shm: shared_memory.SharedMemory):
         self.metadata = metadata
         self._shm = shm
         self._closed = False
+        self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
         return self.metadata.name
 
     def close(self, *, unlink: bool = True) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
         try:
             self._shm.close()
         except Exception:

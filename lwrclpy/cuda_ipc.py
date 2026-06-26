@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, asdict
@@ -87,12 +88,13 @@ class CudaIpcBuffer:
     CUDA binding can consume ``handle`` and metadata directly.
     """
 
-    __slots__ = ("metadata", "_cupy_mem", "_cupy_ptr")
+    __slots__ = ("metadata", "_cupy_mem", "_cupy_ptr", "_lock")
 
     def __init__(self, metadata: CudaIpcMetadata):
         self.metadata = metadata
         self._cupy_mem = None
         self._cupy_ptr = None
+        self._lock = threading.Lock()
 
     @property
     def handle(self) -> bytes:
@@ -126,19 +128,21 @@ class CudaIpcBuffer:
         import cupy as cp
         from cupy.cuda import runtime
 
-        if self._cupy_mem is None:
-            mem_ptr = runtime.ipcOpenMemHandle(self.handle)
-            self._cupy_mem = cp.cuda.UnownedMemory(mem_ptr, self.nbytes, self)
-            self._cupy_ptr = cp.cuda.MemoryPointer(self._cupy_mem, 0)
-        dtype = np.dtype(self.dtype_typestr)
-        arr = cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr)
-        if self.metadata.strides:
-            arr = cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr, strides=tuple(self.metadata.strides))
-        return arr
+        with self._lock:
+            if self._cupy_mem is None:
+                mem_ptr = runtime.ipcOpenMemHandle(self.handle)
+                self._cupy_mem = cp.cuda.UnownedMemory(mem_ptr, self.nbytes, self)
+                self._cupy_ptr = cp.cuda.MemoryPointer(self._cupy_mem, 0)
+            dtype = np.dtype(self.dtype_typestr)
+            arr = cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr)
+            if self.metadata.strides:
+                arr = cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr, strides=tuple(self.metadata.strides))
+            return arr
 
     def close(self) -> None:
-        self._cupy_ptr = None
-        self._cupy_mem = None
+        with self._lock:
+            self._cupy_ptr = None
+            self._cupy_mem = None
 
 
 def attach_cuda_buffer(msg: Any, metadata: CudaIpcMetadata) -> bool:

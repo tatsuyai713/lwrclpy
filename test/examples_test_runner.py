@@ -132,6 +132,7 @@ class ProcessCapture:
         )
         self.stdout_lines: List[str] = []
         self.stderr_lines: List[str] = []
+        self._output_lock = threading.Lock()
         self._stdout_thread = threading.Thread(
             target=self._read_stream, args=(self.proc.stdout, self.stdout_lines), daemon=True
         )
@@ -141,17 +142,24 @@ class ProcessCapture:
         self._stdout_thread.start()
         self._stderr_thread.start()
 
-    @staticmethod
-    def _read_stream(stream, sink: List[str], limit: int = 2000) -> None:
+    def _read_stream(self, stream, sink: List[str], limit: int = 2000) -> None:
         if stream is None:
             return
-        for line in iter(stream.readline, ""):
-            sink.append(line)
-            if len(sink) > limit:
-                sink.pop(0)
+        try:
+            for line in iter(stream.readline, ""):
+                with self._output_lock:
+                    sink.append(line)
+                    if len(sink) > limit:
+                        sink.pop(0)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     def output(self) -> str:
-        return "".join(self.stdout_lines + self.stderr_lines)
+        with self._output_lock:
+            return "".join(self.stdout_lines + self.stderr_lines)
 
     def terminate(self, grace: float = PROCESS_TERMINATE_GRACE) -> None:
         if self.proc.poll() is not None:
@@ -171,6 +179,8 @@ class ProcessCapture:
                 self.proc.wait(timeout=_timeout(PROCESS_KILL_GRACE))
             except subprocess.TimeoutExpired:
                 pass
+        for thread in (self._stdout_thread, self._stderr_thread):
+            thread.join(timeout=0.2)
 
 
 def _contains_error(output: str) -> bool:
