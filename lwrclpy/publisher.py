@@ -485,7 +485,8 @@ class Publisher:
                 device_id=device_id,
                 sequence_number=self._cuda_ipc_sequence + 1,
             )
-        except Exception:
+        except Exception as exc:
+            self._record_zero_copy_fallback(exc)
             metadata = None
 
         if metadata is not None and self._cuda_ipc_metadata_pub is not None:
@@ -500,19 +501,18 @@ class Publisher:
                     if len(self._cuda_ipc_keepalive) > self._cuda_ipc_keepalive_limit:
                         oldest = next(iter(self._cuda_ipc_keepalive))
                         self._cuda_ipc_keepalive.pop(oldest, None)
-            except Exception:
+            except Exception as exc:
+                self._record_zero_copy_fallback(exc)
                 metadata = None
 
         target_ctor = self._msg_ctor if self._msg_ctor is not None else msg.__class__
-        should_publish = metadata is not None or publish_ros_payload
-        if should_publish:
-            self._begin_writer_use()
-            try:
-                if metadata is not None and not publish_ros_payload:
-                    msg = self._make_shared_memory_signal_message(msg, target_ctor, field)
-                self._publish_regular_message(msg, target_ctor)
-            finally:
-                self._end_writer_use()
+        self._begin_writer_use()
+        try:
+            if metadata is not None and not publish_ros_payload:
+                msg = self._make_shared_memory_signal_message(msg, target_ctor, field)
+            self._publish_regular_message(msg, target_ctor)
+        finally:
+            self._end_writer_use()
         return metadata is not None
 
     def publish_shared_memory(

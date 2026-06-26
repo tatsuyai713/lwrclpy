@@ -113,10 +113,9 @@ def main():
     logger.info(f"Oneshot timer fired {oneshot_called['count']} time(s)")
     
     # Give time to confirm it doesn't fire again
-    time.sleep(0.5)
-    while rclpy.ok():
-        if not rclpy.spin_once(node, timeout_sec=0.1):
-            break
+    confirm_start = time.monotonic()
+    while rclpy.ok() and (time.monotonic() - confirm_start) < 0.5:
+        rclpy.spin_once(node, timeout_sec=0.1)
         if oneshot_called['count'] > 1:
             break
     

@@ -79,7 +79,6 @@ class RegisteredType:
                 return self._type_name
             if cached is not None:
                 _registered_type_supports.pop(key, None)
-        participant.register_type(self._type_support)
-        with _registered_type_supports_lock:
+            participant.register_type(self._type_support)
             _registered_type_supports[key] = (participant, self._type_support)
         return self._type_name

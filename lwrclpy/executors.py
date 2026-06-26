@@ -84,12 +84,15 @@ class Executor:
     def spin(self):
         try:
             while ok() and not self._is_stopped():
-                self.spin_once(0.01)
+                self._spin_once_impl(0.01)
         except KeyboardInterrupt:
             pass  # Graceful shutdown on SIGINT
         # Gracefully exit when shutdown() was called; do not raise.
 
     def spin_once(self, timeout_sec: Optional[float] = None):
+        self._spin_once_impl(timeout_sec)
+
+    def _spin_once_impl(self, timeout_sec: Optional[float] = None) -> bool:
         try:
             handler, _group, _node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
         except StopIteration:
@@ -101,6 +104,9 @@ class Executor:
         return True
 
     def spin_some(self, timeout_sec: Optional[float] = None):
+        self._spin_some_impl(timeout_sec)
+
+    def _spin_some_impl(self, timeout_sec: Optional[float] = None) -> bool:
         if not ok() or self._is_stopped():
             return False
         nodes = self.get_nodes()
@@ -273,7 +279,7 @@ def spin_once(node, timeout_sec: Optional[float] = None):
         if node not in exec_obj.get_nodes():
             exec_obj.add_node(node)
             added = True
-        return exec_obj.spin_once(timeout_sec)
+        exec_obj.spin_once(timeout_sec)
     finally:
         if added:
             exec_obj.remove_node(node)
@@ -296,7 +302,7 @@ def spin_some(node, timeout_sec: Optional[float] = None):
                 remaining = max(0.0, deadline - time.monotonic())
                 if remaining <= 0:
                     break
-            ran = exec_obj.spin_once(remaining if deadline is not None else 0.0)
+            ran = exec_obj._spin_once_impl(remaining if deadline is not None else 0.0)
             if not ran:
                 return
     finally:
@@ -317,7 +323,7 @@ def spin_until_future_complete(node, future, timeout_sec: Optional[float] = None
         while ok():
             if future.done():
                 return True
-            exec_obj.spin_once(0.01)
+            exec_obj._spin_once_impl(0.01)
             if timeout_sec is not None and (time.monotonic() - start) >= timeout_sec:
                 return False
     except KeyboardInterrupt:
