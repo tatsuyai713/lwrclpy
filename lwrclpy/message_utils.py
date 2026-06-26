@@ -368,17 +368,6 @@ def _assign(target, name, val, *, strict: bool = False) -> bool:
                     f"setter rejected {type(val).__name__}"
                 ) from last_error
             return False
-        try:
-            exposed_val = setter()
-        except Exception:
-            exposed_val = val
-        # Expose rclpy-style attribute access while keeping callable behavior
-        # only when the generated object allows it.  Do not force a Python
-        # shadow attribute because that can diverge from the SWIG value.
-        try:
-            setattr(target, name, _ValueProxy(exposed_val))
-        except Exception:
-            pass
         return True
     # Fallback: explicit special-case for common fields present in __dict__ only
     if name == "data" and isinstance(val, (bytes, bytearray, memoryview)):

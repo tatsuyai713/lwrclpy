@@ -410,7 +410,10 @@ class Publisher:
     def _make_shared_memory_signal_message(self, msg, target_ctor, field: str):
         signal_msg = target_ctor()
         _copy_message_into(msg, signal_msg, skip_fields={field})
-        _assign(signal_msg, field, memoryview(b""))
+        if not _assign(signal_msg, field, memoryview(b"")):
+            raise AttributeError(
+                f"Failed to clear field {type(signal_msg).__name__}.{field} for side-channel signaling"
+            )
         return signal_msg
 
     def publish_buffer(self, buffer, *, field: str = "data", msg=None) -> None:
