@@ -177,7 +177,11 @@ class _LoanedMessage(Generic[T]):
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not self._published and exc_type is None:
-            self._publisher.publish_loaned(self)
+            try:
+                self._publisher.publish_loaned(self)
+            finally:
+                if not self._published:
+                    self.release()
         elif exc_type is not None:
             self.release()
         return False

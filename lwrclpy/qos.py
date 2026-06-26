@@ -63,7 +63,7 @@ def _coerce_policy(value, enum_cls):
         return value
     try:
         return enum_cls(value)
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         valid = ", ".join(member.name for member in enum_cls)
         raise ValueError(f"Invalid {enum_cls.__name__}: {value!r}; expected one of {valid}") from exc
 
