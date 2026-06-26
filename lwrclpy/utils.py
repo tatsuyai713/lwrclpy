@@ -502,16 +502,21 @@ def get_or_create_topic(participant, name: str, type_name: str):
         existing_topic = None
     if existing_topic is not None:
         # Ensure type matches
+        get_type_name = getattr(existing_topic, "get_type_name", None)
+        if not callable(get_type_name):
+            return existing_topic, False
         try:
-            existing_type = existing_topic.get_type_name()
-        except Exception:
-            existing_type = None
+            existing_type = get_type_name()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Topic '{name}' already exists but its type could not be verified"
+            ) from exc
         if existing_type and existing_type != type_name:
             raise RuntimeError(
                 f"Topic '{name}' already exists with type '{existing_type}' (requested '{type_name}')"
             )
         with _cache_lock:
-            _topic_cache[cache_key] = (participant, existing_topic, existing_type or type_name)
+            _topic_cache[cache_key] = (participant, existing_topic, existing_type)
         return existing_topic, False
 
     tq = fastdds.TopicQos()

@@ -5,7 +5,6 @@ from .utils import resolve_generated_type
 
 
 _registered_type_supports = {}
-_registered_type_names = {}
 _type_support_cache = {}
 _registered_type_supports_lock = threading.Lock()
 
@@ -63,8 +62,6 @@ class RegisteredType:
         self._type_name = _get_type_name(ps)
         with _registered_type_supports_lock:
             _type_support_cache[self._cache_key] = (self._type_support, self._type_name)
-            if type_name_override is None:
-                _registered_type_names[self._cache_key] = self._type_name
 
     @property
     def type_name(self) -> str:
