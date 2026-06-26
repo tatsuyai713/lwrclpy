@@ -34,6 +34,13 @@ def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
         return default
 
 
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.environ.get(name, default)))
+    except Exception:
+        return default
+
+
 def _materialize_shadow_attributes(msg) -> bool:
     """Apply rclpy-style shadow attributes to their SWIG setters in-place."""
     inst_dict = getattr(msg, "__dict__", None)
@@ -222,6 +229,9 @@ class Publisher:
         self._shm_sequence = 0
         self._shm_lock = threading.Lock()
         self._auto_shm_threshold = _env_int("LWRCLPY_AUTO_SHM_THRESHOLD", 256 * 1024)
+        self._shm_subscriber_count_ttl = _env_float("LWRCLPY_SHM_SUBSCRIBER_COUNT_TTL", 0.05)
+        self._shm_subscriber_count_cache = 0
+        self._shm_subscriber_count_expires_at = 0.0
         self._auto_shm_fields = tuple(
             field.strip()
             for field in os.environ.get("LWRCLPY_AUTO_SHM_FIELDS", "data").split(",")
@@ -270,6 +280,8 @@ class Publisher:
     def _set_shared_memory_metadata_publisher(self, publisher, topic_name: str) -> None:
         self._shm_metadata_pub = publisher
         self._shm_topic_name = topic_name
+        self._shm_subscriber_count_cache = 0
+        self._shm_subscriber_count_expires_at = 0.0
 
     def borrow_loaned_message(self, *, require_zero_copy: bool = True) -> _LoanedMessage:
         """Borrow a message sample for in-place filling before publishing.
@@ -362,11 +374,18 @@ class Publisher:
     def _local_shared_memory_subscriber_count(self) -> int:
         if not self._shm_topic_name:
             return 0
+        now = time.monotonic()
+        if now < self._shm_subscriber_count_expires_at:
+            return self._shm_subscriber_count_cache
         try:
             from .shared_memory import count_local_shared_memory_subscribers
-            return count_local_shared_memory_subscribers(self._shm_topic_name)
+            count = count_local_shared_memory_subscribers(self._shm_topic_name)
         except Exception:
-            return 0
+            count = 0
+        self._shm_subscriber_count_cache = count
+        self._shm_subscriber_count_expires_at = now + self._shm_subscriber_count_ttl
+        return count
+
 
     def _subscription_count_unlocked(self) -> int:
         writer = self._writer
@@ -771,10 +790,21 @@ class Publisher:
                 if remaining <= 0:
                     break
                 self._no_active_writes.wait(timeout=remaining)
-            writer = self._writer
-            publisher = self._publisher
-            self._writer = None
-            self._publisher = None
+            timed_out = self._active_writes > 0 or self._active_loans > 0
+            if timed_out:
+                _logger.warning(
+                    "Publisher.destroy timed out waiting for active writes/loans "
+                    "(writes=%d loans=%d); skipping DDS entity deletion",
+                    self._active_writes,
+                    self._active_loans,
+                )
+                writer = None
+                publisher = None
+            else:
+                writer = self._writer
+                publisher = self._publisher
+                self._writer = None
+                self._publisher = None
         with self._shm_lock:
             allocations = list(self._shm_keepalive.values())
             self._shm_keepalive.clear()
