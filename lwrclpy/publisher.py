@@ -309,6 +309,7 @@ class Publisher:
                 return
 
             if self._automatic_loaned_publish_enabled:
+                loaned = None
                 try:
                     loaned = self._loan_message(require_zero_copy=True)
                     _copy_message_into(msg, loaned._msg)
@@ -316,6 +317,8 @@ class Publisher:
                     self._auto_loan_publish_count += 1
                     return
                 except Exception as exc:
+                    if loaned is not None and not loaned._published:
+                        loaned.release()
                     self._record_zero_copy_fallback(exc)
 
             self._publish_regular_message(msg, target_ctor)
