@@ -1,6 +1,13 @@
 import fastdds
+import threading
 from .context import get_participant
 from .utils import resolve_generated_type
+
+
+_registered_type_supports = {}
+_registered_type_names = {}
+_type_support_cache = {}
+_registered_type_supports_lock = threading.Lock()
 
 
 def _get_type_name(ps):
@@ -39,6 +46,13 @@ class RegisteredType:
     def __init__(self, obj, type_name_override: str | None = None):
         # obj は「モジュール or クラス」両対応で解決
         _mod, _msg_cls, pubsub_cls = resolve_generated_type(obj)
+        self._cache_key = (pubsub_cls, type_name_override)
+        with _registered_type_supports_lock:
+            cached = _type_support_cache.get(self._cache_key)
+        if cached is not None:
+            self._type_support, self._type_name = cached
+            return
+
         ps = pubsub_cls()
 
         if type_name_override:
@@ -47,6 +61,10 @@ class RegisteredType:
         # Fast-DDS Python: TypeSupport(TopicDataType) で OK
         self._type_support = fastdds.TypeSupport(ps)
         self._type_name = _get_type_name(ps)
+        with _registered_type_supports_lock:
+            _type_support_cache[self._cache_key] = (self._type_support, self._type_name)
+            if type_name_override is None:
+                _registered_type_names[self._cache_key] = self._type_name
 
     @property
     def type_name(self) -> str:
@@ -54,5 +72,17 @@ class RegisteredType:
 
     def register(self):
         participant = get_participant()
+        # Fast DDS entities keep references to the registered TopicDataType.
+        # Some Python bindings do not keep the wrapping TypeSupport alive for
+        # us, so retain it for the participant lifetime.
+        key = (id(participant), self._type_name)
+        with _registered_type_supports_lock:
+            cached = _registered_type_supports.get(key)
+            if cached is not None and cached[0] is participant:
+                return self._type_name
+            if cached is not None:
+                _registered_type_supports.pop(key, None)
         participant.register_type(self._type_support)
+        with _registered_type_supports_lock:
+            _registered_type_supports[key] = (participant, self._type_support)
         return self._type_name

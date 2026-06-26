@@ -29,6 +29,16 @@ def main():
         help="fail unless automatic internal middleware loaning is available and used",
     )
     parser.add_argument(
+        "--require-loaned-message",
+        action="store_true",
+        help="fail unless an explicit publisher loaned message can be borrowed and published",
+    )
+    parser.add_argument(
+        "--require-loaned-receive",
+        action="store_true",
+        help="fail unless automatic subscription loaned receive is available and used",
+    )
+    parser.add_argument(
         "--require-complete-zero-copy",
         action="store_true",
         help="fail unless DataSharing and automatic internal middleware loaning are used",
@@ -37,6 +47,8 @@ def main():
     if args.require_complete_zero_copy:
         args.require_zero_copy = True
         args.require_automatic_loan = True
+        args.require_loaned_message = True
+        args.require_loaned_receive = True
 
     rclpy.init()
     node = rclpy.create_node("zero_copy_extension")
@@ -68,10 +80,20 @@ def main():
         ):
             logger.error("Automatic internal middleware loaning is not available")
             return 3
+        if args.require_loaned_message and not pub._can_loan_messages:
+            logger.error("Publisher loaned-message path is not available")
+            return 5
+        if args.require_loaned_receive and not sub._automatic_loaned_receive_enabled:
+            logger.error("Subscription loaned receive path is not available")
+            return 6
 
-        msg = Int32()
-        msg.data = 42
-        pub.publish(msg)
+        if args.require_loaned_message:
+            with pub.borrow_loaned_message(require_zero_copy=True) as msg:
+                msg.data = 42
+        else:
+            msg = Int32()
+            msg.data = 42
+            pub.publish(msg)
 
         for _ in range(20):
             if received:
@@ -82,10 +104,15 @@ def main():
             logger.error("message was not received")
             exit_code = 1
         elif args.require_complete_zero_copy:
-            if pub._auto_loan_publish_count < 1 or sub._auto_loan_receive_count < 1:
+            if sub._auto_loan_receive_count < 1:
                 logger.error("Automatic internal loaning was not used")
                 return 4
-            logger.info("Verified complete automatic zero-copy path through normal rclpy-style APIs")
+            logger.info("Verified complete zero-copy path with explicit publisher loan and loaned receive")
+        elif args.require_loaned_message:
+            logger.info("Verified explicit publisher loaned-message path")
+        elif args.require_loaned_receive and sub._auto_loan_receive_count < 1:
+            logger.error("Subscription loaned receive was not used")
+            return 7
         elif pub._data_sharing_enabled and sub._data_sharing_enabled:
             logger.info("Verified Fast DDS DataSharing zero-copy transport is enabled")
         else:

@@ -1,12 +1,44 @@
-import asyncio
 import concurrent.futures
 import functools
 import inspect
 import threading
 import time
+import traceback
 from typing import Iterable, Optional, List
 from collections import deque
+from ._async import run_coroutine
 from .context import ok
+
+
+class _ExecutorWakeEvent:
+    """Event-like wake primitive that lets workers wait for a new wake."""
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._generation = 0
+
+    def set(self):
+        with self._condition:
+            self._generation += 1
+            self._condition.notify_all()
+
+    def clear(self):
+        # Kept for Event API compatibility.  Wakes are generation based, so
+        # there is no sticky state to clear.
+        return None
+
+    def generation(self) -> int:
+        with self._condition:
+            return self._generation
+
+    def wait(self, timeout: Optional[float] = None, *, since: Optional[int] = None) -> bool:
+        with self._condition:
+            if since is None:
+                since = self._generation
+            if self._generation != since:
+                return True
+            self._condition.wait(timeout)
+            return self._generation != since
 
 
 class ExternalShutdownException(RuntimeError):
@@ -24,8 +56,10 @@ class Executor:
         self._nodes_lock = threading.RLock()
         self._stopped = False
         self._stopped_lock = threading.Lock()
-        self._wake_event = threading.Event()
+        self._wake_event = _ExecutorWakeEvent()
+        self._shutdown_event = threading.Event()
         self._task_queue = deque()
+        self._task_queue_lock = threading.Lock()
 
     def add_node(self, node):
         with self._nodes_lock:
@@ -59,24 +93,27 @@ class Executor:
         try:
             handler, _group, _node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
         except StopIteration:
-            return
+            return False
         try:
             handler()
         except Exception:
             pass
+        return True
 
     def spin_some(self, timeout_sec: Optional[float] = None):
         if not ok() or self._is_stopped():
-            return
+            return False
         nodes = self.get_nodes()
-        self._process_all_ready(nodes)
+        ran = self._process_all_ready(nodes)
         if timeout_sec:
             time.sleep(min(timeout_sec, 0.001))
+        return ran
 
     def shutdown(self, timeout_sec: Optional[float] = None):
         with self._stopped_lock:
             self._stopped = True
         self._wake_event.set()
+        self._shutdown_event.set()
         # Disconnect wake events from nodes
         with self._nodes_lock:
             for node in self._nodes:
@@ -94,29 +131,36 @@ class Executor:
         """Queue a callback for executor execution and return a Future."""
         task = functools.partial(callback, *args, **kwargs)
         future: concurrent.futures.Future = concurrent.futures.Future()
-        self._task_queue.append((task, None, None, future))
+        with self._task_queue_lock:
+            self._task_queue.append((task, None, None, future))
         self._wake_event.set()
         return future
 
     def _pop_executor_task(self):
-        try:
-            return self._task_queue.popleft()
-        except IndexError:
-            return None
+        with self._task_queue_lock:
+            try:
+                return self._task_queue.popleft()
+            except IndexError:
+                return None
+
+    def _has_executor_tasks(self) -> bool:
+        with self._task_queue_lock:
+            return bool(self._task_queue)
 
     def wait_for_ready_callbacks(self, timeout_sec: Optional[float] = None):
         task = self._pop_executor_task()
         if task:
             cb, msg, node, future = task
-            return (lambda: _execute_callback(cb, msg, future), None, node)
+            return (lambda: _execute_callback(cb, msg, future=future), None, node)
         nodes = self.get_nodes()
         item = _pop_any_callback(nodes, timeout_sec, self._is_stopped, self._wake_event)
         if not item:
             raise StopIteration()
-        cb, msg, node = item
-        return (lambda: _invoke_callback(cb, msg), None, node)
+        cb, msg, node, entity, group = item
+        return (lambda: _execute_callback(cb, msg, node=node, entity=entity, group=group), group, node)
 
     def _process_all_ready(self, nodes: Iterable):
+        ran = False
         for node in list(nodes):
             while True:
                 try:
@@ -125,8 +169,10 @@ class Executor:
                     item = None
                 if not item:
                     break
-                cb, msg = item
-                _execute_callback(cb, msg)
+                cb, msg, entity, group = _normalize_node_callback_item(item)
+                _execute_callback(cb, msg, node=node, entity=entity, group=group)
+                ran = True
+        return ran
 
 
 class SingleThreadedExecutor(Executor):
@@ -164,13 +210,9 @@ class MultiThreadedExecutor(Executor):
                 self._threads.append(t)
         try:
             while ok() and not self._is_stopped():
-                nodes = self.get_nodes()
-                if not self._task_queue and not any(getattr(n, "_has_pending_work", lambda: True)() for n in nodes):
-                    # Wait for wake event or timeout
-                    self._wake_event.wait(timeout=0.05)
-                    self._wake_event.clear()
-                    continue
-                time.sleep(0.01)
+                # Workers own callback processing and the work wake event.
+                # The spin thread only waits for shutdown/external shutdown.
+                self._shutdown_event.wait(timeout=0.5)
             if not ok() and not self._is_stopped():
                 raise ExternalShutdownException()
         except KeyboardInterrupt:
@@ -180,13 +222,16 @@ class MultiThreadedExecutor(Executor):
 
     def _worker(self):
         while ok() and not self._is_stopped():
-            item = self._pop_executor_task()
-            if item is None:
-                nodes = self.get_nodes()
-                item = _pop_any_callback(nodes, 0.05, self._is_stopped, self._wake_event)
+            task = self._pop_executor_task()
+            if task is not None:
+                cb, msg, _node, future = task
+                _execute_callback(cb, msg, future=future)
+                continue
+            nodes = self.get_nodes()
+            item = _pop_any_callback(nodes, 0.05, self._is_stopped, self._wake_event)
             if item:
-                cb, msg, _node, future = _normalize_callback_item(item)
-                _execute_callback(cb, msg, future)
+                cb, msg, node, entity, group = item
+                _execute_callback(cb, msg, node=node, entity=entity, group=group)
 
     def shutdown(self, timeout_sec: Optional[float] = None):
         super().shutdown(timeout_sec)
@@ -222,19 +267,42 @@ def spin(node, executor: Optional[Executor] = None):
 
 
 def spin_once(node, timeout_sec: Optional[float] = None):
-    ran_callbacks = _run_callbacks_for_node(node)
-    if ran_callbacks:
-        return
-    if timeout_sec is None:
-        time.sleep(0.001)
-    elif timeout_sec > 0:
-        time.sleep(min(timeout_sec, 0.001))
+    exec_obj = SingleThreadedExecutor()
+    added = False
+    try:
+        if node not in exec_obj.get_nodes():
+            exec_obj.add_node(node)
+            added = True
+        return exec_obj.spin_once(timeout_sec)
+    finally:
+        if added:
+            exec_obj.remove_node(node)
+        exec_obj.shutdown()
 
 
 def spin_some(node, timeout_sec: Optional[float] = None):
-    _run_callbacks_for_node(node)
-    if timeout_sec:
-        time.sleep(min(timeout_sec, 0.001))
+    exec_obj = SingleThreadedExecutor()
+    added = False
+    try:
+        if node not in exec_obj.get_nodes():
+            exec_obj.add_node(node)
+            added = True
+        deadline = None
+        if timeout_sec is not None and timeout_sec > 0:
+            deadline = time.monotonic() + timeout_sec
+        while True:
+            remaining = 0.0
+            if deadline is not None:
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    break
+            ran = exec_obj.spin_once(remaining if deadline is not None else 0.0)
+            if not ran:
+                return
+    finally:
+        if added:
+            exec_obj.remove_node(node)
+        exec_obj.shutdown()
 
 
 def spin_until_future_complete(node, future, timeout_sec: Optional[float] = None, *, executor: Optional[Executor] = None):
@@ -267,36 +335,48 @@ def _run_callbacks_for_node(node):
         callbacks = node._drain_callbacks()
     except Exception:
         callbacks = []
-    for cb, msg in callbacks:
-        _execute_callback(cb, msg)
+    for item in callbacks:
+        cb, msg, entity, group = _normalize_node_callback_item(item)
+        _execute_callback(cb, msg, node=node, entity=entity, group=group)
     return bool(callbacks)
 
 
-def _normalize_callback_item(item):
+def _normalize_node_callback_item(item):
     if len(item) == 4:
         return item
-    cb, msg, node = item
-    return cb, msg, node, None
+    if len(item) == 3:
+        cb, msg, entity = item
+        return cb, msg, entity, None
+    cb, msg = item
+    return cb, msg, None, None
 
 
-def _execute_callback(cb, msg, future=None):
+def _execute_callback(cb, msg, future=None, *, node=None, entity=None, group=None):
     if future is not None and future.cancelled():
         return None
     try:
-        result = _invoke_callback(cb, msg)
-    except Exception as exc:
+        try:
+            result = _invoke_callback(cb, msg)
+        except Exception as exc:
+            if future is not None and not future.done():
+                future.set_exception(exc)
+            else:
+                traceback.print_exception(type(exc), exc, exc.__traceback__)
+            return None
         if future is not None and not future.done():
-            future.set_exception(exc)
-        return None
-    if future is not None and not future.done():
-        future.set_result(result)
-    return result
+            future.set_result(result)
+        return result
+    finally:
+        if node is not None and entity is not None and group is not None:
+            end_callback = getattr(node, "_end_callback_execution", None)
+            if callable(end_callback):
+                end_callback(entity, group)
 
 
 def _invoke_callback(cb, msg):
     result = cb(msg) if msg is not None else cb()
     if inspect.iscoroutine(result):
-        return asyncio.run(result)
+        return run_coroutine(result)
     return result
 
 
@@ -315,6 +395,11 @@ def _pop_any_callback(nodes: Iterable, timeout_sec: Optional[float], is_stopped_
         return None
 
     while True:
+        wake_generation = None
+        get_generation = getattr(wake_event, "generation", None) if wake_event is not None else None
+        if callable(get_generation):
+            wake_generation = get_generation()
+
         # Check all nodes for ready callbacks
         for node in nodes:
             try:
@@ -322,8 +407,8 @@ def _pop_any_callback(nodes: Iterable, timeout_sec: Optional[float], is_stopped_
             except Exception:
                 continue
             if item:
-                cb, msg = item
-                return (cb, msg, node)
+                cb, msg, entity, group = _normalize_node_callback_item(item)
+                return (cb, msg, node, entity, group)
 
         # Check stop conditions before sleeping
         if not ok() or _check_stopped():
@@ -338,12 +423,14 @@ def _pop_any_callback(nodes: Iterable, timeout_sec: Optional[float], is_stopped_
         else:
             remaining = 0.05  # 50ms default poll interval when no timeout
 
-        # Wait for wake event with up to 50ms cap.
-        # The key change from original: no 1ms floor.  The wake_event is set
-        # by Node._enqueue_callback, so we wake up immediately when work arrives.
+        # Wait for wake event with up to 50ms cap.  Generation-aware waits
+        # avoid both sticky-event busy loops and lost wake-ups between the
+        # queue scan and the wait call.
         wait_time = min(remaining, 0.05)
         if wake_event:
-            wake_event.wait(wait_time)
-            wake_event.clear()
+            if wake_generation is None:
+                wake_event.wait(wait_time)
+            else:
+                wake_event.wait(wait_time, since=wake_generation)
         else:
             time.sleep(wait_time)

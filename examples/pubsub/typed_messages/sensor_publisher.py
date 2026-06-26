@@ -120,7 +120,7 @@ def main():
         sonar.field_of_view(0.5)  # 30 degrees
         sonar.min_range(0.02)
         sonar.max_range(4.0)
-        sonar.range_(1.5 + random.uniform(-0.05, 0.05))
+        sonar.range(1.5 + random.uniform(-0.05, 0.05))
         pub_range.publish(sonar)
         
         # 4. Publish Temperature

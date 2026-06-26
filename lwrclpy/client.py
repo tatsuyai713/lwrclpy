@@ -49,10 +49,13 @@ class Client:
         )
         self._lock = threading.Lock()
         self._pending_future: Future | None = None
+        self._destroyed = False
 
         def _on_response(msg):
             future = None
             with self._lock:
+                if self._destroyed:
+                    return
                 future = self._pending_future
                 self._pending_future = None
             if future:
@@ -97,10 +100,23 @@ class Client:
         """Send request asynchronously, returning a Future resolved with the response."""
         future = Future()
         with self._lock:
-            if self._pending_future is not None:
-                raise RuntimeError("Only one pending service request is supported at a time")
-            self._pending_future = future
-        self._publisher.publish(request)
+            if self._destroyed:
+                destroyed = True
+            else:
+                destroyed = False
+                if self._pending_future is not None:
+                    raise RuntimeError("Only one pending service request is supported at a time")
+                self._pending_future = future
+        if destroyed:
+            future.set_exception(RuntimeError("Client has been destroyed"))
+            return future
+        try:
+            self._publisher.publish(request)
+        except Exception as exc:
+            with self._lock:
+                if self._pending_future is future:
+                    self._pending_future = None
+            future.set_exception(exc)
         return future
 
     def send_request(self, request):
@@ -137,6 +153,9 @@ class Client:
         Returns True when the request publisher has matched subscribers and
         the response subscription has matched publishers.
         """
+        with self._lock:
+            if self._destroyed:
+                return False
         try:
             return (
                 self._publisher.get_subscription_count() > 0
@@ -150,8 +169,15 @@ class Client:
         # Untrack from global cleanup
         untrack_entity(self)
         
-        # Clear pending future first
-        self._pending_future = None
+        # Clear pending future first and wake any waiter.
+        with self._lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
+            pending = self._pending_future
+            self._pending_future = None
+        if pending is not None:
+            pending.cancel()
         
         # Destroy subscription first (stop receiving)
         if hasattr(self, '_subscription') and self._subscription:

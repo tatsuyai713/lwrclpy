@@ -2,6 +2,7 @@ import threading
 import os
 import atexit
 import weakref
+import warnings
 from typing import List, Optional, Any
 
 try:
@@ -16,14 +17,31 @@ _initialized = False
 _shutdown_flag = False
 _participant = None
 _tracked_entities: List[weakref.ref] = []  # Track all entities for proper cleanup order
-_domain_env = os.environ.get("LWRCL_DOMAIN_ID")
-# ROS 2 互換：ROS_DOMAIN_ID をフォールバックに使う
-if _domain_env is None:
-    _domain_env = os.environ.get("ROS_DOMAIN_ID")
-try:
-    _domain = int(_domain_env) if _domain_env is not None else 0
-except ValueError:
-    _domain = 0
+_atexit_registered = False
+
+
+def _parse_domain_id(value: Any, *, source: str = "domain_id") -> int:
+    try:
+        domain_id = int(value)
+    except (TypeError, ValueError):
+        warnings.warn(f"Ignoring invalid {source}={value!r}; using domain 0", RuntimeWarning, stacklevel=2)
+        return 0
+    if not 0 <= domain_id <= 232:
+        warnings.warn(f"Ignoring out-of-range {source}={value!r}; using domain 0", RuntimeWarning, stacklevel=2)
+        return 0
+    return domain_id
+
+
+def _domain_id_from_env() -> int:
+    # Prefer the project-specific override, then ROS 2 compatibility.
+    for name in ("LWRCL_DOMAIN_ID", "ROS_DOMAIN_ID"):
+        value = os.environ.get(name)
+        if value is not None:
+            return _parse_domain_id(value, source=name)
+    return 0
+
+
+_domain = _domain_id_from_env()
 
 
 def init(args=None, *, domain_id: Optional[int] = None):
@@ -33,7 +51,7 @@ def init(args=None, *, domain_id: Optional[int] = None):
         args: Command line arguments (ignored, for compatibility)
         domain_id: Optional domain ID override
     """
-    global _initialized, _shutdown_flag, _participant, _domain
+    global _initialized, _shutdown_flag, _participant, _domain, _atexit_registered
     with _lock:
         if _initialized:
             return
@@ -42,7 +60,7 @@ def init(args=None, *, domain_id: Optional[int] = None):
                 "fastdds Python bindings not found. Build Fast-DDS-python and source its setup.bash.")
         
         if domain_id is not None:
-            _domain = domain_id
+            _domain = _parse_domain_id(domain_id)
             
         factory = fastdds.DomainParticipantFactory.get_instance()
         pq = fastdds.DomainParticipantQos()
@@ -53,8 +71,9 @@ def init(args=None, *, domain_id: Optional[int] = None):
         _initialized = True
         _shutdown_flag = False
         
-        # Register atexit handler for graceful cleanup
-        atexit.register(_atexit_shutdown)
+        if not _atexit_registered:
+            atexit.register(_atexit_shutdown)
+            _atexit_registered = True
 
 
 def _atexit_shutdown():
@@ -199,14 +218,9 @@ class Context:
                     "fastdds Python bindings not found.")
             
             if domain_id is not None:
-                self._domain_id = domain_id
+                self._domain_id = _parse_domain_id(domain_id)
             else:
-                # Use environment variable or default
-                env_domain = os.environ.get("ROS_DOMAIN_ID", os.environ.get("LWRCL_DOMAIN_ID", "0"))
-                try:
-                    self._domain_id = int(env_domain)
-                except ValueError:
-                    self._domain_id = 0
+                self._domain_id = _domain_id_from_env()
             
             factory = fastdds.DomainParticipantFactory.get_instance()
             pq = fastdds.DomainParticipantQos()

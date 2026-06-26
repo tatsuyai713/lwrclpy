@@ -1,6 +1,10 @@
+import logging
 import threading
 import time
 from typing import Optional, Callable
+
+
+_logger = logging.getLogger(__name__)
 
 
 class _RepeatingTimer:
@@ -23,10 +27,13 @@ class _RepeatingTimer:
         self._stop = threading.Event()
         self._thr: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._pending_lock = threading.Lock()
         self._start_time = time.monotonic()
         self._next_t = self._start_time + self._period
         self._last_call: Optional[float] = None
         self._call_count = 0
+        self._callback_pending = False
+        self._canceled = False
 
     def start(self):
         """Start the timer thread."""
@@ -53,38 +60,64 @@ class _RepeatingTimer:
             if self._stop.is_set():
                 break
             
-            # Fire the callback
+            # Fire or enqueue the callback.  When executor-driven, keep at
+            # most one outstanding callback so slow executors do not build an
+            # unbounded backlog of stale timer events.
             try:
-                self._last_call = time.monotonic()
-                self._call_count += 1
                 if self._enqueue_cb is not None:
-                    # Enqueue the user callback to be run by the executor
-                    self._enqueue_cb(self._callback, None)
+                    if not self._mark_callback_pending():
+                        continue
+                    self._enqueue_cb(self._run_queued_callback, None)
                 else:
+                    self._last_call = time.monotonic()
+                    self._call_count += 1
                     self._callback()
             except Exception:
-                pass  # Swallow callback exceptions
+                if self._enqueue_cb is not None:
+                    self._clear_callback_pending()
+                else:
+                    _logger.exception("Timer callback failed")
             finally:
                 if self._oneshot:
                     self._stop.set()
-                    break
-                
-                # Calculate next fire time with drift compensation
-                # Use the scheduled time as base, not the actual execution time
-                # This prevents drift accumulation
-                now = time.monotonic()
-                self._next_t += self._period
-                
-                # If we've fallen behind by more than one period, 
-                # reset to prevent catching up
-                if self._next_t < now:
-                    # Skip missed intervals
-                    missed = int((now - self._next_t) / self._period) + 1
-                    self._next_t += missed * self._period
+                else:
+                    # Calculate next fire time with drift compensation.  Use
+                    # the scheduled time as base, not actual execution time.
+                    now = time.monotonic()
+                    self._next_t += self._period
+
+                    # If we've fallen behind by more than one period, skip
+                    # missed intervals instead of catching up in a burst.
+                    if self._next_t < now:
+                        missed = int((now - self._next_t) / self._period) + 1
+                        self._next_t += missed * self._period
+
+    def _mark_callback_pending(self) -> bool:
+        with self._pending_lock:
+            if self._callback_pending:
+                return False
+            self._callback_pending = True
+            return True
+
+    def _clear_callback_pending(self) -> None:
+        with self._pending_lock:
+            self._callback_pending = False
+
+    def _run_queued_callback(self, _msg=None):
+        try:
+            if self._canceled:
+                return
+            self._last_call = time.monotonic()
+            self._call_count += 1
+            self._callback()
+        finally:
+            self._clear_callback_pending()
 
     def cancel(self):
         """Request stop and join from external threads; skip join when self-canceling."""
+        self._canceled = True
         self._stop.set()
+        self._clear_callback_pending()
         # Avoid joining the current thread (raises RuntimeError)
         with self._lock:
             thr = self._thr

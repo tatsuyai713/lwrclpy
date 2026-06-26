@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 from typing import Optional, List, Tuple, Any, Iterator
-import asyncio
 import inspect
 import fastdds  # type: ignore
 import os
 import threading
+import time
+from ._async import run_coroutine
 from .qos import QoSProfile
 from .message_utils import expose_callable_fields
 from .utils import (
@@ -21,7 +22,14 @@ from .utils import (
 )
 
 
-_MAX_CALLBACKS_PER_DRAIN = 16
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except Exception:
+        return default
+
+
+_MAX_CALLBACKS_PER_DRAIN = _env_int("LWRCLPY_MAX_CALLBACKS_PER_DRAIN", 16)
 _SKIP_SAMPLE = object()
 
 
@@ -94,47 +102,142 @@ def _attach_loan_to_sample(sample, loaned: "_LoanedSamples") -> bool:
 
 class MessageInfo:
     """Information about a received message (similar to rclpy.MessageInfo)."""
-    __slots__ = ("source_timestamp", "received_timestamp", "publication_sequence_number", 
-                 "reception_sequence_number", "publisher_gid", "from_intra_process",
-                 "publisher_handle", "_sample_identity", "_is_valid")
+    __slots__ = (
+        "_sample_info", "_source_timestamp", "_received_timestamp",
+        "_publication_sequence_number", "_reception_sequence_number",
+        "_publisher_gid", "_from_intra_process", "_publisher_handle",
+        "_sample_identity", "_is_valid",
+    )
     
     def __init__(self, sample_info=None):
-        self.source_timestamp = 0
-        self.received_timestamp = 0
-        self.publication_sequence_number = 0
-        self.reception_sequence_number = 0
-        self.publisher_gid = None
-        self.publisher_handle = None
-        self.from_intra_process = False
+        self._sample_info = sample_info
+        self._source_timestamp = None
+        self._received_timestamp = 0
+        self._publication_sequence_number = None
+        self._reception_sequence_number = None
+        self._publisher_gid = None
+        self._from_intra_process = None
+        self._publisher_handle = None
         self._sample_identity = None
-        self._is_valid = True
-        
-        if sample_info is not None:
+        self._is_valid = None
+
+    @property
+    def is_valid(self):
+        if self._is_valid is None:
+            self._is_valid = bool(_sample_info_attr(self._sample_info, "valid_data", True))
+        return self._is_valid
+
+    @is_valid.setter
+    def is_valid(self, value):
+        self._is_valid = bool(value)
+
+    @property
+    def sample_identity(self):
+        if self._sample_identity is None:
+            self._sample_identity = _sample_info_attr(self._sample_info, "sample_identity")
+        return self._sample_identity
+
+    @sample_identity.setter
+    def sample_identity(self, value):
+        self._sample_identity = value
+
+    @property
+    def source_timestamp(self):
+        if self._source_timestamp is None:
+            ts = _sample_info_attr(self._sample_info, "source_timestamp")
+            if ts is not None:
+                sec = _sample_info_attr(ts, "seconds", 0)
+                nsec = _sample_info_attr(ts, "nanosec", 0)
+                self._source_timestamp = sec * 1_000_000_000 + nsec
+            else:
+                self._source_timestamp = 0
+        return self._source_timestamp
+
+    @source_timestamp.setter
+    def source_timestamp(self, value):
+        self._source_timestamp = int(value)
+
+    @property
+    def received_timestamp(self):
+        return self._received_timestamp
+
+    @received_timestamp.setter
+    def received_timestamp(self, value):
+        self._received_timestamp = int(value)
+
+    @property
+    def publication_sequence_number(self):
+        if self._publication_sequence_number is None:
+            if hasattr(self._sample_info, "publication_sequence_number"):
+                self._publication_sequence_number = _sample_info_attr(self._sample_info, "publication_sequence_number", 0)
+            else:
+                self._publication_sequence_number = 0
+        return self._publication_sequence_number
+
+    @publication_sequence_number.setter
+    def publication_sequence_number(self, value):
+        self._publication_sequence_number = int(value)
+
+    @property
+    def reception_sequence_number(self):
+        if self._reception_sequence_number is None:
+            if hasattr(self._sample_info, "reception_sequence_number"):
+                self._reception_sequence_number = _sample_info_attr(self._sample_info, "reception_sequence_number", 0)
+            else:
+                self._reception_sequence_number = 0
+        return self._reception_sequence_number
+
+    @reception_sequence_number.setter
+    def reception_sequence_number(self, value):
+        self._reception_sequence_number = int(value)
+
+    @property
+    def publisher_gid(self):
+        if self._publisher_gid is None:
+            if hasattr(self._sample_info, "publisher_gid"):
+                self._publisher_gid = _sample_info_attr(self._sample_info, "publisher_gid")
+            if self._publisher_gid is None and self.sample_identity is not None and hasattr(self.sample_identity, "writer_guid"):
+                self._publisher_gid = _sample_info_attr(self.sample_identity, "writer_guid")
+        return self._publisher_gid
+
+    @publisher_gid.setter
+    def publisher_gid(self, value):
+        self._publisher_gid = value
+
+    @property
+    def publisher_handle(self):
+        if self._publisher_handle is None and hasattr(self._sample_info, "publication_handle"):
+            self._publisher_handle = _sample_info_attr(self._sample_info, "publication_handle")
+        return self._publisher_handle
+
+    @publisher_handle.setter
+    def publisher_handle(self, value):
+        self._publisher_handle = value
+
+    @property
+    def from_intra_process(self):
+        if self._from_intra_process is None:
+            if hasattr(self._sample_info, "from_intra_process"):
+                self._from_intra_process = bool(_sample_info_attr(self._sample_info, "from_intra_process", False))
+            else:
+                self._from_intra_process = False
+        return self._from_intra_process
+
+    @from_intra_process.setter
+    def from_intra_process(self, value):
+        self._from_intra_process = bool(value)
+
+    def _eager_populate(self):
+        if self._sample_info is not None:
             try:
-                self._is_valid = bool(_sample_info_attr(sample_info, "valid_data", True))
-                self._sample_identity = _sample_info_attr(sample_info, "sample_identity")
-                # Extract timestamp
-                ts = _sample_info_attr(sample_info, "source_timestamp")
-                if ts is not None:
-                    sec = _sample_info_attr(ts, "seconds", 0)
-                    nsec = _sample_info_attr(ts, "nanosec", 0)
-                    self.source_timestamp = sec * 1_000_000_000 + nsec
-                
-                # Extract sequence numbers if available
-                if hasattr(sample_info, "publication_sequence_number"):
-                    self.publication_sequence_number = _sample_info_attr(sample_info, "publication_sequence_number", 0)
-                if hasattr(sample_info, "reception_sequence_number"):
-                    self.reception_sequence_number = _sample_info_attr(sample_info, "reception_sequence_number", 0)
-                if hasattr(sample_info, "publisher_gid"):
-                    self.publisher_gid = _sample_info_attr(sample_info, "publisher_gid")
-                if hasattr(sample_info, "publication_handle"):
-                    self.publisher_handle = _sample_info_attr(sample_info, "publication_handle")
-                if self.publisher_gid is None and self._sample_identity is not None and hasattr(self._sample_identity, "writer_guid"):
-                    self.publisher_gid = _sample_info_attr(self._sample_identity, "writer_guid")
-                    
-                # Check for intra-process delivery
-                if hasattr(sample_info, "from_intra_process"):
-                    self.from_intra_process = bool(_sample_info_attr(sample_info, "from_intra_process", False))
+                _ = self.is_valid
+                _ = self.sample_identity
+                _ = self.source_timestamp
+                _ = self.publication_sequence_number
+                _ = self.reception_sequence_number
+                _ = self.publisher_gid
+                _ = self.publisher_handle
+                _ = self.from_intra_process
             except Exception:
                 pass
 
@@ -146,14 +249,6 @@ class MessageInfo:
     def sequence_number(self):
         return self.publication_sequence_number
 
-    @property
-    def sample_identity(self):
-        return self._sample_identity
-
-    @property
-    def is_valid(self):
-        return self._is_valid
-
 
 class _LoanedSamples:
     """Container for DataReader-loaned samples.
@@ -164,9 +259,9 @@ class _LoanedSamples:
 
     __slots__ = ("_native", "_expose_fn", "_returned")
 
-    def __init__(self, native, *, raw_mode: bool = False):
+    def __init__(self, native, *, raw_mode: bool = False, expose_fields: bool = True):
         self._native = native
-        self._expose_fn = None if raw_mode else expose_callable_fields
+        self._expose_fn = expose_callable_fields if (expose_fields and not raw_mode) else None
         self._returned = False
 
     def __len__(self) -> int:
@@ -264,6 +359,9 @@ class _ReaderListener(fastdds.DataReaderListener):
         loaned_samples_cls=None,
         auto_loan_receive: bool = False,
         cuda_attach_fn=None,
+        expose_fields: bool = True,
+        batch_callback: bool = False,
+        batch_size: int | None = None,
     ):
         super().__init__()
         self._enqueue_cb = enqueue_cb
@@ -278,10 +376,23 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._callback_pending = False
         self._reschedule_requested = False
         # Cache the import once at construction time instead of every callback
-        self._expose_fn = None if raw_mode else expose_callable_fields
+        self._expose_fn = expose_callable_fields if (expose_fields and not raw_mode) else None
         self._has_callback = callable(user_cb)
         self._with_message_info = self._has_callback and _callback_accepts_message_info(user_cb)
         self._cuda_attach_fn = cuda_attach_fn
+        self._closed = False
+        self._dropped_reschedules = 0
+        self._expose_fields = bool(expose_fields)
+        self._enqueued_callback_count = 0
+        self._batch_callback = bool(batch_callback)
+        self._batch_size = max(1, int(batch_size or _MAX_CALLBACKS_PER_DRAIN))
+
+    def close(self) -> None:
+        self._closed = True
+        self._has_callback = False
+        with self._pending_lock:
+            self._callback_pending = False
+            self._reschedule_requested = False
 
     def set_cuda_attach_fn(self, fn) -> None:
         self._cuda_attach_fn = fn
@@ -301,6 +412,14 @@ class _ReaderListener(fastdds.DataReaderListener):
     @property
     def auto_loan_receive_count(self) -> int:
         return self._auto_loan_receive_count
+
+    @property
+    def dropped_reschedules(self) -> int:
+        return self._dropped_reschedules
+
+    @property
+    def enqueued_callback_count(self) -> int:
+        return self._enqueued_callback_count
 
     def on_subscription_matched(self, reader, info):
         """Called when subscription matches/unmatches with a publisher."""
@@ -335,6 +454,17 @@ class _ReaderListener(fastdds.DataReaderListener):
         msg_info = MessageInfo(info) if include_message_info else None
         return data, msg_info
 
+    def _read_many_from_reader(self, reader, max_count: int):
+        results = []
+        for _ in range(max_count):
+            result = self._read_one_from_reader(reader)
+            if result is None:
+                break
+            if result is _SKIP_SAMPLE:
+                continue
+            results.append(result)
+        return results
+
     def _take_one_from_reader(self, reader):
         return self._read_or_take_one_from_reader(reader, include_message_info=True)
 
@@ -345,7 +475,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         loan_cls = self._loaned_samples_cls
         if loan_cls is None:
             return None
-        loaned = _LoanedSamples(loan_cls(), raw_mode=self._raw_mode)
+        loaned = _LoanedSamples(loan_cls(), raw_mode=self._raw_mode, expose_fields=self._expose_fields)
         try:
             with self._reader_lock if self._reader_lock is not None else _NullContext():
                 ok = loaned._native.take(reader, 1)
@@ -365,13 +495,40 @@ class _ReaderListener(fastdds.DataReaderListener):
             loaned.return_loan()
             return None
 
+    def _loaned_take_many_from_reader(self, reader, max_count: int):
+        loan_cls = self._loaned_samples_cls
+        if loan_cls is None:
+            return []
+        loaned = _LoanedSamples(loan_cls(), raw_mode=self._raw_mode, expose_fields=self._expose_fields)
+        try:
+            with self._reader_lock if self._reader_lock is not None else _NullContext():
+                ok = loaned._native.take(reader, max_count)
+            if not ok or len(loaned) <= 0:
+                loaned.return_loan()
+                return []
+            results = []
+            for index in range(len(loaned)):
+                sample = loaned[index]
+                if sample is None:
+                    continue
+                self._attach_cuda_ipc(sample)
+                msg_info = loaned.info(index) if self._with_message_info else None
+                self._auto_loan_receive_count += 1
+                results.append((sample, msg_info, loaned))
+            if not results:
+                loaned.return_loan()
+            return results
+        except Exception:
+            loaned.return_loan()
+            return []
+
     def _invoke_user_callback(self, data, msg_info):
         if self._with_message_info:
             result = self._user_cb(data, msg_info)
         else:
             result = self._user_cb(data)
         if inspect.iscoroutine(result):
-            asyncio.run(result)
+            run_coroutine(result)
 
     def _enqueue_user_callback(self, data, msg_info, loaned: Optional[_LoanedSamples] = None):
         if loaned is not None:
@@ -380,7 +537,7 @@ class _ReaderListener(fastdds.DataReaderListener):
                     try:
                         result = user_cb(sample, info)
                         if inspect.iscoroutine(result):
-                            asyncio.run(result)
+                            run_coroutine(result)
                     finally:
                         samples.return_loan()
             else:
@@ -388,46 +545,104 @@ class _ReaderListener(fastdds.DataReaderListener):
                     try:
                         result = user_cb(sample)
                         if inspect.iscoroutine(result):
-                            asyncio.run(result)
+                            run_coroutine(result)
                     finally:
                         samples.return_loan()
 
             self._enqueue_cb(callback_with_loan, None)
+            self._enqueued_callback_count += 1
             return
 
         if self._with_message_info:
             def callback_with_info(_msg=None, user_cb=self._user_cb, sample=data, info=msg_info):
                 result = user_cb(sample, info)
                 if inspect.iscoroutine(result):
-                    asyncio.run(result)
+                    run_coroutine(result)
 
             self._enqueue_cb(callback_with_info, None)
         else:
             self._enqueue_cb(self._user_cb, data)
+        self._enqueued_callback_count += 1
+
+    def _enqueue_user_batch_callback(self, items):
+        if not items:
+            return
+        loans = []
+        if self._with_message_info:
+            messages = []
+            infos = []
+            for item in items:
+                data, msg_info = item[:2]
+                messages.append(data)
+                infos.append(msg_info)
+                if len(item) == 3 and item[2] is not None and item[2] not in loans:
+                    loans.append(item[2])
+
+            def callback_batch(_msg=None, user_cb=self._user_cb, payload=messages, info_payload=infos, loaned=tuple(loans)):
+                try:
+                    result = user_cb(payload, info_payload)
+                    if inspect.iscoroutine(result):
+                        run_coroutine(result)
+                finally:
+                    for samples in loaned:
+                        samples.return_loan()
+        else:
+            batch = []
+            for item in items:
+                batch.append(item[0])
+                if len(item) == 3 and item[2] is not None and item[2] not in loans:
+                    loans.append(item[2])
+
+            def callback_batch(_msg=None, user_cb=self._user_cb, payload=batch, loaned=tuple(loans)):
+                try:
+                    result = user_cb(payload)
+                    if inspect.iscoroutine(result):
+                        run_coroutine(result)
+                finally:
+                    for samples in loaned:
+                        samples.return_loan()
+
+        self._enqueue_cb(callback_batch, None)
+        self._enqueued_callback_count += 1
 
     def _drain_reader_callbacks(self, reader):
+        if self._closed:
+            return
         hit_drain_limit = False
         try:
-            for _ in range(_MAX_CALLBACKS_PER_DRAIN):
+            if self._batch_callback:
+                limit = min(_MAX_CALLBACKS_PER_DRAIN, self._batch_size)
                 if self._auto_loan_receive:
-                    result = self._loaned_take_one_from_reader(reader)
+                    items = self._loaned_take_many_from_reader(reader, limit)
                 elif self._reader_lock is not None:
                     with self._reader_lock:
-                        result = self._read_one_from_reader(reader)
+                        items = self._read_many_from_reader(reader, limit)
                 else:
-                    result = self._read_one_from_reader(reader)
-                if result is None:
-                    break
-                if result is _SKIP_SAMPLE:
-                    continue
-                if len(result) == 3:
-                    data, msg_info, loaned = result
-                else:
-                    data, msg_info = result
-                    loaned = None
-                self._enqueue_user_callback(data, msg_info, loaned)
+                    items = self._read_many_from_reader(reader, limit)
+                self._enqueue_user_batch_callback(items)
+                hit_drain_limit = len(items) >= limit
             else:
-                hit_drain_limit = True
+                if self._auto_loan_receive:
+                    count = 0
+                    for _ in range(_MAX_CALLBACKS_PER_DRAIN):
+                        result = self._loaned_take_one_from_reader(reader)
+                        if result is None:
+                            break
+                        if result is _SKIP_SAMPLE:
+                            continue
+                        data, msg_info, loaned = result
+                        self._enqueue_user_callback(data, msg_info, loaned)
+                        count += 1
+                    hit_drain_limit = count >= _MAX_CALLBACKS_PER_DRAIN
+                else:
+                    if self._reader_lock is not None:
+                        with self._reader_lock:
+                            items = self._read_many_from_reader(reader, _MAX_CALLBACKS_PER_DRAIN)
+                    else:
+                        items = self._read_many_from_reader(reader, _MAX_CALLBACKS_PER_DRAIN)
+                    for data, msg_info in items:
+                        self._enqueue_user_callback(data, msg_info, None)
+                    hit_drain_limit = len(items) >= _MAX_CALLBACKS_PER_DRAIN
         finally:
             schedule_again = False
             with self._pending_lock:
@@ -446,11 +661,12 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._enqueue_cb(drain_task, None)
     
     def on_data_available(self, reader):
-        if not self._has_callback:
+        if self._closed or not self._has_callback:
             return
         with self._pending_lock:
             if self._callback_pending:
                 self._reschedule_requested = True
+                self._dropped_reschedules += 1
                 return
             self._callback_pending = True
         self._enqueue_drain(reader)
@@ -484,7 +700,9 @@ class Subscription:
     コールバックは DDS リスナーで受信し、Executor にキューイングする。"""
 
     def __init__(self, participant, topic, qos: QoSProfile, callback, msg_ctor, enqueue_cb, 
-                 *, raw: bool = False, event_callbacks=None, pubsub_cls=None, msg_module=None):
+                 *, raw: bool = False, event_callbacks=None, pubsub_cls=None, msg_module=None,
+                 expose_fields: bool = True, batch_callback: bool = False,
+                 batch_size: int | None = None):
         self._participant = participant
         self._topic = topic
         self._callback = callback
@@ -492,8 +710,11 @@ class Subscription:
         self._msg_module = msg_module
         self._destroyed = False
         self._raw_mode = raw
+        self._expose_fields = bool(expose_fields)
         self._event_callbacks = event_callbacks or {}
         self._message_count = 0
+        self._take_count = 0
+        self._stats_started_at = time.monotonic()
         self._reader_lock = threading.Lock()
 
         # Create Subscriber
@@ -524,6 +745,9 @@ class Subscription:
             reader_lock=self._reader_lock,
             loaned_samples_cls=self._loaned_samples_cls_value,
             auto_loan_receive=False,
+            expose_fields=expose_fields,
+            batch_callback=batch_callback,
+            batch_size=batch_size,
         )
 
         # Create DataReader with listener
@@ -554,10 +778,28 @@ class Subscription:
         self._listener.set_auto_loan_receive(self._automatic_loaned_receive_enabled)
         self._cuda_ipc_topic_name = ""
         self._cuda_ipc_latest_by_field = {}
+        self._shm_topic_name = ""
+        self._shm_latest_by_field = {}
+        self._shm_local_registration = None
+        self._shm_auto_fields = tuple(
+            field.strip()
+            for field in os.environ.get("LWRCLPY_AUTO_SHM_FIELDS", "data").split(",")
+            if field.strip()
+        )
+        self._max_callbacks_per_drain = _MAX_CALLBACKS_PER_DRAIN
 
     def _set_cuda_ipc_topic(self, topic_name: str) -> None:
         self._cuda_ipc_topic_name = topic_name
         self._listener.set_cuda_attach_fn(self._attach_latest_cuda_ipc)
+
+    def _set_shared_memory_topic(self, topic_name: str) -> None:
+        self._shm_topic_name = topic_name
+        self._listener.set_cuda_attach_fn(self._attach_latest_side_channels)
+        try:
+            from .shared_memory import register_local_shared_memory_subscriber
+            self._shm_local_registration = register_local_shared_memory_subscriber(topic_name)
+        except Exception:
+            self._shm_local_registration = None
 
     def _update_cuda_ipc_metadata(self, metadata_text: str) -> None:
         try:
@@ -579,6 +821,41 @@ class Subscription:
         except Exception:
             pass
 
+    def _update_shared_memory_metadata(self, metadata_text: str) -> None:
+        try:
+            from .shared_memory import SharedMemoryMetadata, local_host_id
+            metadata = SharedMemoryMetadata.from_json(metadata_text)
+        except Exception:
+            return
+        if self._shm_topic_name and metadata.topic != self._shm_topic_name:
+            return
+        if metadata.host_id and metadata.host_id != local_host_id():
+            return
+        self._shm_latest_by_field[metadata.field] = metadata
+
+    def _attach_latest_shared_memory(self, msg) -> None:
+        if not self._shm_latest_by_field and not self._shm_topic_name:
+            return
+        try:
+            from .shared_memory import attach_shared_memory_buffer
+            metadata_items = dict(self._shm_latest_by_field)
+            if self._shm_topic_name:
+                from .shared_memory import read_latest_metadata
+                for field in self._shm_auto_fields:
+                    if field not in metadata_items:
+                        metadata = read_latest_metadata(self._shm_topic_name, field)
+                        if metadata is not None:
+                            metadata_items[field] = metadata
+                            self._shm_latest_by_field[field] = metadata
+            for metadata in tuple(metadata_items.values()):
+                attach_shared_memory_buffer(msg, metadata)
+        except Exception:
+            pass
+
+    def _attach_latest_side_channels(self, msg) -> None:
+        self._attach_latest_cuda_ipc(msg)
+        self._attach_latest_shared_memory(msg)
+
     def take(self, max_count: int = 1) -> List[Tuple[Any, MessageInfo]]:
         """Take messages directly from the DataReader (polling mode).
         
@@ -590,6 +867,8 @@ class Subscription:
             return []
         results = []
         with self._reader_lock:
+            if self._destroyed or self._reader is None:
+                return []
             for _ in range(max_count):
                 result = self._listener._take_one_from_reader(self._reader)
                 if result is None:
@@ -598,6 +877,7 @@ class Subscription:
                     continue
                 results.append(result)
         self._message_count += len(results)
+        self._take_count += len(results)
         
         return results
 
@@ -626,26 +906,36 @@ class Subscription:
 
         native = loan_cls()
         with self._reader_lock:
+            if self._destroyed or self._reader is None:
+                try:
+                    native.return_loan()
+                except Exception:
+                    pass
+                return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
             ok = native.read(self._reader, max_count) if read else native.take(self._reader, max_count)
         if not ok:
             try:
                 native.return_loan()
             except Exception:
                 pass
-            return _LoanedSamples(native, raw_mode=self._raw_mode)
-        return _LoanedSamples(native, raw_mode=self._raw_mode)
+            return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
+        return _LoanedSamples(native, raw_mode=self._raw_mode, expose_fields=self._expose_fields)
 
     def _loaned_read(self, max_count: int = 1) -> _LoanedSamples:
         return self._loaned_take(max_count, read=True)
 
     def get_publisher_count(self) -> int:
         """Return the number of publishers matched to this subscription."""
-        status_method = getattr(self._reader, "get_subscription_matched_status", None)
+        with self._reader_lock:
+            if self._destroyed or self._reader is None:
+                return 0
+            reader = self._reader
+        status_method = getattr(reader, "get_subscription_matched_status", None)
         if status_method is not None:
             count = _matched_status_count(status_method, getattr(fastdds, "SubscriptionMatchedStatus", None))
             if count is not None:
                 return count
-        handles_method = getattr(self._reader, "get_matched_publications", None)
+        handles_method = getattr(reader, "get_matched_publications", None)
         if handles_method is not None:
             count = _matched_handle_count(handles_method, getattr(fastdds, "InstanceHandleVector", None))
             if count is not None:
@@ -664,17 +954,78 @@ class Subscription:
     def _auto_loan_receive_count(self) -> int:
         return self._listener.auto_loan_receive_count
 
+    @property
+    def performance_stats(self) -> dict[str, object]:
+        elapsed = max(1e-9, time.monotonic() - self._stats_started_at)
+        delivered = self._take_count + self._listener.enqueued_callback_count
+        return {
+            "message_count": self._message_count,
+            "take_count": self._take_count,
+            "enqueued_callback_count": self._listener.enqueued_callback_count,
+            "delivered_rate_hz": delivered / elapsed,
+            "data_sharing_enabled": self._data_sharing_enabled,
+            "can_loan_received_messages": self._can_loan_received_messages,
+            "automatic_loaned_receive_enabled": self._automatic_loaned_receive_enabled,
+            "auto_loan_receive_count": self._auto_loan_receive_count,
+            "max_callbacks_per_drain": self._max_callbacks_per_drain,
+            "batch_callback": self._listener._batch_callback,
+            "batch_size": self._listener._batch_size,
+            "reschedule_requests_while_pending": self._listener.dropped_reschedules,
+        }
+
+    def reset_performance_stats(self) -> None:
+        self._message_count = 0
+        self._take_count = 0
+        self._stats_started_at = time.monotonic()
+        self._listener._auto_loan_receive_count = 0
+        self._listener._dropped_reschedules = 0
+        self._listener._enqueued_callback_count = 0
+
     def destroy(self) -> None:
-        """Mark as destroyed. Fast DDS will clean up resources automatically."""
+        """Destroy the Fast DDS DataReader and Subscriber owned by this object."""
         if self._destroyed:
             return
         self._destroyed = True
-        
-        # Don't explicitly delete Fast DDS entities - let Fast DDS handle cleanup
-        # Attempting to delete them causes "double free" errors
-        # Fast DDS will automatically clean up when the participant is destroyed
-        self._reader = None
-        self._subscriber = None
+
+        registration = getattr(self, "_shm_local_registration", None)
+        if registration is not None:
+            try:
+                registration.close()
+            except Exception:
+                pass
+            self._shm_local_registration = None
+
+        listener = getattr(self, "_listener", None)
+        if listener is not None:
+            close = getattr(listener, "close", None)
+            if callable(close):
+                close()
+
+        with self._reader_lock:
+            reader = self._reader
+            subscriber = self._subscriber
+            if reader is not None:
+                try:
+                    set_listener = getattr(reader, "set_listener", None)
+                    if callable(set_listener):
+                        set_listener(None)
+                except Exception:
+                    pass
+                try:
+                    delete_reader = getattr(subscriber, "delete_datareader", None) if subscriber is not None else None
+                    if callable(delete_reader):
+                        delete_reader(reader)
+                except Exception:
+                    pass
+            if subscriber is not None:
+                try:
+                    delete_subscriber = getattr(self._participant, "delete_subscriber", None)
+                    if callable(delete_subscriber):
+                        delete_subscriber(subscriber)
+                except Exception:
+                    pass
+            self._reader = None
+            self._subscriber = None
 
     def get_topic_name(self) -> str:
         try:

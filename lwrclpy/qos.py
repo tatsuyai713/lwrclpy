@@ -58,6 +58,16 @@ class LivelinessPolicy(Enum):
     UNKNOWN = 0
 
 
+def _coerce_policy(value, enum_cls):
+    if isinstance(value, enum_cls):
+        return value
+    try:
+        return enum_cls(value)
+    except ValueError as exc:
+        valid = ", ".join(member.name for member in enum_cls)
+        raise ValueError(f"Invalid {enum_cls.__name__}: {value!r}; expected one of {valid}") from exc
+
+
 # Infinite duration constant for QoS settings
 class _InfiniteDuration:
     """Represents an infinite duration for QoS settings."""
@@ -79,6 +89,8 @@ class Duration:
     def __init__(self, *, seconds: float = 0.0, nanoseconds: int = 0):
         total_ns = int(nanoseconds)
         total_ns += int(seconds * 1_000_000_000)
+        if total_ns < 0:
+            raise ValueError("Duration must be non-negative")
         self._nanoseconds = total_ns
     
     @property
@@ -106,16 +118,30 @@ class QoSProfile:
         liveliness: LivelinessPolicy = LivelinessPolicy.SYSTEM_DEFAULT,
         liveliness_lease_duration: Optional[Duration] = None,
         avoid_ros_namespace_conventions: bool = False,
+        max_samples: Optional[int] = None,
+        max_instances: Optional[int] = None,
+        max_samples_per_instance: Optional[int] = None,
+        async_publish: bool = False,
     ):
         self.depth = int(depth)
-        self.history = history
-        self.reliability = reliability
-        self.durability = durability
+        if self.depth < 0:
+            raise ValueError("QoS depth must be non-negative")
+        self.history = _coerce_policy(history, HistoryPolicy)
+        self.reliability = _coerce_policy(reliability, ReliabilityPolicy)
+        self.durability = _coerce_policy(durability, DurabilityPolicy)
         self.lifespan = lifespan
         self.deadline = deadline
-        self.liveliness = liveliness
+        self.liveliness = _coerce_policy(liveliness, LivelinessPolicy)
         self.liveliness_lease_duration = liveliness_lease_duration
         self.avoid_ros_namespace_conventions = avoid_ros_namespace_conventions
+        self.max_samples = None if max_samples is None else int(max_samples)
+        self.max_instances = None if max_instances is None else int(max_instances)
+        self.max_samples_per_instance = None if max_samples_per_instance is None else int(max_samples_per_instance)
+        self.async_publish = bool(async_publish)
+        for attr in ("max_samples", "max_instances", "max_samples_per_instance"):
+            value = getattr(self, attr)
+            if value is not None and value < 0:
+                raise ValueError(f"QoS {attr} must be non-negative")
 
     def _apply_duration(self, target, duration_value: Optional[Duration]):
         """Apply duration to a QoS duration field."""
@@ -132,6 +158,30 @@ class QoSProfile:
         except Exception:
             pass
 
+    def _apply_resource_limits(self, qos_obj):
+        try:
+            limits = qos_obj.resource_limits()
+        except Exception:
+            return
+        for attr in ("max_samples", "max_instances", "max_samples_per_instance"):
+            value = getattr(self, attr)
+            if value is not None and hasattr(limits, attr):
+                try:
+                    setattr(limits, attr, value)
+                except Exception:
+                    pass
+
+    def _apply_publish_mode(self, wq):
+        if not self.async_publish:
+            return
+        try:
+            publish_mode = wq.publish_mode()
+            async_kind = getattr(fastdds, "ASYNCHRONOUS_PUBLISH_MODE", None)
+            if async_kind is not None and hasattr(publish_mode, "kind"):
+                publish_mode.kind = async_kind
+        except Exception:
+            pass
+
     def apply_to_writer(self, wq: "fastdds.DataWriterQos"):
         # History
         wq.history().kind = self.history.value
@@ -140,6 +190,8 @@ class QoSProfile:
             wq.history().depth = self.depth
         except Exception:
             pass
+        self._apply_resource_limits(wq)
+        self._apply_publish_mode(wq)
         # Reliability / Durability
         wq.reliability().kind = self.reliability.value
         wq.durability().kind = self.durability.value
@@ -177,6 +229,7 @@ class QoSProfile:
             rq.history().depth = self.depth
         except Exception:
             pass
+        self._apply_resource_limits(rq)
         rq.reliability().kind = self.reliability.value
         rq.durability().kind = self.durability.value
         
@@ -263,6 +316,41 @@ class QoSProfile:
             durability=DurabilityPolicy.VOLATILE,
         )
 
+    @classmethod
+    def low_latency(cls, depth: int = 1) -> "QoSProfile":
+        return cls(
+            depth=depth,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
+    @classmethod
+    def high_throughput(cls, depth: int = 64, *, async_publish: bool = True) -> "QoSProfile":
+        return cls(
+            depth=depth,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            max_samples=max(depth * 4, depth),
+            max_instances=16,
+            max_samples_per_instance=max(depth * 4, depth),
+            async_publish=async_publish,
+        )
+
+    @classmethod
+    def bulk_reliable(cls, depth: int = 128, *, async_publish: bool = True) -> "QoSProfile":
+        return cls(
+            depth=depth,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            max_samples=max(depth * 4, depth),
+            max_instances=16,
+            max_samples_per_instance=max(depth * 4, depth),
+            async_publish=async_publish,
+        )
+
 
 # Predefined QoS profiles matching rclpy
 qos_profile_sensor_data = QoSProfile.sensor_data()
@@ -272,3 +360,6 @@ qos_profile_parameters = QoSProfile.parameters()
 qos_profile_parameter_events = QoSProfile.parameter_events()
 qos_profile_action_status_default = QoSProfile.action_status_default()
 qos_profile_best_available = QoSProfile.best_available()
+qos_profile_low_latency = QoSProfile.low_latency()
+qos_profile_high_throughput = QoSProfile.high_throughput()
+qos_profile_bulk_reliable = QoSProfile.bulk_reliable()

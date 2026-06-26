@@ -51,6 +51,7 @@ class CudaIpcMetadata:
     device_id: int
     owner_pid: int
     created_ns: int
+    sequence_number: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -75,6 +76,7 @@ class CudaIpcMetadata:
             device_id=int(data.get("device_id", 0)),
             owner_pid=int(data.get("owner_pid", 0)),
             created_ns=int(data.get("created_ns", 0)),
+            sequence_number=int(data.get("sequence_number", 0)),
         )
 
 
@@ -212,6 +214,7 @@ def export_cuda_ipc_metadata(
     token: str | None = None,
     nbytes: int | None = None,
     device_id: int | None = None,
+    sequence_number: int = 0,
 ) -> CudaIpcMetadata | None:
     """Create CUDA IPC metadata for an object exposing ``__cuda_array_interface__``."""
 
@@ -258,6 +261,7 @@ def export_cuda_ipc_metadata(
         device_id=int(device_id if device_id is not None else _device_id_from_cupy()),
         owner_pid=os.getpid(),
         created_ns=time.time_ns(),
+        sequence_number=int(sequence_number),
     )
 
 

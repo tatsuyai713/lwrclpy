@@ -10,6 +10,9 @@ from lwrclpy.qos import (
     qos_profile_parameters,
     qos_profile_parameter_events,
     qos_profile_best_available,
+    qos_profile_low_latency,
+    qos_profile_high_throughput,
+    qos_profile_bulk_reliable,
     INFINITE_DURATION,
     Duration,
 )
@@ -30,6 +33,9 @@ class QoSPresetProfiles:
     PARAMETERS = qos_profile_parameters
     PARAMETER_EVENTS = qos_profile_parameter_events
     ACTION_STATUS_DEFAULT = QoSProfile.action_status_default()
+    LOW_LATENCY = qos_profile_low_latency
+    HIGH_THROUGHPUT = qos_profile_high_throughput
+    BULK_RELIABLE = qos_profile_bulk_reliable
 
 
 __all__ = [
@@ -49,6 +55,9 @@ __all__ = [
     "qos_profile_parameters",
     "qos_profile_parameter_events",
     "qos_profile_best_available",
+    "qos_profile_low_latency",
+    "qos_profile_high_throughput",
+    "qos_profile_bulk_reliable",
     "INFINITE_DURATION",
     "Duration",
 ]

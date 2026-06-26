@@ -1,3 +1,6 @@
+import logging
+import threading
+
 from ._callback_queue import CallbackQueue
 from .publisher import Publisher
 from .subscription import Subscription
@@ -6,6 +9,9 @@ from .typesupport import RegisteredType
 from .utils import resolve_service_type, SERVICE_REQUEST_PREFIX, SERVICE_RESPONSE_PREFIX
 from .utils import get_or_create_topic
 from .context import get_participant, track_entity, untrack_entity
+
+
+_logger = logging.getLogger(__name__)
 
 
 class Service:
@@ -18,6 +24,8 @@ class Service:
         self._prefix = topic_prefix
         self._callback_queue = None if enqueue_cb is not None else CallbackQueue()
         self._enqueue_cb = enqueue_cb or self._callback_queue.enqueue
+        self._destroyed = False
+        self._lock = threading.Lock()
 
         req_cls, res_cls, _req_pubsub, _res_pubsub = resolve_service_type(service_type)
         self._request_cls = req_cls
@@ -37,15 +45,24 @@ class Service:
         )
 
         def _on_request(msg):
+            with self._lock:
+                if self._destroyed:
+                    return
             response = self._response_cls()
             try:
                 ret = self._callback(msg, response)
                 if ret is not None:
                     response = ret
             except Exception:
-                # swallow user errors
+                _logger.exception("Service callback failed for %s", self._service_name)
                 return
-            self._response_pub.publish(response)
+            with self._lock:
+                if self._destroyed:
+                    return
+                publisher = self._response_pub
+            if publisher is None:
+                return
+            publisher.publish(response)
 
         self._request_sub = Subscription(
             self._participant,
@@ -65,6 +82,11 @@ class Service:
 
     def destroy(self):
         """Clean up service resources in the correct order."""
+        with self._lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
+
         # Untrack from global cleanup
         untrack_entity(self)
         

@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -20,6 +21,13 @@ from .client import Client
 from .service import Service
 from .clock import Clock
 from .guard_condition import GuardCondition
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except Exception:
+        return default
 
 
 # --- rclpy.Rate 相当（壁時計ベース） -----------------------------------------
@@ -259,21 +267,30 @@ class Node:
         self._subscriptions: List[Subscription] = []
         self._clients: List[Client] = []
         self._services: List[Service] = []
+        self._action_servers: List[Any] = []
+        self._action_clients: List[Any] = []
         self._timers: List[Any] = []
         self._guard_conditions: List[GuardCondition] = []
         self._callback_queue: deque = deque()
-        self._callback_lock = threading.Lock()  # only used by _drain_callbacks
+        self._callback_lock = threading.Lock()
+        self._callback_queue_maxsize = _env_int("LWRCLPY_NODE_CALLBACK_QUEUE_MAXSIZE", 0)
+        self._callback_queue_drop_policy = os.environ.get("LWRCLPY_NODE_CALLBACK_DROP_POLICY", "drop_oldest")
+        self._callback_drop_count = 0
         self._executor_wake_event = None  # set by Executor.add_node()
         self._type_cache = {}  # key: message classの完全修飾名 / module名
         self._parameters: dict[str, Parameter] = {}
+        self._parameter_descriptors: dict[str, Any] = {}
         self._parameters_lock = threading.Lock()
         self._allow_undeclared_parameters = allow_undeclared_parameters
         self._auto_declare_from_overrides = automatically_declare_parameters_from_overrides
         self._clock = Clock()
         self._default_callback_group = None
         self._callback_groups: List[Any] = []
+        self._entity_callback_groups: dict[Any, Any] = {}
         self._cuda_ipc_metadata_publishers: dict[str, Publisher] = {}
         self._cuda_ipc_metadata_subscriptions: List[Subscription] = []
+        self._shm_metadata_publishers: dict[str, Publisher] = {}
+        self._shm_metadata_subscriptions: List[Subscription] = []
 
         if parameters:
             self.declare_parameters("", [(p.name, p.value) if isinstance(p, Parameter) else p for p in parameters])
@@ -317,13 +334,21 @@ class Node:
     def get_clock(self) -> Clock:
         return self._clock
 
-    def declare_parameter(self, name: str, value=None):
+    def declare_parameter(self, name: str, value=None, descriptor=None, ignore_override: bool = False):
         """Store a parameter locally (best-effort rclpy compatibility)."""
+        del ignore_override
         with self._parameters_lock:
             if name in self._parameters:
+                if descriptor is not None:
+                    self._parameter_descriptors[name] = descriptor
                 return self._parameters[name]
             param = Parameter(name, value)
+            validation = self._validate_parameter_update(param, descriptor)
+            if not validation.successful:
+                raise ValueError(validation.reason)
             self._parameters[name] = param
+            if descriptor is not None:
+                self._parameter_descriptors[name] = descriptor
             return param
 
     def declare_parameters(self, namespace: str, parameters):
@@ -332,10 +357,16 @@ class Node:
         declared = []
         for p in parameters:
             if isinstance(p, Parameter):
-                name, value = p.name, p.value
+                name, value, descriptor = p.name, p.value, None
             else:
-                name, value = p
-            declared.append(self.declare_parameter(ns + name, value))
+                if len(p) == 2:
+                    name, value = p
+                    descriptor = None
+                elif len(p) == 3:
+                    name, value, descriptor = p
+                else:
+                    raise TypeError("declare_parameters expects (name, value) or (name, value, descriptor) tuples")
+            declared.append(self.declare_parameter(ns + name, value, descriptor=descriptor))
         return declared
 
     def has_parameter(self, name: str) -> bool:
@@ -367,19 +398,141 @@ class Node:
                 param = coerce_parameter(p)
                 if param.name not in self._parameters:
                     if self._auto_declare_from_overrides or self._allow_undeclared_parameters:
-                        self._parameters[param.name] = Parameter(param.name, param.value)
+                        pass
                     else:
                         results.append(SetParametersResult(False, f"Parameter '{param.name}' not declared"))
                         continue
+                validation = self._validate_parameter_update(param, self._parameter_descriptors.get(param.name))
+                if not validation.successful:
+                    results.append(validation)
+                    continue
                 self._parameters[param.name] = param
                 results.append(SetParametersResult(True, ""))
         return results
 
     def set_parameters_atomically(self, parameters) -> SetParametersResult:
-        res = self.set_parameters(parameters)
-        ok = all(r.successful for r in res)
-        reason = next((r.reason for r in res if not r.successful), "")
-        return SetParametersResult(ok, reason)
+        coerced = [coerce_parameter(p) for p in parameters]
+        with self._parameters_lock:
+            for param in coerced:
+                if param.name not in self._parameters and not (
+                    self._auto_declare_from_overrides or self._allow_undeclared_parameters
+                ):
+                    return SetParametersResult(False, f"Parameter '{param.name}' not declared")
+                validation = self._validate_parameter_update(param, self._parameter_descriptors.get(param.name))
+                if not validation.successful:
+                    return validation
+            for param in coerced:
+                self._parameters[param.name] = param
+        return SetParametersResult(True, "")
+
+    def describe_parameter(self, name: str):
+        return self._parameter_descriptors.get(name)
+
+    def describe_parameters(self, names):
+        return [self.describe_parameter(name) for name in names]
+
+    def _validate_parameter_update(self, param: Parameter, descriptor) -> SetParametersResult:
+        if descriptor is None:
+            return SetParametersResult(True, "")
+        if getattr(descriptor, "read_only", False) and param.name in self._parameters:
+            return SetParametersResult(False, f"Parameter '{param.name}' is read-only")
+
+        expected_type = getattr(descriptor, "type", ParameterType.NOT_SET)
+        try:
+            expected_type = ParameterType(expected_type)
+        except ValueError:
+            return SetParametersResult(False, f"Invalid descriptor type for parameter '{param.name}'")
+        if expected_type != ParameterType.NOT_SET and param.type != expected_type:
+            return SetParametersResult(False, f"Parameter '{param.name}' has type {param.type.name}; expected {expected_type.name}")
+
+        if param.type == ParameterType.INTEGER:
+            return self._validate_numeric_ranges(param.name, param.value, getattr(descriptor, "integer_range", ()))
+        if param.type == ParameterType.DOUBLE:
+            return self._validate_numeric_ranges(param.name, param.value, getattr(descriptor, "floating_point_range", ()))
+        return SetParametersResult(True, "")
+
+    @staticmethod
+    def _validate_numeric_ranges(name: str, value, ranges) -> SetParametersResult:
+        if not ranges:
+            return SetParametersResult(True, "")
+        for range_spec in ranges:
+            low = getattr(range_spec, "from_value", None)
+            high = getattr(range_spec, "to_value", None)
+            step = getattr(range_spec, "step", 0)
+            if low is not None and value < low:
+                return SetParametersResult(False, f"Parameter '{name}' is below minimum {low}")
+            if high is not None and value > high:
+                return SetParametersResult(False, f"Parameter '{name}' is above maximum {high}")
+            if step:
+                base = low or 0
+                offset = (value - base) / step
+                if abs(offset - round(offset)) > 1e-9:
+                    return SetParametersResult(False, f"Parameter '{name}' does not satisfy step {step}")
+        return SetParametersResult(True, "")
+
+    @property
+    def default_callback_group(self):
+        if self._default_callback_group is None:
+            from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            self._default_callback_group = MutuallyExclusiveCallbackGroup()
+            self._callback_groups.append(self._default_callback_group)
+        return self._default_callback_group
+
+    @property
+    def callback_groups(self):
+        return list(self._callback_groups)
+
+    def create_callback_group(self, group_type=None):
+        if group_type is None:
+            from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            group_type = MutuallyExclusiveCallbackGroup
+        group = group_type()
+        if group not in self._callback_groups:
+            self._callback_groups.append(group)
+        return group
+
+    def _resolve_callback_group(self, callback_group):
+        group = callback_group if callback_group is not None else self.default_callback_group
+        if group not in self._callback_groups:
+            self._callback_groups.append(group)
+        return group
+
+    def _register_entity_callback_group(self, entity, callback_group):
+        if callback_group is None:
+            return
+        self._entity_callback_groups[entity] = callback_group
+        add_entity = getattr(callback_group, "add_entity", None)
+        if callable(add_entity):
+            add_entity(entity)
+
+    def _get_callback_group(self, entity):
+        return self._entity_callback_groups.get(entity)
+
+    def _unregister_entity_callback_group(self, entity):
+        group = self._entity_callback_groups.pop(entity, None)
+        if group is not None:
+            remove_entity = getattr(group, "remove_entity", None)
+            if callable(remove_entity):
+                remove_entity(entity)
+
+    def _begin_callback_execution(self, entity):
+        group = self._get_callback_group(entity) if entity is not None else None
+        if group is None:
+            return None
+        can_execute = getattr(group, "can_execute", None)
+        if callable(can_execute) and not can_execute(entity):
+            return None
+        beginning_execution = getattr(group, "beginning_execution", None)
+        if callable(beginning_execution) and not beginning_execution(entity):
+            return None
+        return group
+
+    def _end_callback_execution(self, entity, group):
+        if entity is None or group is None:
+            return
+        ending_execution = getattr(group, "ending_execution", None)
+        if callable(ending_execution):
+            ending_execution(entity)
 
     # ------------------- Publisher / Subscription 等 -------------------
     def create_publisher(
@@ -411,6 +564,7 @@ class Node:
         self._topics[resolved_topic] = (topic_obj, owned)
         pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls, msg_module=_mod, pubsub_cls=_pubsub_cls)
         self._configure_cuda_ipc_publisher(pub, resolved_topic, qos)
+        self._configure_shared_memory_publisher(pub, resolved_topic, qos)
         self._publishers.append(pub)
         return pub
 
@@ -426,6 +580,10 @@ class Node:
         event_callbacks=None,
         qos_overriding_options=None,
         content_filter_options=None,
+        fast_callback: bool = False,
+        expose_fields: Optional[bool] = None,
+        batch_callback: bool = False,
+        batch_size: Optional[int] = None,
     ):
         if raw:
             raise NotImplementedError(
@@ -439,7 +597,9 @@ class Node:
             raise NotImplementedError("create_subscription() does not support qos_overriding_options")
         if content_filter_options is not None:
             raise NotImplementedError("create_subscription() does not support content_filter_options")
-        del callback_group
+        if expose_fields is None:
+            expose_fields = not fast_callback
+        group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
@@ -454,57 +614,104 @@ class Node:
         self._topics[resolved_topic] = (topic_obj, owned)
         # メッセージ生成
         msg_ctor = msg_cls
+        entity_ref = {}
+
+        def enqueue_subscription_callback(cb, msg):
+            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+
         sub = Subscription(
             self._participant,
             topic_obj,
             qos,
             callback,
             msg_ctor,
-            self._enqueue_callback,
+            enqueue_subscription_callback,
             raw=raw,
             event_callbacks=event_callbacks,
             pubsub_cls=_pubsub_cls,
             msg_module=_mod,
+            expose_fields=expose_fields,
+            batch_callback=batch_callback,
+            batch_size=batch_size,
         )
+        entity_ref["entity"] = sub
+        self._register_entity_callback_group(sub, group)
         self._configure_cuda_ipc_subscription(sub, resolved_topic, qos)
+        self._configure_shared_memory_subscription(sub, resolved_topic, qos)
         self._subscriptions.append(sub)
         return sub
 
     def create_client(self, srv_type, srv_name: str, qos_profile: QoSProfile | int = 10, *, callback_group=None):
+        group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        client = Client(srv_type, resolved, qos, topic_prefix=self._service_prefix)
+        entity_ref = {}
+
+        def enqueue_client_callback(cb, msg):
+            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+
+        client = Client(srv_type, resolved, qos, topic_prefix=self._service_prefix, enqueue_cb=enqueue_client_callback)
+        entity_ref["entity"] = client
         self._clients.append(client)
+        self._register_entity_callback_group(client, group)
         return client
 
     def create_service(self, srv_type, srv_name: str, callback, qos_profile: QoSProfile | int = 10, *, callback_group=None):
+        group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         resolved = resolve_name(srv_name, self._namespace, self._name)
-        service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix)
+        entity_ref = {}
+
+        def enqueue_service_callback(cb, msg):
+            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+
+        service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix, enqueue_cb=enqueue_service_callback)
+        entity_ref["entity"] = service
         self._services.append(service)
+        self._register_entity_callback_group(service, group)
         return service
 
     def create_action_server(self, action_type, action_name: str, execute_callback, **kwargs):
         from .action import ActionServer
-        return ActionServer(self, action_type, action_name, execute_callback, **kwargs)
+        server = ActionServer(self, action_type, action_name, execute_callback, **kwargs)
+        self._action_servers.append(server)
+        return server
 
     def create_action_client(self, action_type, action_name: str, **kwargs):
         from .action import ActionClient
-        return ActionClient(self, action_type, action_name, **kwargs)
+        client = ActionClient(self, action_type, action_name, **kwargs)
+        self._action_clients.append(client)
+        return client
 
     def create_timer(self, period_sec: float, callback, *, callback_group=None, oneshot: bool = False):
         from .timer import create_timer
+        group = self._resolve_callback_group(callback_group)
+        entity_ref = {}
+
+        def enqueue_timer_callback(cb, msg):
+            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+
         # Enqueue timer callbacks into the node's callback queue
-        t = create_timer(period_sec, callback, oneshot=oneshot, enqueue_cb=self._enqueue_callback)
+        t = create_timer(period_sec, callback, oneshot=oneshot, enqueue_cb=enqueue_timer_callback)
+        entity_ref["entity"] = t
         self._timers.append(t)
+        self._register_entity_callback_group(t, group)
         return t
 
     def create_wall_timer(self, period_sec: float, callback):
         return self.create_timer(period_sec, callback)
 
     def create_guard_condition(self, callback, *, callback_group=None):
-        gc = GuardCondition(callback, self._enqueue_callback)
+        group = self._resolve_callback_group(callback_group)
+        entity_ref = {}
+
+        def enqueue_guard_callback(cb, msg):
+            self._enqueue_callback(cb, msg, entity_ref.get("entity"))
+
+        gc = GuardCondition(callback, enqueue_guard_callback)
+        entity_ref["entity"] = gc
         self._guard_conditions.append(gc)
+        self._register_entity_callback_group(gc, group)
         return gc
 
     def destroy_publisher(self, pub):
@@ -518,6 +725,7 @@ class Node:
         try:
             sub.destroy()
         finally:
+            self._unregister_entity_callback_group(sub)
             if sub in self._subscriptions:
                 self._subscriptions.remove(sub)
 
@@ -525,6 +733,7 @@ class Node:
         try:
             timer.cancel()
         finally:
+            self._unregister_entity_callback_group(timer)
             if timer in self._timers:
                 self._timers.remove(timer)
 
@@ -532,6 +741,7 @@ class Node:
         try:
             client.destroy()
         finally:
+            self._unregister_entity_callback_group(client)
             if client in self._clients:
                 self._clients.remove(client)
 
@@ -539,13 +749,29 @@ class Node:
         try:
             service.destroy()
         finally:
+            self._unregister_entity_callback_group(service)
             if service in self._services:
                 self._services.remove(service)
+
+    def destroy_action_server(self, server):
+        try:
+            server.destroy()
+        finally:
+            if server in self._action_servers:
+                self._action_servers.remove(server)
+
+    def destroy_action_client(self, client):
+        try:
+            client.destroy()
+        finally:
+            if client in self._action_clients:
+                self._action_clients.remove(client)
 
     def destroy_guard_condition(self, gc):
         try:
             gc.destroy()
         finally:
+            self._unregister_entity_callback_group(gc)
             if gc in self._guard_conditions:
                 self._guard_conditions.remove(gc)
 
@@ -556,6 +782,7 @@ class Node:
         # Cancel timers first
         for t in self._timers:
             try:
+                self._unregister_entity_callback_group(t)
                 t.cancel()
             except Exception:
                 pass
@@ -564,6 +791,7 @@ class Node:
         # Destroy clients
         for client in self._clients:
             try:
+                self._unregister_entity_callback_group(client)
                 client.destroy()
             except Exception:
                 pass
@@ -572,10 +800,25 @@ class Node:
         # Destroy services
         for service in self._services:
             try:
+                self._unregister_entity_callback_group(service)
                 service.destroy()
             except Exception:
                 pass
         self._services.clear()
+
+        # Destroy actions
+        for server in self._action_servers:
+            try:
+                server.destroy()
+            except Exception:
+                pass
+        self._action_servers.clear()
+        for client in self._action_clients:
+            try:
+                client.destroy()
+            except Exception:
+                pass
+        self._action_clients.clear()
         
         # Destroy publishers
         for pub in self._publishers:
@@ -588,6 +831,7 @@ class Node:
         # Destroy subscriptions
         for sub in self._subscriptions:
             try:
+                self._unregister_entity_callback_group(sub)
                 sub.destroy()
             except Exception:
                 pass
@@ -596,10 +840,14 @@ class Node:
         # Destroy guard conditions
         for gc in self._guard_conditions:
             try:
+                self._unregister_entity_callback_group(gc)
                 gc.destroy()
             except Exception:
                 pass
         self._guard_conditions.clear()
+        self._entity_callback_groups.clear()
+        with self._callback_lock:
+            self._callback_queue.clear()
         
         # Note: Topics are managed by Fast DDS and shared across multiple
         # DataWriters/DataReaders. We don't delete them explicitly to avoid
@@ -694,6 +942,69 @@ class Node:
         self._subscriptions.append(sub)
         return sub
 
+    def _create_shared_memory_metadata_publisher(self, source_topic: str, qos: QoSProfile) -> Publisher | None:
+        try:
+            from .shared_memory import shared_memory_metadata_topic
+            metadata_topic = shared_memory_metadata_topic(source_topic)
+        except Exception:
+            return None
+        cached = self._shm_metadata_publishers.get(metadata_topic)
+        if cached is not None:
+            return cached
+        resolved = self._resolve_std_msgs_string()
+        if resolved is None:
+            return None
+        mod, msg_cls, pubsub_cls = resolved
+        type_name = self._ensure_registered_type(msg_cls)
+        if not type_name:
+            return None
+        topic_obj, owned = self._create_topic(metadata_topic, type_name)
+        self._topics[metadata_topic] = (topic_obj, owned)
+        try:
+            pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls, msg_module=mod, pubsub_cls=pubsub_cls)
+        except Exception:
+            return None
+        self._shm_metadata_publishers[metadata_topic] = pub
+        self._publishers.append(pub)
+        return pub
+
+    def _create_shared_memory_metadata_subscription(self, source_topic: str, qos: QoSProfile, callback) -> Subscription | None:
+        try:
+            from .shared_memory import shared_memory_metadata_topic, get_string_data
+            metadata_topic = shared_memory_metadata_topic(source_topic)
+        except Exception:
+            return None
+        resolved = self._resolve_std_msgs_string()
+        if resolved is None:
+            return None
+        mod, msg_cls, pubsub_cls = resolved
+        type_name = self._ensure_registered_type(msg_cls)
+        if not type_name:
+            return None
+        topic_obj, owned = self._create_topic(metadata_topic, type_name)
+        self._topics[metadata_topic] = (topic_obj, owned)
+
+        def on_metadata(msg):
+            callback(get_string_data(msg))
+
+        try:
+            sub = Subscription(
+                self._participant,
+                topic_obj,
+                qos,
+                on_metadata,
+                msg_cls,
+                self._enqueue_callback,
+                raw=False,
+                pubsub_cls=pubsub_cls,
+                msg_module=mod,
+            )
+        except Exception:
+            return None
+        self._shm_metadata_subscriptions.append(sub)
+        self._subscriptions.append(sub)
+        return sub
+
     def _configure_cuda_ipc_publisher(self, pub: Publisher, resolved_topic: str, qos: QoSProfile) -> None:
         try:
             from .cuda_ipc import cuda_metadata_topic
@@ -712,6 +1023,24 @@ class Node:
         except Exception:
             pass
 
+    def _configure_shared_memory_publisher(self, pub: Publisher, resolved_topic: str, qos: QoSProfile) -> None:
+        try:
+            from .shared_memory import shared_memory_metadata_topic
+            metadata_pub = self._create_shared_memory_metadata_publisher(resolved_topic, qos)
+            if metadata_pub is not None:
+                pub._set_shared_memory_metadata_publisher(metadata_pub, shared_memory_metadata_topic(resolved_topic))
+        except Exception:
+            pass
+
+    def _configure_shared_memory_subscription(self, sub: Subscription, resolved_topic: str, qos: QoSProfile) -> None:
+        try:
+            from .shared_memory import shared_memory_metadata_topic
+            metadata_topic = shared_memory_metadata_topic(resolved_topic)
+            sub._set_shared_memory_topic(metadata_topic)
+            self._create_shared_memory_metadata_subscription(resolved_topic, qos, sub._update_shared_memory_metadata)
+        except Exception:
+            pass
+
     # ------------- internal helpers -----------------
     def _create_topic(self, name: str, type_name: str):
         # Reuse already created topics per name when possible to avoid duplicate registration
@@ -721,31 +1050,60 @@ class Node:
         return get_or_create_topic(self._participant, name, type_name)
 
     # ---- executor enqueue/dequeue -------------------------------------------------
-    # deque.append / popleft are atomic under CPython's GIL, so most operations
-    # are lock-free.  Only _drain_callbacks uses the lock (swap-and-clear).
-    def _enqueue_callback(self, cb, msg):
-        self._callback_queue.append((cb, msg))
+    def _enqueue_callback(self, cb, msg, entity=None):
+        dropped_new = False
+        with self._callback_lock:
+            if self._callback_queue_maxsize and len(self._callback_queue) >= self._callback_queue_maxsize:
+                if self._callback_queue_drop_policy == "drop_newest":
+                    self._callback_drop_count += 1
+                    dropped_new = True
+                else:
+                    self._callback_queue.popleft()
+                    self._callback_drop_count += 1
+            if dropped_new:
+                return
+            self._callback_queue.append((cb, msg, entity))
         # Wake the executor immediately after enqueuing
         wake = self._executor_wake_event
         if wake is not None:
             wake.set()
 
     def _drain_callbacks(self):
-        with self._callback_lock:
-            queue = list(self._callback_queue)
-            self._callback_queue.clear()
+        queue = []
+        while True:
+            item = self._pop_callback()
+            if item is None:
+                break
+            queue.append(item)
         return queue
 
     def _pop_callback(self):
-        try:
-            return self._callback_queue.popleft()
-        except IndexError:
-            return None
+        with self._callback_lock:
+            remaining = len(self._callback_queue)
+        for _ in range(remaining):
+            with self._callback_lock:
+                try:
+                    item = self._callback_queue.popleft()
+                except IndexError:
+                    return None
+            if len(item) == 3:
+                cb, msg, entity = item
+            else:
+                cb, msg = item
+                entity = None
+            group = self._begin_callback_execution(entity)
+            if entity is not None and self._get_callback_group(entity) is not None and group is None:
+                with self._callback_lock:
+                    self._callback_queue.append(item)
+                continue
+            return cb, msg, entity, group
+        return None
 
     def _has_pending_work(self) -> bool:
         """Internal: check if callbacks are queued or timers are still active."""
-        if self._callback_queue:
-            return True
+        with self._callback_lock:
+            if self._callback_queue:
+                return True
         for t in self._timers:
             try:
                 if not t.is_canceled():
@@ -753,6 +1111,18 @@ class Node:
             except Exception:
                 continue
         return False
+
+    @property
+    def performance_stats(self) -> dict[str, object]:
+        with self._callback_lock:
+            queue_size = len(self._callback_queue)
+            dropped = self._callback_drop_count
+        return {
+            "callback_queue_size": queue_size,
+            "callback_queue_maxsize": self._callback_queue_maxsize,
+            "callback_queue_drop_policy": self._callback_queue_drop_policy,
+            "callback_drop_count": dropped,
+        }
 
 
 # --- Module-level helpers to mirror rclpy API --------------------------------

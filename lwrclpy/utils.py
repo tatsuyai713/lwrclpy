@@ -1,4 +1,5 @@
 import importlib
+import threading
 import types
 
 
@@ -9,6 +10,11 @@ ACTION_PREFIX = "ra/"
 
 _RETCODE_OK_UNSET = object()
 _retcode_ok_const = _RETCODE_OK_UNSET
+_resolve_generated_type_cache = {}
+_resolve_service_type_cache = {}
+_resolve_action_type_cache = {}
+_topic_cache = {}
+_cache_lock = threading.RLock()
 
 
 def _get_retcode_ok_const():
@@ -200,6 +206,12 @@ def resolve_generated_type(obj):
       - モジュールに <Name> クラスと <Name>PubSubType が同居
       - もしくはクラスを直接渡す（この場合は pubsub 名は <ClassName>PubSubType）
     """
+    cache_key = obj
+    with _cache_lock:
+        cached = _resolve_generated_type_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     # 1) 基底モジュールを取得
     if isinstance(obj, type):  # クラスが渡された
         msg_cls = obj
@@ -213,7 +225,10 @@ def resolve_generated_type(obj):
             raise RuntimeError(
                 f"PubSubType not found (expected '{pubsub_name}') in module '{mod.__name__}'"
             )
-        return mod, msg_cls, pubsub_cls
+        result = (mod, msg_cls, pubsub_cls)
+        with _cache_lock:
+            _resolve_generated_type_cache[cache_key] = result
+        return result
 
     # モジュールが渡された場合
     if isinstance(obj, types.ModuleType):
@@ -226,7 +241,10 @@ def resolve_generated_type(obj):
     pubsub_cls, msg_cls = _pair_from_module(mod)
     if pubsub_cls is None or msg_cls is None:
         raise RuntimeError("Failed to resolve generated type (module/class mismatch)")
-    return mod, msg_cls, pubsub_cls
+    result = (mod, msg_cls, pubsub_cls)
+    with _cache_lock:
+        _resolve_generated_type_cache[cache_key] = result
+    return result
 
 
 def resolve_service_type(obj):
@@ -236,6 +254,11 @@ def resolve_service_type(obj):
       - fastddsgen 出力: <Srv>_request / <Srv>_response などがモジュールに居る
     戻り値: (request_cls, response_cls, request_pubsub_cls, response_pubsub_cls)
     """
+    with _cache_lock:
+        cached = _resolve_service_type_cache.get(obj)
+        if cached is not None:
+            return cached
+
     mod = None
     # rclpy スタイルのクラス (Request/Response 属性)
     if isinstance(obj, type):
@@ -268,7 +291,10 @@ def resolve_service_type(obj):
 
     _mod, req_cls, req_pubsub = resolve_generated_type(req)
     _mod, res_cls, res_pubsub = resolve_generated_type(res)
-    return req_cls, res_cls, req_pubsub, res_pubsub
+    result = (req_cls, res_cls, req_pubsub, res_pubsub)
+    with _cache_lock:
+        _resolve_service_type_cache[obj] = result
+    return result
 
 
 def _get_cancel_goal_types():
@@ -314,6 +340,11 @@ def resolve_action_type(action_type):
         <ActionName>_GetResult_Request, <ActionName>_GetResult_Response,
         <ActionName>_FeedbackMessage
     """
+    with _cache_lock:
+        cached = _resolve_action_type_cache.get(action_type)
+        if cached is not None:
+            return cached
+
     # Determine action name from module or type
     action_name = None
     if isinstance(action_type, type):
@@ -350,7 +381,7 @@ def resolve_action_type(action_type):
                 cancel_req, cancel_res = _get_cancel_goal_types()
             if cancel_req is None or cancel_res is None:
                 raise RuntimeError("CancelGoal Request/Response not found")
-            return {
+            result = {
                 "goal": goal_cls,
                 "result": result_cls,
                 "feedback": feedback_cls,
@@ -362,6 +393,9 @@ def resolve_action_type(action_type):
                 "cancel_req": cancel_req,
                 "cancel_res": cancel_res,
             }
+            with _cache_lock:
+                _resolve_action_type_cache[action_type] = result
+            return result
     
     # Try fastddsgen-style (flat class names)
     if action_name:
@@ -380,7 +414,7 @@ def resolve_action_type(action_type):
             cancel_req, cancel_res = _get_cancel_goal_types()
             if cancel_req is None or cancel_res is None:
                 raise RuntimeError("CancelGoal Request/Response not found in action_msgs")
-            return {
+            result = {
                 "goal": goal_cls,
                 "result": result_cls,
                 "feedback": feedback_cls,
@@ -392,6 +426,9 @@ def resolve_action_type(action_type):
                 "cancel_req": cancel_req,
                 "cancel_res": cancel_res,
             }
+            with _cache_lock:
+                _resolve_action_type_cache[action_type] = result
+            return result
     
     raise RuntimeError(
         f"Action type missing required classes. "
@@ -437,6 +474,24 @@ def get_or_create_topic(participant, name: str, type_name: str):
     """
     import fastdds  # local import to avoid mandatory dependency at import-time
 
+    cache_key = (id(participant), name)
+    with _cache_lock:
+        cached = _topic_cache.get(cache_key)
+    if cached is not None:
+        cached_participant, topic_obj, cached_type = cached
+        if cached_participant is not participant:
+            with _cache_lock:
+                if _topic_cache.get(cache_key) is cached:
+                    _topic_cache.pop(cache_key, None)
+            cached = None
+    if cached is not None:
+        _cached_participant, topic_obj, cached_type = cached
+        if cached_type and cached_type != type_name:
+            raise RuntimeError(
+                f"Topic '{name}' already exists with type '{cached_type}' (requested '{type_name}')"
+            )
+        return topic_obj, False
+
     # Try to reuse an existing Topic instance first
     try:
         duration = fastdds.Duration_t()
@@ -449,17 +504,21 @@ def get_or_create_topic(participant, name: str, type_name: str):
         # Ensure type matches
         try:
             existing_type = existing_topic.get_type_name()
-            if existing_type and existing_type != type_name:
-                raise RuntimeError(
-                    f"Topic '{name}' already exists with type '{existing_type}' (requested '{type_name}')"
-                )
-            return existing_topic, False
         except Exception:
-            pass
+            existing_type = None
+        if existing_type and existing_type != type_name:
+            raise RuntimeError(
+                f"Topic '{name}' already exists with type '{existing_type}' (requested '{type_name}')"
+            )
+        with _cache_lock:
+            _topic_cache[cache_key] = (participant, existing_topic, existing_type or type_name)
+        return existing_topic, False
 
     tq = fastdds.TopicQos()
     participant.get_default_topic_qos(tq)
     topic_obj = participant.create_topic(name, type_name, tq)
     if topic_obj is None:
         raise RuntimeError(f"Failed to create topic '{name}'")
+    with _cache_lock:
+        _topic_cache[cache_key] = (participant, topic_obj, type_name)
     return topic_obj, True
