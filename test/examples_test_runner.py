@@ -395,11 +395,11 @@ def run_all_examples(platform_name: str) -> bool:
             subscriber_args=("--read-byte",),
         ),
         PairSpec(
-            name="Shared memory image (plain assignment)",
+            name="Shared memory image (data_buffer)",
             publisher="examples/shared_memory/image_shared_memory_publisher.py",
             subscriber="examples/shared_memory/image_shared_memory_subscriber.py",
             subscriber_expect=("[recv]", "shared_memory=True"),
-            publisher_args=("--width", "64", "--height", "48", "--rate", "20", "--plain-assignment"),
+            publisher_args=("--width", "64", "--height", "48", "--rate", "20", "--data-buffer"),
             subscriber_args=("--read-byte",),
         ),
         PairSpec(

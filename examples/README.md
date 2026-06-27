@@ -222,7 +222,7 @@ Subscriber 側に以下のような出力が出れば SharedMemory 経由です�
 同一ホストに lwrclpy subscriber がいる場合:
 
 - payload が閾値以上なら SharedMemory metadata を publish
-- subscriber は `get_shared_memory_buffer(msg, "data")` で SharedMemory を取得可能
+- subscriber は通常どおり `msg.data` で payload を読めます
 - local lwrclpy subscriber だけなら、DDS の大きな payload は空にして小さな signal message を送ります
 
 別ホストや通常DDS subscriberが混在する場合:
@@ -291,35 +291,18 @@ used = publisher.publish_shared_memory(
 - 同一ホスト lwrclpy subscriber 専用の高速経路です。
 - 通常 ROS 2 subscriber や別ホスト subscriber は実 payload を受け取れません。
 
-### Subscriber 側: SharedMemory を読む
+### Subscriber 側: 通常の rclpy と同じ形で読む
 
 ```python
-from lwrclpy import get_shared_memory_buffer
-
 def on_image(msg):
-    shm = get_shared_memory_buffer(msg, "data")
-    if shm is None:
-        # 通常DDS payload
-        data = msg.data
-        return
-
-    view = shm.open_memoryview()
-    try:
-        first = view[0]
-        nbytes = shm.nbytes
-        print(first, nbytes)
-    finally:
-        # memoryview を解放してから close する
-        release = getattr(view, "release", None)
-        if callable(release):
-            release()
-        shm.close()
+    data = msg.data
+    print(msg.width, msg.height, len(data), data[0] if data else None)
 ```
 
 重要:
 
-- `open_memoryview()` で得た memoryview が残っている間は `SharedMemory.close()` が `BufferError` になることがあります。
-- `bytes(view)` や `shm.tobytes()` を使うと Python bytes へコピーされます。ゼロコピーで処理したい場合は memoryview を直接使います。
+- SharedMemory 経由かを確認したい場合は `getattr(msg.data, "is_shared_memory", False)` を見ます。
+- 明示的な buffer 管理が必要な高度な用途では `lwrclpy.get_shared_memory_buffer(msg, "data")` も利用できます。
 - SharedMemory は同一ホスト限定です。metadata の `host_id` が違う場合は subscriber 側で無視されます。
 
 ### 自動 SharedMemory の環境変数
@@ -347,7 +330,7 @@ CUDA IPC は GPU memory を同一ホストの別プロセスへ渡すための�
 
 ```bash
 # terminal 1
-python examples/cuda_ipc/image_cuda_ipc_subscriber.py --read-byte
+python examples/cuda_ipc/image_cuda_ipc_subscriber.py --open-cupy
 
 # terminal 2
 python examples/cuda_ipc/image_cuda_ipc_publisher.py --metadata-only
@@ -367,13 +350,12 @@ used = publisher.publish_cuda(
 Subscriber 側:
 
 ```python
-from lwrclpy import get_cuda_buffer
-
 def on_image(msg):
-    cuda_buf = get_cuda_buffer(msg, "data")
-    if cuda_buf is None:
-        return
-    arr = cuda_buf.open_cupy()
+    data = msg.data
+    if getattr(data, "is_cuda_ipc", False):
+        arr = data.open_cupy()
+    else:
+        arr = msg.data
 ```
 
 注意:
@@ -474,7 +456,7 @@ node.create_subscription(Msg, "topic", callback, 10, callback_group=exclusive)
 - payload が `LWRCLPY_AUTO_SHM_THRESHOLD` より小さい可能性があります。
 - subscriber が同一ホストで起動していない可能性があります。
 - 通常 ROS 2 subscriber や別ホスト subscriber が混在すると、互換性のため DDS payload も送られます。
-- `get_shared_memory_buffer(msg, "data")` が `None` の場合は通常 DDS payload として処理してください。
+- `getattr(msg.data, "is_shared_memory", False)` が `False` の場合は通常 DDS payload として処理してください。
 
 ### ゼロコピーが使われているか確認したい
 

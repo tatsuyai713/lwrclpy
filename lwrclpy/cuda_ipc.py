@@ -145,6 +145,42 @@ class CudaIpcBuffer:
             self._cupy_mem = None
 
 
+class _CudaIpcFieldProxy:
+    """rclpy-style metadata view for a CUDA-IPC-backed sequence field."""
+
+    __slots__ = ("_buffer",)
+
+    def __init__(self, buffer: CudaIpcBuffer):
+        self._buffer = buffer
+
+    def __call__(self):
+        return self
+
+    def __len__(self) -> int:
+        return self._buffer.nbytes
+
+    def __bool__(self) -> bool:
+        return self._buffer.nbytes != 0
+
+    @property
+    def is_cuda_ipc(self) -> bool:
+        return True
+
+    @property
+    def cuda_ipc_shape(self) -> tuple[int, ...]:
+        return self._buffer.shape
+
+    @property
+    def cuda_ipc_device_id(self) -> int:
+        return self._buffer.device_id
+
+    def open_cupy(self):
+        return self._buffer.open_cupy()
+
+    def release(self) -> None:
+        self._buffer.close()
+
+
 def attach_cuda_buffer(msg: Any, metadata: CudaIpcMetadata) -> bool:
     buffers = getattr(msg, _CUDA_ATTR, None)
     if buffers is None:
@@ -157,7 +193,13 @@ def attach_cuda_buffer(msg: Any, metadata: CudaIpcMetadata) -> bool:
                 continue
         else:
             return False
-    buffers[metadata.field] = CudaIpcBuffer(metadata)
+    buffer = CudaIpcBuffer(metadata)
+    buffers[metadata.field] = buffer
+    try:
+        from .message_utils import _shadow_attr
+        _shadow_attr(msg, metadata.field, _CudaIpcFieldProxy(buffer))
+    except Exception:
+        pass
     return True
 
 

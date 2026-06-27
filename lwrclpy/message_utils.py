@@ -238,9 +238,17 @@ class _ValueProxy:
         raise TypeError(f"'{type(self._v).__name__}' object is not iterable")
 
     def __getitem__(self, key):
-        return self._v[key]
+        try:
+            return self._v[key]
+        except TypeError:
+            if isinstance(key, int):
+                return self._v[int(key)]
+            raise
 
     def __bool__(self):
+        vector_len = _swig_vector_len(self._v)
+        if vector_len is not None:
+            return vector_len != 0
         return bool(self._v)
 
     def __eq__(self, other):

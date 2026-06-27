@@ -12,34 +12,22 @@ import argparse
 import time
 
 import rclpy
-from lwrclpy import data_buffer
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import Image
 
 
-def _set_field(msg, name: str, value) -> None:
-    setter = getattr(msg, name, None)
-    if callable(setter):
-        setter(value)
-    else:
-        setattr(msg, name, value)
-
-
 def _make_image(width: int, height: int) -> Image:
     msg = Image()
-    _set_field(msg, "height", height)
-    _set_field(msg, "width", width)
-    _set_field(msg, "encoding", "bgr8")
-    _set_field(msg, "is_bigendian", 0)
-    _set_field(msg, "step", width * 3)
+    msg.height = height
+    msg.width = width
+    msg.encoding = "bgr8"
+    msg.is_bigendian = 0
+    msg.step = width * 3
     return msg
 
 
 def _fill_ros_payload(msg: Image, payload) -> None:
-    try:
-        data_buffer(msg).assign(payload)
-    except Exception:
-        _set_field(msg, "data", bytes(payload))
+    msg.data = bytes(payload)
 
 
 def _make_cuda_frame(width: int, height: int, seq: int):

@@ -6,29 +6,15 @@ from __future__ import annotations
 import argparse
 
 import rclpy
-from lwrclpy import data_buffer, get_cuda_buffer
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import Image
 
 
-def _get_field(msg, name: str, default=None):
-    value = getattr(msg, name, default)
-    if callable(value):
-        try:
-            return value()
-        except Exception:
-            return default
-    return value
-
-
 def _ros_payload_len(msg: Image) -> int:
     try:
-        return data_buffer(msg).nbytes()
+        return len(msg.data)
     except Exception:
-        try:
-            return len(_get_field(msg, "data", b""))
-        except Exception:
-            return 0
+        return 0
 
 
 def main() -> int:
@@ -50,17 +36,17 @@ def main() -> int:
     )
 
     def on_image(msg: Image):
-        width = int(_get_field(msg, "width", 0))
-        height = int(_get_field(msg, "height", 0))
-        cuda_buf = get_cuda_buffer(msg, "data")
-        if cuda_buf is not None:
+        width = int(msg.width)
+        height = int(msg.height)
+        data = msg.data
+        if getattr(data, "is_cuda_ipc", False):
             line = (
                 f"[recv] {width}x{height} cuda_ipc=True "
-                f"shape={cuda_buf.shape} nbytes={cuda_buf.nbytes} device={cuda_buf.device_id}"
+                f"shape={data.cuda_ipc_shape} nbytes={len(data)} device={data.cuda_ipc_device_id}"
             )
             if args.open_cupy:
                 try:
-                    arr = cuda_buf.open_cupy()
+                    arr = data.open_cupy()
                     line += f" cupy_shape={arr.shape} dtype={arr.dtype}"
                 except Exception as exc:
                     line += f" cupy_open_error={exc}"

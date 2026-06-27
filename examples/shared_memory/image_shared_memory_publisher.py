@@ -11,21 +11,13 @@ from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import Image
 
 
-def _set_field(msg, name: str, value) -> None:
-    setter = getattr(msg, name, None)
-    if callable(setter):
-        setter(value)
-    else:
-        setattr(msg, name, value)
-
-
 def _make_image(width: int, height: int) -> Image:
     msg = Image()
-    _set_field(msg, "height", height)
-    _set_field(msg, "width", width)
-    _set_field(msg, "encoding", "bgr8")
-    _set_field(msg, "is_bigendian", 0)
-    _set_field(msg, "step", width * 3)
+    msg.height = height
+    msg.width = width
+    msg.encoding = "bgr8"
+    msg.is_bigendian = 0
+    msg.step = width * 3
     return msg
 
 
@@ -41,9 +33,9 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--rate", type=float, default=10.0)
     parser.add_argument(
-        "--plain-assignment",
+        "--data-buffer",
         action="store_true",
-        help="assign Image.data with normal rclpy-style msg.data = frame instead of data_buffer()",
+        help="assign Image.data through lwrclpy.data_buffer() instead of normal msg.data = frame",
     )
     args = parser.parse_args()
 
@@ -62,10 +54,10 @@ def main() -> int:
         while rclpy.ok():
             msg = _make_image(args.width, args.height)
             frame = _make_frame(args.width, args.height, seq)
-            if args.plain_assignment:
-                msg.data = frame
-            else:
+            if args.data_buffer:
                 data_buffer(msg).assign(frame)
+            else:
+                msg.data = frame
             pub.publish(msg)
             print(f"[send] seq={seq} bytes={len(frame)} stats={pub.performance_stats}")
             seq += 1

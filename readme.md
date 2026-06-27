@@ -383,7 +383,7 @@ Subscriber側に次のような出力が出ればSharedMemory経由です。
 同一ホストにlwrclpy subscriberがいる場合:
 
 - payloadが閾値以上ならSharedMemory metadataをpublishします
-- subscriberは`get_shared_memory_buffer(msg, "data")`でSharedMemoryを取得できます
+- subscriberは通常どおり`msg.data`でpayloadを読めます
 - local lwrclpy subscriberだけなら、DDSの大きなpayloadは空にして小さなsignal messageを送ります
 
 別ホストや通常DDS subscriberが混在する場合:
@@ -448,31 +448,15 @@ used = publisher.publish_shared_memory(
 #### Subscriber側
 
 ```python
-from lwrclpy import get_shared_memory_buffer
-
 def on_image(msg):
-    shm = get_shared_memory_buffer(msg, "data")
-    if shm is None:
-        # 通常DDS payload
-        data = msg.data
-        return
-
-    view = shm.open_memoryview()
-    try:
-        first = view[0]
-        nbytes = shm.nbytes
-        print(first, nbytes)
-    finally:
-        release = getattr(view, "release", None)
-        if callable(release):
-            release()
-        shm.close()
+    data = msg.data
+    print(msg.width, msg.height, len(data), data[0] if data else None)
 ```
 
 注意点:
 
-- `open_memoryview()`で得たmemoryviewが残っている間は、`SharedMemory.close()`が`BufferError`になることがあります
-- `bytes(view)`や`shm.tobytes()`はPython bytesへコピーします。ゼロコピーで処理する場合はmemoryviewを直接使います
+- SharedMemory経由かを確認したい場合は`getattr(msg.data, "is_shared_memory", False)`を見ます
+- 明示的なbuffer管理が必要な高度な用途では`lwrclpy.get_shared_memory_buffer(msg, "data")`も利用できます
 - SharedMemoryは同一ホスト限定です。metadataの`host_id`が違う場合はsubscriber側で無視されます
 
 #### 環境変数
@@ -499,7 +483,7 @@ CUDA環境とCuPyまたはcuda-pythonが必要です。
 
 ```bash
 # terminal 1
-python3 examples/cuda_ipc/image_cuda_ipc_subscriber.py --read-byte
+python3 examples/cuda_ipc/image_cuda_ipc_subscriber.py --open-cupy
 
 # terminal 2
 python3 examples/cuda_ipc/image_cuda_ipc_publisher.py --metadata-only
@@ -519,13 +503,12 @@ used = publisher.publish_cuda(
 Subscriber側:
 
 ```python
-from lwrclpy import get_cuda_buffer
-
 def on_image(msg):
-    cuda_buf = get_cuda_buffer(msg, "data")
-    if cuda_buf is None:
-        return
-    arr = cuda_buf.open_cupy()
+    data = msg.data
+    if getattr(data, "is_cuda_ipc", False):
+        arr = data.open_cupy()
+    else:
+        arr = msg.data
 ```
 
 `publish_ros_payload=True`なら通常DDS payloadも送ります。`publish_ros_payload=False`や

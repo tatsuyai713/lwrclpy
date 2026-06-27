@@ -219,6 +219,50 @@ class SharedMemoryBuffer:
             pass
 
 
+class _SharedMemoryFieldProxy:
+    """rclpy-style bytes-like view for a shared-memory-backed sequence field."""
+
+    __slots__ = ("_buffer",)
+
+    def __init__(self, buffer: SharedMemoryBuffer):
+        self._buffer = buffer
+
+    def __call__(self):
+        return self
+
+    def __len__(self) -> int:
+        return self._buffer.nbytes
+
+    @property
+    def is_shared_memory(self) -> bool:
+        return True
+
+    @property
+    def shared_memory_name(self) -> str:
+        return self._buffer.name
+
+    def __bool__(self) -> bool:
+        return self._buffer.nbytes != 0
+
+    def __getitem__(self, key):
+        return self._buffer.open_memoryview()[key]
+
+    def __iter__(self):
+        return iter(self._buffer.open_memoryview())
+
+    def __bytes__(self) -> bytes:
+        return self._buffer.tobytes()
+
+    def memoryview(self) -> memoryview:
+        return self._buffer.open_memoryview()
+
+    def tobytes(self) -> bytes:
+        return self._buffer.tobytes()
+
+    def release(self) -> None:
+        self._buffer.close()
+
+
 class SharedMemoryAllocation:
     """Publisher-side allocation kept alive while subscribers may open it."""
 
@@ -322,12 +366,11 @@ def attach_shared_memory_buffer(msg: Any, metadata: SharedMemoryMetadata) -> boo
     except Exception:
         view = None
     if view is not None:
-        for setter in (setattr, object.__setattr__):
-            try:
-                setter(msg, metadata.field, view)
-                break
-            except Exception:
-                continue
+        try:
+            from .message_utils import _shadow_attr
+            _shadow_attr(msg, metadata.field, _SharedMemoryFieldProxy(buffer))
+        except Exception:
+            pass
     return True
 
 
