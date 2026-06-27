@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
+import ctypes
 from dataclasses import asdict, dataclass
 from multiprocessing import shared_memory
 from typing import Any
@@ -258,6 +259,17 @@ class _SharedMemoryFieldProxy:
 
     def tobytes(self) -> bytes:
         return self._buffer.tobytes()
+
+    @property
+    def __array_interface__(self) -> dict[str, object]:
+        view = self._buffer.open_memoryview()
+        ptr = ctypes.addressof(ctypes.c_uint8.from_buffer(view))
+        return {
+            "shape": (self._buffer.nbytes,),
+            "typestr": "|u1",
+            "data": (ptr, False),
+            "version": 3,
+        }
 
     def release(self) -> None:
         self._buffer.close()
