@@ -368,7 +368,12 @@ def attach_shared_memory_buffer(msg: Any, metadata: SharedMemoryMetadata) -> boo
     if view is not None:
         try:
             from .message_utils import _shadow_attr
-            _shadow_attr(msg, metadata.field, _SharedMemoryFieldProxy(buffer))
+            proxy = _SharedMemoryFieldProxy(buffer)
+            _shadow_attr(msg, metadata.field, proxy)
+            _shadow_attr(msg, f"_lwrclpy_{metadata.field}_memoryview", proxy.memoryview)
+            _shadow_attr(msg, f"_lwrclpy_{metadata.field}_bytes", proxy.tobytes)
+            _shadow_attr(msg, f"_lwrclpy_{metadata.field}_nbytes", lambda: buffer.nbytes)
+            _shadow_attr(msg, f"_lwrclpy_{metadata.field}_size", lambda: buffer.nbytes)
         except Exception:
             pass
     return True

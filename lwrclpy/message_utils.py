@@ -358,6 +358,11 @@ def _get_value(src, name):
     """Extract a field value from *src* using fastddsgen conventions."""
     if name in _SKIP_FIELDS or name.startswith("_"):
         return None
+    fast_value = _message_field_memoryview(src, name)
+    if fast_value is None:
+        fast_value = _message_field_bytes(src, name)
+    if fast_value is not None:
+        return fast_value
     try:
         inst_dict = getattr(src, "__dict__", None)
         if inst_dict and name in inst_dict:
@@ -370,11 +375,6 @@ def _get_value(src, name):
                 return v
     except Exception:
         pass
-    fast_value = _message_field_memoryview(src, name)
-    if fast_value is None:
-        fast_value = _message_field_bytes(src, name)
-    if fast_value is not None:
-        return fast_value
     try:
         v = getattr(src, name)
     except Exception:
