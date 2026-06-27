@@ -11,7 +11,6 @@ from lwrclpy import (
     SetParametersResult,
     IntegerRange,
     FloatingPointRange,
-    shutdown as _core_shutdown,  # Use lwrclpy.shutdown (with force_exit)
     Future,
     Clock,
     ClockType,
@@ -19,6 +18,8 @@ from lwrclpy import (
     Timer,
 )
 from lwrclpy.context import init as _core_init, ok as _core_ok, get_domain_id, Context
+from lwrclpy.context import shutdown as _core_shutdown
+from lwrclpy.context import try_shutdown as _core_try_shutdown
 
 
 class _DefaultContext:
@@ -75,6 +76,10 @@ def shutdown():
     _core_shutdown()
 
 
+def try_shutdown():
+    _core_try_shutdown()
+
+
 def ok() -> bool:
     return _core_ok()
 
@@ -97,6 +102,7 @@ __all__ = [
     "Rate",
     "init",
     "shutdown",
+    "try_shutdown",
     "ok",
     "spin",
     "spin_once",

@@ -93,9 +93,14 @@ class LaunchService:
                 sub_entities = result
         
         # Process sub-entities
-        if sub_entities:
-            for sub_entity in sub_entities:
-                await self._visit_entity(sub_entity, context)
+        try:
+            if sub_entities:
+                for sub_entity in sub_entities:
+                    await self._visit_entity(sub_entity, context)
+        finally:
+            after_sub_entities = getattr(entity, "_after_sub_entities_visited", None)
+            if callable(after_sub_entities):
+                after_sub_entities(context)
 
     async def _run_async(self) -> int:
         """Run the launch description asynchronously."""

@@ -92,6 +92,7 @@ def shutdown(*, force_exit: bool = False):
                    Fast DDS v3 "double free" errors. Default is False for compatibility.
     """
     global _initialized, _shutdown_flag, _participant, _tracked_entities
+    entities_to_destroy = []
     with _lock:
         if not _initialized or _shutdown_flag:
             return
@@ -106,20 +107,23 @@ def shutdown(*, force_exit: bool = False):
             entity = entity_ref()
             if entity is not None:
                 entities_to_destroy.append(entity)
-        
-        for entity in entities_to_destroy:
-            try:
-                if hasattr(entity, 'destroy'):
-                    entity.destroy()
-            except Exception:
-                pass
-        
         _tracked_entities.clear()
+
+    for entity in entities_to_destroy:
+        try:
+            if hasattr(entity, 'destroy'):
+                entity.destroy()
+        except Exception:
+            pass
+
+    with _lock:
+        if _shutdown_flag:
+            _tracked_entities.clear()
         
-        # Don't delete participant - let Fast DDS clean it up on process exit
-        # Attempting to delete can cause "double free" errors
-        _participant = None
-        _initialized = False
+            # Don't delete participant - let Fast DDS clean it up on process exit
+            # Attempting to delete can cause "double free" errors
+            _participant = None
+            _initialized = False
     
     # If force_exit is requested, use os._exit to bypass Python cleanup
     # This avoids "double free or corruption (fasttop)" errors in Fast DDS v3

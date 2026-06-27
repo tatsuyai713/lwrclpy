@@ -62,7 +62,14 @@ class Service:
                 publisher = self._response_pub
             if publisher is None:
                 return
-            publisher.publish(response)
+            try:
+                publisher.publish(response)
+            except Exception:
+                _logger.debug(
+                    "Service response publish skipped for %s during shutdown",
+                    self._service_name,
+                    exc_info=True,
+                )
 
         self._request_sub = Subscription(
             self._participant,

@@ -121,7 +121,14 @@ class Client:
 
     def send_request(self, request):
         """Compatibility alias used by some examples."""
-        self._publisher.publish(request)
+        with self._lock:
+            if self._destroyed or self._publisher is None:
+                return False
+            publisher = self._publisher
+        try:
+            publisher.publish(request)
+        except Exception:
+            return False
         return True
 
     def wait_for_service(self, timeout_sec: Optional[float] = None) -> bool:

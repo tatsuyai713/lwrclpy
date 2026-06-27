@@ -50,6 +50,8 @@ class Command(Substitution):
         for part in self._command:
             resolved = context.perform_substitution(part)
             cmd_parts.append(resolved)
+        if not cmd_parts:
+            raise RuntimeError("Command substitution requires at least one command part")
 
         # Execute the command
         try:
@@ -59,6 +61,12 @@ class Command(Substitution):
                 text=True,
                 check=False,
             )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(
+                    f"Command {cmd_parts!r} failed with exit code {result.returncode}"
+                    + (f": {detail}" if detail else "")
+                )
             
             # Handle stderr
             if result.stderr:

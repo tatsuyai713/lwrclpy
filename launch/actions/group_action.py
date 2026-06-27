@@ -39,6 +39,7 @@ class GroupAction(Action):
         self._scoped = scoped
         self._forwarding = forwarding
         self._launch_configurations = launch_configurations or {}
+        self._scope_pushed = False
 
     @property
     def actions(self) -> List['LaunchDescriptionEntity']:
@@ -50,14 +51,25 @@ class GroupAction(Action):
         if self._scoped:
             # Push new configuration scope
             context._push_configuration_scope(self._forwarding)
-            
-            # Apply group-specific configurations
-            for key, value in self._launch_configurations.items():
-                resolved = context.perform_substitution(value)
-                context.launch_configurations[key] = resolved
+            self._scope_pushed = True
+
+            try:
+                # Apply group-specific configurations
+                for key, value in self._launch_configurations.items():
+                    resolved = context.perform_substitution(value)
+                    context.launch_configurations[key] = resolved
+            except Exception:
+                self._after_sub_entities_visited(context)
+                raise
 
         # Return actions to be executed
         return self._actions
+
+    def _after_sub_entities_visited(self, context: 'LaunchContext') -> None:
+        """Restore the previous configuration scope after grouped actions run."""
+        if self._scope_pushed:
+            self._scope_pushed = False
+            context._pop_configuration_scope()
 
     def describe_sub_entities(self) -> List['LaunchDescriptionEntity']:
         """Return the grouped actions."""
