@@ -195,9 +195,10 @@ def _contains_error(output: str) -> bool:
 def _wait_for_keywords(proc: ProcessCapture, keywords: Sequence[str], timeout: float) -> bool:
     start = time.monotonic()
     effective_timeout = _timeout(timeout)
+    required = tuple(keywords)
     while (time.monotonic() - start) < effective_timeout:
         output = proc.output()
-        if any(keyword in output for keyword in keywords):
+        if all(keyword in output for keyword in required):
             return True
         if proc.proc.poll() is not None:
             return False
@@ -391,6 +392,14 @@ def run_all_examples(platform_name: str) -> bool:
             subscriber="examples/shared_memory/image_shared_memory_subscriber.py",
             subscriber_expect=("[recv]", "shared_memory=True"),
             publisher_args=("--width", "64", "--height", "48", "--rate", "20"),
+            subscriber_args=("--read-byte",),
+        ),
+        PairSpec(
+            name="Shared memory image (plain assignment)",
+            publisher="examples/shared_memory/image_shared_memory_publisher.py",
+            subscriber="examples/shared_memory/image_shared_memory_subscriber.py",
+            subscriber_expect=("[recv]", "shared_memory=True"),
+            publisher_args=("--width", "64", "--height", "48", "--rate", "20", "--plain-assignment"),
             subscriber_args=("--read-byte",),
         ),
         PairSpec(

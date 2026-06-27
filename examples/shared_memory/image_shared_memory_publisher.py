@@ -40,6 +40,11 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--rate", type=float, default=10.0)
+    parser.add_argument(
+        "--plain-assignment",
+        action="store_true",
+        help="assign Image.data with normal rclpy-style msg.data = frame instead of data_buffer()",
+    )
     args = parser.parse_args()
 
     rclpy.init()
@@ -57,7 +62,10 @@ def main() -> int:
         while rclpy.ok():
             msg = _make_image(args.width, args.height)
             frame = _make_frame(args.width, args.height, seq)
-            data_buffer(msg).assign(frame)
+            if args.plain_assignment:
+                msg.data = frame
+            else:
+                data_buffer(msg).assign(frame)
             pub.publish(msg)
             print(f"[send] seq={seq} bytes={len(frame)} stats={pub.performance_stats}")
             seq += 1
