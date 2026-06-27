@@ -11,6 +11,7 @@ from .utils import resolve_service_type, SERVICE_REQUEST_PREFIX, SERVICE_RESPONS
 from .context import get_participant, track_entity, untrack_entity
 from .utils import get_or_create_topic
 from .future import Future
+from .message_utils import expose_callable_fields
 
 
 class Client:
@@ -52,6 +53,10 @@ class Client:
         self._destroyed = False
 
         def _on_response(msg):
+            try:
+                expose_callable_fields(msg)
+            except Exception:
+                pass
             future = None
             with self._lock:
                 if self._destroyed:
@@ -99,6 +104,10 @@ class Client:
     def call_async(self, request) -> Future:
         """Send request asynchronously, returning a Future resolved with the response."""
         future = Future()
+        try:
+            expose_callable_fields(request)
+        except Exception:
+            pass
         with self._lock:
             if self._destroyed:
                 destroyed = True
@@ -112,6 +121,10 @@ class Client:
             return future
         try:
             self._publisher.publish(request)
+            try:
+                expose_callable_fields(request)
+            except Exception:
+                pass
         except Exception as exc:
             with self._lock:
                 if self._pending_future is future:
@@ -121,12 +134,20 @@ class Client:
 
     def send_request(self, request):
         """Compatibility alias used by some examples."""
+        try:
+            expose_callable_fields(request)
+        except Exception:
+            pass
         with self._lock:
             if self._destroyed or self._publisher is None:
                 return False
             publisher = self._publisher
         try:
             publisher.publish(request)
+            try:
+                expose_callable_fields(request)
+            except Exception:
+                pass
         except Exception:
             return False
         return True

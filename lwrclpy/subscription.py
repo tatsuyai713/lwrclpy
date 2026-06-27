@@ -50,6 +50,13 @@ def _sample_info_attr(sample_info, name, default=None):
         return default
 
 
+def _sample_info_int(value, default=0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> bool:
     """Prefer/force data sharing on the reader QoS when the API exists."""
     if os.environ.get("LWRCLPY_NO_DATASHARING") == "1":
@@ -150,8 +157,8 @@ class MessageInfo:
         if self._source_timestamp is None:
             ts = _sample_info_attr(self._sample_info, "source_timestamp")
             if ts is not None:
-                sec = _sample_info_attr(ts, "seconds", 0)
-                nsec = _sample_info_attr(ts, "nanosec", 0)
+                sec = _sample_info_int(_sample_info_attr(ts, "seconds", 0), 0)
+                nsec = _sample_info_int(_sample_info_attr(ts, "nanosec", 0), 0)
                 self._source_timestamp = sec * 1_000_000_000 + nsec
             else:
                 self._source_timestamp = 0
@@ -173,7 +180,10 @@ class MessageInfo:
     def publication_sequence_number(self):
         if self._publication_sequence_number is None:
             if hasattr(self._sample_info, "publication_sequence_number"):
-                self._publication_sequence_number = _sample_info_attr(self._sample_info, "publication_sequence_number", 0)
+                self._publication_sequence_number = _sample_info_int(
+                    _sample_info_attr(self._sample_info, "publication_sequence_number", 0),
+                    0,
+                )
             else:
                 self._publication_sequence_number = 0
         return self._publication_sequence_number
@@ -186,7 +196,10 @@ class MessageInfo:
     def reception_sequence_number(self):
         if self._reception_sequence_number is None:
             if hasattr(self._sample_info, "reception_sequence_number"):
-                self._reception_sequence_number = _sample_info_attr(self._sample_info, "reception_sequence_number", 0)
+                self._reception_sequence_number = _sample_info_int(
+                    _sample_info_attr(self._sample_info, "reception_sequence_number", 0),
+                    0,
+                )
             else:
                 self._reception_sequence_number = 0
         return self._reception_sequence_number

@@ -50,7 +50,7 @@ class Future(Generic[T]):
                 raise asyncio.CancelledError("Future was cancelled")
             if self._exception:
                 raise self._exception
-            return self._result
+            return _expose_result_fields(self._result)
 
     def exception(self, timeout: Optional[float] = None) -> Optional[BaseException]:
         """Wait for the future and return any exception.
@@ -163,7 +163,7 @@ class Future(Generic[T]):
                     raise asyncio.CancelledError("Future was cancelled")
                 if self._exception:
                     raise self._exception
-                return self._result
+                return _expose_result_fields(self._result)
         
         # Wait for completion
         await async_event.wait()
@@ -173,7 +173,7 @@ class Future(Generic[T]):
                 raise asyncio.CancelledError("Future was cancelled")
             if self._exception:
                 raise self._exception
-            return self._result
+            return _expose_result_fields(self._result)
 
     def __await__(self):
         return self._await_impl().__await__()
@@ -189,3 +189,14 @@ class Future(Generic[T]):
                     return f"<Future finished result={self._result!r}>"
             else:
                 return "<Future pending>"
+
+
+def _expose_result_fields(value):
+    if value is None or isinstance(value, (str, int, float, bool, bytes, bytearray, memoryview)):
+        return value
+    try:
+        from .message_utils import expose_callable_fields
+        expose_callable_fields(value)
+    except Exception:
+        pass
+    return value

@@ -53,10 +53,16 @@ def main() -> int:
             data = _get_field(msg, "data", b"")
             line = f"[recv] {width}x{height} shared_memory=True nbytes={len(data)} name={shm_buf.name}"
             if args.read_byte:
+                first_byte = None
                 try:
-                    line += f" first_byte={data[0] if data else None}"
+                    first_byte = data[0] if data else None
                 finally:
+                    release = getattr(data, "release", None)
+                    if callable(release):
+                        release()
+                    data = None
                     shm_buf.close()
+                line += f" first_byte={first_byte}"
             print(line)
             return
         print(f"[recv] {width}x{height} shared_memory=False ros_payload_bytes={_ros_payload_len(msg)}")

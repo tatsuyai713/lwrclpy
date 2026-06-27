@@ -387,6 +387,11 @@ class Node:
             return Parameter(name, ParameterType.NOT_SET)
         raise KeyError(f"Parameter '{name}' is not declared")
 
+    def get_parameter_or(self, name: str, alternative_value=None):
+        with self._parameters_lock:
+            param = self._parameters.get(name)
+        return param if param is not None else alternative_value
+
     def get_parameters(self, names) -> List[Parameter]:
         return [self.get_parameter(n) for n in names]
 

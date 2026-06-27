@@ -12,7 +12,7 @@ import threading
 import time
 from typing import TypeVar, Generic
 from .qos import QoSProfile
-from .message_utils import clone_message, _assign
+from .message_utils import clone_message, expose_callable_fields, _assign
 from .message_utils import _buffer_view, _copy_val, _get_field_names, _get_value, _is_swig_vector
 from .duration import Duration
 from .utils import (
@@ -337,6 +337,10 @@ class Publisher:
 
             self._publish_regular_message(msg, target_ctor)
         finally:
+            try:
+                expose_callable_fields(msg)
+            except Exception:
+                pass
             self._end_writer_use()
 
     def _publish_regular_message(self, msg, target_ctor) -> None:

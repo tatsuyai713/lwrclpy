@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 import copy
+import operator
 
 # Fields injected by SWIG that should never be copied onto new instances.
 _SKIP_FIELDS = {"this", "thisown"}
@@ -271,16 +272,76 @@ class _ValueProxy:
         return int(self._v)
 
     def __add__(self, other):
-        try:
-            return self._v + other
-        except Exception:
-            return NotImplemented
+        return _proxy_binary(operator.add, self._v, other)
 
     def __radd__(self, other):
+        return _proxy_binary(operator.add, other, self._v)
+
+    def __sub__(self, other):
+        return _proxy_binary(operator.sub, self._v, other)
+
+    def __rsub__(self, other):
+        return _proxy_binary(operator.sub, other, self._v)
+
+    def __mul__(self, other):
+        return _proxy_binary(operator.mul, self._v, other)
+
+    def __rmul__(self, other):
+        return _proxy_binary(operator.mul, other, self._v)
+
+    def __truediv__(self, other):
+        return _proxy_binary(operator.truediv, self._v, other)
+
+    def __rtruediv__(self, other):
+        return _proxy_binary(operator.truediv, other, self._v)
+
+    def __floordiv__(self, other):
+        return _proxy_binary(operator.floordiv, self._v, other)
+
+    def __rfloordiv__(self, other):
+        return _proxy_binary(operator.floordiv, other, self._v)
+
+    def __mod__(self, other):
+        return _proxy_binary(operator.mod, self._v, other)
+
+    def __rmod__(self, other):
+        return _proxy_binary(operator.mod, other, self._v)
+
+    def __pow__(self, other):
+        return _proxy_binary(operator.pow, self._v, other)
+
+    def __rpow__(self, other):
+        return _proxy_binary(operator.pow, other, self._v)
+
+    def __neg__(self):
+        return -self._v
+
+    def __pos__(self):
+        return +self._v
+
+    def __abs__(self):
+        return abs(self._v)
+
+
+def _proxy_binary(op, left, right):
+    try:
+        if isinstance(left, _ValueProxy):
+            left = left()
+        if isinstance(right, _ValueProxy):
+            right = right()
+        return op(left, right)
+    except Exception:
+        return NotImplemented
+
+
+def _shadow_attr(obj, name: str, value) -> bool:
+    for setter in (object.__setattr__, setattr):
         try:
-            return other + self._v
+            setter(obj, name, value)
+            return True
         except Exception:
-            return NotImplemented
+            continue
+    return False
 
 
 # ---- Module-level helpers used by clone_message --------------------------------
@@ -469,13 +530,7 @@ def expose_callable_fields(msg):
             continue
         fast_view = _message_field_memoryview(msg, name)
         if fast_view is not None:
-            try:
-                setattr(msg, name, fast_view)
-            except Exception:
-                try:
-                    object.__setattr__(msg, name, fast_view)
-                except Exception:
-                    pass
+            _shadow_attr(msg, name, fast_view)
             continue
         try:
             val = attr()
@@ -499,21 +554,9 @@ def expose_callable_fields(msg):
             else:
                 view = _buffer_view(val)
                 if view is not None:
-                    try:
-                        setattr(msg, name, view)
-                    except Exception:
-                        try:
-                            object.__setattr__(msg, name, view)
-                        except Exception:
-                            pass
+                    _shadow_attr(msg, name, view)
                     continue
-        try:
-            setattr(msg, name, _ValueProxy(val))
-        except Exception:
-            try:
-                object.__setattr__(msg, name, _ValueProxy(val))
-            except Exception:
-                pass
+        _shadow_attr(msg, name, _ValueProxy(val))
     return msg
 
 
