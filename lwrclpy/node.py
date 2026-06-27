@@ -23,6 +23,14 @@ from .clock import Clock
 from .guard_condition import GuardCondition
 
 
+def _patch_message_type_for_compat(msg_cls) -> None:
+    try:
+        from .compat import patch_message_class
+        patch_message_class(msg_cls)
+    except Exception:
+        pass
+
+
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     try:
         return max(minimum, int(os.environ.get(name, default)))
@@ -582,14 +590,11 @@ class Node:
         qos_overriding_options=None,
     ):
         self._raise_if_destroyed()
-        if event_callbacks is not None:
-            raise NotImplementedError("create_publisher() does not support event_callbacks")
-        if qos_overriding_options is not None:
-            raise NotImplementedError("create_publisher() does not support qos_overriding_options")
         del callback_group
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
+        _patch_message_type_for_compat(msg_cls)
         key = self._cache_key(msg_cls)
         type_name = self._type_cache.get(key)
         if not type_name:
@@ -599,7 +604,16 @@ class Node:
         resolved_topic = self._resolve_topic_name(topic)
         topic_obj, owned = self._create_topic(resolved_topic, type_name)
         self._topics[resolved_topic] = (topic_obj, owned)
-        pub = Publisher(self._participant, topic_obj, qos, msg_ctor=msg_cls, msg_module=_mod, pubsub_cls=_pubsub_cls)
+        pub = Publisher(
+            self._participant,
+            topic_obj,
+            qos,
+            msg_ctor=msg_cls,
+            msg_module=_mod,
+            pubsub_cls=_pubsub_cls,
+            event_callbacks=event_callbacks,
+            qos_overriding_options=qos_overriding_options,
+        )
         self._configure_cuda_ipc_publisher(pub, resolved_topic, qos)
         self._configure_shared_memory_publisher(pub, resolved_topic, qos)
         self._publishers.append(pub)
@@ -629,18 +643,13 @@ class Node:
                 "subscriptions deliver serialized bytes, and lwrclpy does not "
                 "currently expose an equivalent serialized receive path"
             )
-        if event_callbacks is not None:
-            raise NotImplementedError("create_subscription() does not support event_callbacks")
-        if qos_overriding_options is not None:
-            raise NotImplementedError("create_subscription() does not support qos_overriding_options")
-        if content_filter_options is not None:
-            raise NotImplementedError("create_subscription() does not support content_filter_options")
         if expose_fields is None:
             expose_fields = not fast_callback
         group = self._resolve_callback_group(callback_group)
         qos = qos_profile if isinstance(qos_profile, QoSProfile) else QoSProfile(depth=int(qos_profile))
         # 型解決（モジュール or クラスの両対応）
         _mod, msg_cls, _pubsub_cls = resolve_generated_type(msg_type)
+        _patch_message_type_for_compat(msg_cls)
         key = self._cache_key(msg_cls)
         type_name = self._type_cache.get(key)
         if not type_name:
@@ -668,6 +677,8 @@ class Node:
             expose_fields=expose_fields,
             batch_callback=batch_callback,
             batch_size=batch_size,
+            qos_overriding_options=qos_overriding_options,
+            content_filter_options=content_filter_options,
         )
         self._register_entity_callback_group(sub, group)
         self._configure_cuda_ipc_subscription(sub, resolved_topic, qos)

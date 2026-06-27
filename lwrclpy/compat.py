@@ -5,7 +5,8 @@ import inspect
 def _patch_message_class(cls):
     if getattr(cls, "__lwrclpy_attr_patched__", False):
         return
-    if cls.__name__.endswith("PubSubType"):
+    cls_name = getattr(cls, "__name__", "")
+    if cls_name.endswith("PubSubType") or "vector" in cls_name.lower():
         return
     try:
         inst = cls()
@@ -86,6 +87,10 @@ def _patch_message_class(cls):
     setattr(cls, "__lwrclpy_attr_patched__", True)
 
 
+def patch_message_class(cls):
+    _patch_message_class(cls)
+
+
 def _patch_module(mod: ModuleType):
     for name in dir(mod):
         try:
@@ -97,7 +102,7 @@ def _patch_module(mod: ModuleType):
 
 
 def patch_known_message_modules():
-    for mod_name in ("sensor_msgs.msg", "std_msgs.msg", "builtin_interfaces.msg"):
+    for mod_name in ("sensor_msgs.msg", "std_msgs.msg", "builtin_interfaces.msg", "geometry_msgs.msg"):
         try:
             module = __import__(mod_name, fromlist=["msg"])
         except Exception:

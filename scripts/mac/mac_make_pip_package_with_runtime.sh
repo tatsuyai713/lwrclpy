@@ -147,6 +147,13 @@ else
   echo "[WARN] patch_service_types.py not found, skipping service type patching"
 fi
 
+echo "[INFO] Patching message setters for rclpy-compatible submessage reuse"
+if [[ -f "${SCRIPTS_DIR}/patch_message_setter_compat.py" ]]; then
+  python3 "${SCRIPTS_DIR}/patch_message_setter_compat.py" "${STAGING_ROOT}"
+else
+  echo "[WARN] patch_message_setter_compat.py not found, skipping message setter compatibility patching"
+fi
+
 echo "[INFO] Patching message files to preload dependent libraries"
 if [[ -f "${SCRIPTS_DIR}/patch_message_dependencies.py" ]]; then
   python3 "${SCRIPTS_DIR}/patch_message_dependencies.py" "${STAGING_ROOT}"

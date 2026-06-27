@@ -13,7 +13,7 @@ import threading
 import time
 from ._async import run_coroutine
 from .qos import QoSProfile
-from .message_utils import expose_callable_fields
+from .message_utils import expose_callable_fields, _get_value
 from .utils import (
     _matched_handle_count,
     _matched_status_count,
@@ -35,6 +35,94 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
 
 _MAX_CALLBACKS_PER_DRAIN = _env_int("LWRCLPY_MAX_CALLBACKS_PER_DRAIN", 16)
 _SKIP_SAMPLE = object()
+
+
+def _content_filter_parts(content_filter_options):
+    if content_filter_options is None:
+        return None, ()
+    expression = getattr(content_filter_options, "filter_expression", None)
+    if expression is None:
+        expression = getattr(content_filter_options, "expression", None)
+    params = getattr(content_filter_options, "expression_parameters", None)
+    if expression is None and isinstance(content_filter_options, (tuple, list)) and content_filter_options:
+        expression = content_filter_options[0]
+        if len(content_filter_options) > 1:
+            params = content_filter_options[1]
+    if expression is None:
+        expression = str(content_filter_options)
+    if params is None:
+        params = ()
+    return str(expression).strip(), tuple(params)
+
+
+def _content_filter_value(token: str, params):
+    token = token.strip()
+    if token.startswith("%") and token[1:].isdigit():
+        index = int(token[1:])
+        if 0 <= index < len(params):
+            return _content_filter_value(str(params[index]), ())
+    if (len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}):
+        return token[1:-1]
+    lowered = token.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        return int(token)
+    except Exception:
+        pass
+    try:
+        return float(token)
+    except Exception:
+        return token
+
+
+def _make_content_filter_predicate(content_filter_options):
+    expression, params = _content_filter_parts(content_filter_options)
+    if not expression:
+        return None
+    clauses = [part.strip() for part in expression.replace(" AND ", " and ").split(" and ") if part.strip()]
+    tests = []
+    operators = (">=", "<=", "!=", "=", ">", "<")
+    for clause in clauses:
+        for op in operators:
+            if op in clause:
+                field, rhs = clause.split(op, 1)
+                field = field.strip()
+                expected = _content_filter_value(rhs, params)
+                if field:
+                    tests.append((field, op, expected))
+                break
+    if not tests:
+        _logger.warning("Unsupported content_filter_options expression %r; filter will be ignored", expression)
+        return None
+
+    def predicate(msg):
+        for field, op, expected in tests:
+            actual = _get_value(msg, field)
+            try:
+                if op == "=":
+                    ok = actual == expected
+                elif op == "!=":
+                    ok = actual != expected
+                elif op == ">":
+                    ok = actual > expected
+                elif op == "<":
+                    ok = actual < expected
+                elif op == ">=":
+                    ok = actual >= expected
+                elif op == "<=":
+                    ok = actual <= expected
+                else:
+                    ok = True
+            except Exception:
+                ok = False
+            if not ok:
+                return False
+        return True
+
+    return predicate
 
 
 def _sample_info_attr(sample_info, name, default=None):
@@ -392,6 +480,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         expose_fields: bool = True,
         batch_callback: bool = False,
         batch_size: int | None = None,
+        content_filter_predicate=None,
     ):
         super().__init__()
         self._enqueue_cb = enqueue_cb
@@ -417,6 +506,7 @@ class _ReaderListener(fastdds.DataReaderListener):
         self._enqueued_callback_count = 0
         self._batch_callback = bool(batch_callback)
         self._batch_size = max(1, int(batch_size or _MAX_CALLBACKS_PER_DRAIN))
+        self._content_filter_predicate = content_filter_predicate
 
     def close(self) -> None:
         with self._pending_lock:
@@ -583,6 +673,17 @@ class _ReaderListener(fastdds.DataReaderListener):
             run_coroutine(result)
 
     def _enqueue_user_callback(self, data, msg_info, loaned: Optional[_LoanedSamples] = None):
+        predicate = self._content_filter_predicate
+        if predicate is not None:
+            try:
+                if not predicate(data):
+                    if loaned is not None:
+                        loaned.return_loan()
+                    return
+            except Exception:
+                if loaned is not None:
+                    loaned.return_loan()
+                return
         if loaned is not None:
             if self._with_message_info:
                 def callback_with_loan(_msg=None, listener=self, user_cb=self._user_cb, sample=data, info=msg_info, samples=loaned):
@@ -633,6 +734,24 @@ class _ReaderListener(fastdds.DataReaderListener):
     def _enqueue_user_batch_callback(self, items):
         if not items:
             return
+        predicate = self._content_filter_predicate
+        if predicate is not None:
+            filtered = []
+            rejected_loans = []
+            for item in items:
+                try:
+                    if predicate(item[0]):
+                        filtered.append(item)
+                    elif len(item) == 3 and item[2] is not None and item[2] not in rejected_loans:
+                        rejected_loans.append(item[2])
+                except Exception:
+                    if len(item) == 3 and item[2] is not None and item[2] not in rejected_loans:
+                        rejected_loans.append(item[2])
+            for samples in rejected_loans:
+                samples.return_loan()
+            items = filtered
+            if not items:
+                return
         loans = []
         if self._with_message_info:
             messages = []
@@ -784,7 +903,8 @@ class Subscription:
     def __init__(self, participant, topic, qos: QoSProfile, callback, msg_ctor, enqueue_cb, 
                  *, raw: bool = False, event_callbacks=None, pubsub_cls=None, msg_module=None,
                  expose_fields: bool = True, batch_callback: bool = False,
-                 batch_size: int | None = None):
+                 batch_size: int | None = None, qos_overriding_options=None,
+                 content_filter_options=None):
         self._participant = participant
         self._topic = topic
         self._callback = callback
@@ -793,7 +913,10 @@ class Subscription:
         self._destroyed = False
         self._raw_mode = raw
         self._expose_fields = bool(expose_fields)
-        self._event_callbacks = event_callbacks or {}
+        self._event_callbacks = event_callbacks
+        self._qos_overriding_options = qos_overriding_options
+        self._content_filter_options = content_filter_options
+        self._content_filter_predicate = _make_content_filter_predicate(content_filter_options)
         self._message_count = 0
         self._take_count = 0
         self._stats_started_at = time.monotonic()
@@ -835,6 +958,7 @@ class Subscription:
             expose_fields=expose_fields,
             batch_callback=batch_callback,
             batch_size=batch_size,
+            content_filter_predicate=self._content_filter_predicate,
         )
 
         # Create DataReader with listener

@@ -208,11 +208,23 @@ class _LoanedMessage(Generic[T]):
 class Publisher:
     """Publisher managing Publisher/DataWriter with zero-copy friendly QoS."""
 
-    def __init__(self, participant, topic, qos: QoSProfile, msg_ctor=None, msg_module=None, pubsub_cls=None):
+    def __init__(
+        self,
+        participant,
+        topic,
+        qos: QoSProfile,
+        msg_ctor=None,
+        msg_module=None,
+        pubsub_cls=None,
+        event_callbacks=None,
+        qos_overriding_options=None,
+    ):
         self._participant = participant
         self._topic = topic
         self._msg_ctor = msg_ctor
         self._msg_module = msg_module
+        self._event_callbacks = event_callbacks
+        self._qos_overriding_options = qos_overriding_options
         self._destroyed = False
         self._publish_count = 0
         self._stats_started_at = time.monotonic()
