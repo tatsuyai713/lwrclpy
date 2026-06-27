@@ -42,7 +42,10 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 | **Callback Groups** | ✅ | ✅ | MutuallyExclusive/Reentrant |
 | **Guard Conditions** | ✅ | ✅ | スレッド間同期 |
 | **QoS Profiles** | ✅ | ✅ | 主要ポリシー対応 |
-| **ゼロコピー通信** | ✅ DataSharing/SHMを内部利用 | ⚠️ Python公開loan APIなし | アプリ側は標準 `publish(msg)` を使用 |
+| **ゼロコピー通信** | ✅ DataSharing/loan/SharedMemoryを内部利用 | ⚠️ rmw実装依存、rclpy公開loan APIなし | アプリ側は標準 `publish(msg)` のまま利用可能 |
+| **CPU SharedMemoryサイドチャネル** | ✅ 同一ホストで自動利用 | ❌ | lwrclpy独自拡張。別ホスト/通常DDS subscriberにはDDS payloadでフォールバック |
+| **CUDA IPCサイドチャネル** | ✅ 対応環境で利用可能 | ❌ | lwrclpy独自拡張。GPU memoryを同一ホストの別プロセスへ渡す |
+| **大容量sequence buffer API** | ✅ `data_buffer()` / `sequence_buffer()` | ❌ | `Image.data`などをPython list化せず扱う |
 | **Clock/Time/Duration** | ✅ | ✅ | ROS Time/Sim Time対応 |
 | **Logging** | ✅ | ✅ | レベル/スロットリング対応 |
 | **Context/Domain ID** | ✅ | ✅ | 複数コンテキスト対応 |
@@ -57,7 +60,7 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 |------|---------|-------|------|
 | **起動時間** | ⚡ 高速 | 🐢 やや遅い | ROS 2ミドルウェア層がない |
 | **メモリ使用量** | 📉 少ない | 📈 多い | 最小限の依存関係 |
-| **ゼロコピー** | ✅ Fast DDS DataSharing | ⚠️ rmw依存、rclpy loan APIなし | アプリコードを変えずに大型メッセージで効果 |
+| **ゼロコピー** | ✅ Fast DDS DataSharing / loaned samples / SharedMemory | ⚠️ rmw依存、rclpy loan APIなし | アプリコードを変えずに大型メッセージで効果 |
 | **レイテンシ** | ⚡ 低い | ⚡ 低い | 同等（同じDDS基盤） |
 
 ### 動作確認済み環境
@@ -290,38 +293,15 @@ rclpy.shutdown()
 
 ## 🚀 高度な機能
 
-### ゼロコピー向け通信
+lwrclpyの最重要方針はrclpy互換です。通常のアプリケーションは、ROS 2 rclpyと同じ
+`create_publisher()` / `create_subscription()` / `publish(msg)` で書けます。
 
-移植可能なrclpy互換コードでは、標準のpublish APIを使います。
+一方で、lwrclpyにはROS 2 rclpyにはない高速化機能があります。これらは互換APIを壊さない追加機能です。
+標準APIのまま自動で使われるものと、必要な場合だけ明示的に使うAPIがあります。
 
-```python
-msg = Image()
-msg.data = large_data
-publisher.publish(msg)
-```
+### 自動ゼロコピー最適化
 
-lwrclpyは利用可能な場合にFast DDS DataSharing/SHMを内部で有効化します。ROS 2
-`rclpy`には公開された`loan_message()` APIがないため、移植可能なコードでは標準の
-`publish(msg)` APIを使います。
-
-### 自動 Zero-Copy
-
-lwrclpyは、Fast DDS Python APIが対応している場合にwriter/reader QoSのDataSharingを
-明示的にONにします。さらに生成型が固定サイズ/plainで、再生成済みbindingにmiddleware
-loan helperがある場合は、通常の`publish(msg)`と通常のsubscription callbackのまま、
-内部でDataWriter/DataReader loanを自動利用します。
-
-Windowsでは、DataSharing/loaned-message経路は既定で無効です。これは未対応を
-隠すためではなく、WindowsのFast-DDS-python/fastddsgen生成bindingでは、生成型ごとの
-DLL/PYD境界をまたいで`lwrclpy_loan_sample_addr()`と`lwrclpy_<Type>_from_addr()`の
-raw address変換を使うと、loaned sampleを別の生成型として解釈してしまうケースがあるためです。
-確認済みの症状として、`geometry_msgs/msg/Point`のpublish中に別のgeometry型のsetterへ入り、
-Python例外ではなくWindowsのaccess violationでプロセスが終了します。
-
-そのためWindowsでは、標準の`publish(msg)`/subscription callbackは通常のFast DDS
-`DataWriter.write()`経路で動作させ、zero-copyを使用したと偽装しません。Windowsでこの
-実験的経路を調査する場合のみ、`LWRCLPY_ENABLE_WINDOWS_DATASHARING=1`を明示して有効化できます。
-安定動作を優先する通常利用やCIでは有効化しないでください。
+標準のrclpy互換コードでは、通常通り `publish(msg)` を使います。
 
 ```python
 msg = Image()
@@ -329,34 +309,246 @@ msg.data = large_data
 publisher.publish(msg)
 ```
 
-`sensor_msgs/Image`や`std_msgs/String`のような可変長型では、自動loanは無効になります。
-この場合もrclpy互換の通常送受信として動作します。
+lwrclpyは可能な場合に、内部で以下を自動利用します。
 
-現在の環境で自動zero-copy経路を確認するには、次を実行します。
+- Fast DDS DataSharing
+- middleware loaned samples
+- 同一ホスト向けCPU SharedMemoryサイドチャネル
 
-```bash
-python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-complete-zero-copy
-```
-実験的なloaned-message経路を次のように確認できます。
+固定サイズ/plain typeでloanが使える場合は、通常の`publish(msg)`とsubscription callbackのまま
+loaned sample経路を利用します。`sensor_msgs/Image`や`std_msgs/String`のような可変長payloadでは、
+loaned sampleが使えないため、同一ホストではSharedMemoryサイドチャネル、別ホストでは通常DDS payloadへ
+自動的に切り替わります。
 
-```bash
-python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-message
-```
-
-Sub側loaned receiveも確認する場合は次を実行します。
-
-```bash
-python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-zero-copy --require-loaned-receive
-```
-
-Pub側のDataWriter loan、DataSharing、Sub側のDataReader loanをすべて必須にして
-完全なゼロコピー経路を確認するには次を実行します。
+現在の環境でゼロコピー経路を確認するには、次を実行します。
 
 ```bash
 python3 examples/lwrclpy_extensions/zero_copy_extension_publisher.py --require-complete-zero-copy
+python3 examples/lwrclpy_extensions/large_payload_zero_copy_benchmark.py --samples 10
 ```
 
-Fast DDS DataSharingを有効化できない場合、このコマンドはzero-copy使用を装わずに失敗します。
+実行時の状態は `performance_stats` で確認できます。
+
+```python
+print(publisher.performance_stats)
+```
+
+主な項目:
+
+- `data_sharing_enabled`
+- `can_loan_messages`
+- `automatic_loaned_publish_enabled`
+- `auto_loan_publish_count`
+- `zero_copy_fallback_count`
+- `last_zero_copy_fallback_reason`
+
+明示的にloaned messageを使いたい場合は、lwrclpy独自APIを使用できます。
+
+```python
+with publisher.borrow_loaned_message(require_zero_copy=True) as msg:
+    msg.data = 42
+# withを抜けるとpublishされます
+```
+
+移植性を優先するコードでは、標準の`publish(msg)`を使ってください。
+`require_zero_copy=True`は「ゼロコピーでなければ失敗させたい」検証向けです。
+
+### CPU SharedMemoryサイドチャネル
+
+CPU SharedMemoryは、大きな可変長payloadを同一ホスト内で高速に渡すためのlwrclpy独自機能です。
+DDSには小さなmetadataと通常メッセージを流し、実データはPythonの
+`multiprocessing.shared_memory`に置きます。
+
+サンプル:
+
+```bash
+# terminal 1
+python3 examples/shared_memory/image_shared_memory_subscriber.py --read-byte
+
+# terminal 2
+python3 examples/shared_memory/image_shared_memory_publisher.py --width 640 --height 480 --rate 10
+```
+
+Subscriber側に次のような出力が出ればSharedMemory経由です。
+
+```text
+[recv] 640x480 shared_memory=True nbytes=921600 name=...
+```
+
+#### 自動切り替え
+
+`node.create_publisher()` / `node.create_subscription()` を使うだけで、lwrclpyはhidden metadata topicを
+自動的に作成します。
+
+同一ホストにlwrclpy subscriberがいる場合:
+
+- payloadが閾値以上ならSharedMemory metadataをpublishします
+- subscriberは`get_shared_memory_buffer(msg, "data")`でSharedMemoryを取得できます
+- local lwrclpy subscriberだけなら、DDSの大きなpayloadは空にして小さなsignal messageを送ります
+
+別ホストや通常DDS subscriberが混在する場合:
+
+- SharedMemory metadataだけでは届かないため、通常のDDS payloadもpublishします
+- 同一ホストlwrclpy subscriberはSharedMemory、別ホスト/通常subscriberはDDS payloadを受け取ります
+- ユーザーコードは標準の`publish(msg)`のままで動作します
+
+#### Publisher側
+
+通常のrclpyと同じ書き方でもpublishできます。
+
+```python
+msg = Image()
+msg.height = 480
+msg.width = 640
+msg.encoding = "bgr8"
+msg.step = 640 * 3
+msg.data = frame
+publisher.publish(msg)
+```
+
+この場合も、生成bindingがfieldからbuffer viewを公開でき、payloadサイズが閾値以上で、同一ホストに
+lwrclpy subscriberがいれば自動SharedMemoryの対象になります。ただし、`msg.data = frame` の時点で
+生成binding側のsetterがコピーを行うことがあります。
+
+標準`publish(msg)`で自動SharedMemoryを使う例:
+
+```python
+from lwrclpy import data_buffer
+from sensor_msgs.msg import Image
+
+msg = Image()
+msg.height = 480
+msg.width = 640
+msg.encoding = "bgr8"
+msg.step = 640 * 3
+
+frame = b"\xff" * (640 * 480 * 3)
+data_buffer(msg).assign(frame)
+publisher.publish(msg)
+```
+
+`data_buffer(msg).assign(frame)` は、`sensor_msgs/Image.data` のような大きなsequence fieldへ
+bytes-like objectを効率よく入れるためのヘルパーです。rclpy互換APIではありませんが、代入時の
+Python list化や余分なコピーを避けたい大容量payloadではこちらを推奨します。
+
+明示的にSharedMemory化したい場合:
+
+```python
+used = publisher.publish_shared_memory(
+    msg,
+    frame,
+    field="data",
+    publish_ros_payload=True,
+)
+```
+
+`publish_ros_payload=True`なら、通常ROS 2 subscriberや別ホストsubscriberにもDDS payloadが届きます。
+`publish_ros_payload=False`は同一ホストlwrclpy subscriber専用の高速経路で、DDS側の対象fieldは空になります。
+
+#### Subscriber側
+
+```python
+from lwrclpy import get_shared_memory_buffer
+
+def on_image(msg):
+    shm = get_shared_memory_buffer(msg, "data")
+    if shm is None:
+        # 通常DDS payload
+        data = msg.data
+        return
+
+    view = shm.open_memoryview()
+    try:
+        first = view[0]
+        nbytes = shm.nbytes
+        print(first, nbytes)
+    finally:
+        release = getattr(view, "release", None)
+        if callable(release):
+            release()
+        shm.close()
+```
+
+注意点:
+
+- `open_memoryview()`で得たmemoryviewが残っている間は、`SharedMemory.close()`が`BufferError`になることがあります
+- `bytes(view)`や`shm.tobytes()`はPython bytesへコピーします。ゼロコピーで処理する場合はmemoryviewを直接使います
+- SharedMemoryは同一ホスト限定です。metadataの`host_id`が違う場合はsubscriber側で無視されます
+
+#### 環境変数
+
+| 環境変数 | デフォルト | 説明 |
+|---|---:|---|
+| `LWRCLPY_AUTO_SHM_THRESHOLD` | `262144` | 自動SharedMemory化するpayloadサイズ閾値。`0`で無効化 |
+| `LWRCLPY_AUTO_SHM_FIELDS` | `data` | 自動SharedMemory対象field。カンマ区切り |
+| `LWRCLPY_SHM_KEEPALIVE` | `32` | publisherが保持するSharedMemory allocation数 |
+| `LWRCLPY_SHM_SUBSCRIBER_COUNT_TTL` | `0.05` | local subscriber数キャッシュ秒数 |
+
+例:
+
+```bash
+LWRCLPY_AUTO_SHM_THRESHOLD=65536 \
+LWRCLPY_AUTO_SHM_FIELDS=data \
+python3 examples/shared_memory/image_shared_memory_publisher.py
+```
+
+### CUDA IPCサイドチャネル
+
+CUDA IPCは、GPU memoryを同一ホストの別プロセスへ渡すためのlwrclpy独自機能です。
+CUDA環境とCuPyまたはcuda-pythonが必要です。
+
+```bash
+# terminal 1
+python3 examples/cuda_ipc/image_cuda_ipc_subscriber.py --read-byte
+
+# terminal 2
+python3 examples/cuda_ipc/image_cuda_ipc_publisher.py --metadata-only
+```
+
+Publisher側:
+
+```python
+used = publisher.publish_cuda(
+    msg,
+    cuda_array,
+    field="data",
+    publish_ros_payload=True,
+)
+```
+
+Subscriber側:
+
+```python
+from lwrclpy import get_cuda_buffer
+
+def on_image(msg):
+    cuda_buf = get_cuda_buffer(msg, "data")
+    if cuda_buf is None:
+        return
+    arr = cuda_buf.open_cupy()
+```
+
+`publish_ros_payload=True`なら通常DDS payloadも送ります。`publish_ros_payload=False`や
+exampleの`--metadata-only`は、同一ホストのlwrclpy CUDA IPC subscriber専用です。
+
+### 大きなsequence fieldの扱い
+
+`sensor_msgs/Image.data`や`PointCloud2.data`のような大きなsequence fieldは、Python listに変換すると
+大きなコストになります。lwrclpyでは次のヘルパーを使えます。
+
+```python
+from lwrclpy import data_buffer, sequence_buffer
+
+data_buffer(msg).assign(frame_bytes)
+view = data_buffer(msg).memoryview()
+```
+
+Publisherから直接payloadを入れて送る場合:
+
+```python
+publisher.publish_buffer(frame_bytes, field="data", msg=msg)
+publisher.publish_buffers({"data": frame_bytes}, msg=msg)
+```
 
 ### QoSプロファイル
 
@@ -504,6 +696,9 @@ python3 examples/pubsub/string/talker.py
 | **Pub/Sub** | `pubsub/string/` | 基本的な文字列メッセージ |
 | **Pub/Sub** | `pubsub/typed_messages/` | 各種ROS型メッセージ |
 | **Pub/Sub** | `pubsub/zero_copy/` | 標準rclpy APIでのゼロコピー向けPublishing |
+| **SharedMemory** | `shared_memory/` | 同一ホスト向けCPU SharedMemoryサイドチャネル |
+| **CUDA IPC** | `cuda_ipc/` | GPU memoryを同一ホストの別プロセスへ渡すサイドチャネル |
+| **lwrclpy拡張** | `lwrclpy_extensions/` | DataSharing/loaned message/大容量payloadベンチマーク |
 | **Service** | `services/set_bool/` | SetBoolサービス |
 | **Service** | `services/trigger/` | Triggerサービス |
 | **Action** | `actions/` | Fibonacciアクション |
