@@ -34,11 +34,19 @@ def shutdown():
     _context_shutdown(force_exit=True)
 from .executors import spin, spin_once, spin_some, spin_until_future_complete, SingleThreadedExecutor, MultiThreadedExecutor
 from .node import Node, Rate, create_node, create_rate
-from .parameters import Parameter, ParameterType, SetParametersResult
+from .parameters import (
+    FloatingPointRange,
+    IntegerRange,
+    Parameter,
+    ParameterDescriptor,
+    ParameterType,
+    SetParametersResult,
+)
 from .qos import (
     QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, LivelinessPolicy,
     qos_profile_sensor_data, qos_profile_system_default, qos_profile_services_default,
     qos_profile_parameters, qos_profile_parameter_events, qos_profile_best_available,
+    qos_profile_low_latency, qos_profile_high_throughput, qos_profile_bulk_reliable,
     INFINITE_DURATION,
 )
 from .timer import create_timer, Timer
@@ -52,6 +60,7 @@ from .duration import Duration
 from .subscription import MessageInfo
 from .buffers import RosidlBuffer, sequence_buffer, data_buffer
 from .cuda_ipc import CudaIpcBuffer, CudaIpcMetadata, get_cuda_buffer
+from .shared_memory import SharedMemoryBuffer, SharedMemoryMetadata, get_shared_memory_buffer
 
 if os.environ.get("LWRCLPY_EAGER_SERVICE_ALIASES") == "1":
     try:
@@ -64,9 +73,11 @@ __all__ = [
     "init", "shutdown", "ok", "spin", "spin_once", "spin_some", "spin_until_future_complete",
     "SingleThreadedExecutor", "MultiThreadedExecutor", "Node", "Rate", "create_node", "create_rate",
     "Parameter", "ParameterType", "SetParametersResult",
+    "ParameterDescriptor", "IntegerRange", "FloatingPointRange",
     "QoSProfile", "ReliabilityPolicy", "DurabilityPolicy", "HistoryPolicy", "LivelinessPolicy",
     "qos_profile_sensor_data", "qos_profile_system_default", "qos_profile_services_default",
     "qos_profile_parameters", "qos_profile_parameter_events", "qos_profile_best_available",
+    "qos_profile_low_latency", "qos_profile_high_throughput", "qos_profile_bulk_reliable",
     "INFINITE_DURATION",
     "create_timer", "Timer", "Client", "Service",
     "timer", "ActionServer", "ActionClient", "GoalResponse", "CancelResponse",
@@ -74,4 +85,5 @@ __all__ = [
     "get_participant", "get_domain_id", "try_shutdown", "Context",
     "RosidlBuffer", "sequence_buffer", "data_buffer",
     "CudaIpcBuffer", "CudaIpcMetadata", "get_cuda_buffer",
+    "SharedMemoryBuffer", "SharedMemoryMetadata", "get_shared_memory_buffer",
 ]

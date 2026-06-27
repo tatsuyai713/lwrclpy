@@ -1,6 +1,11 @@
+import asyncio
+import logging
 import threading
 import time
 from typing import Optional, Callable
+
+
+_logger = logging.getLogger(__name__)
 
 
 class _RepeatingTimer:
@@ -23,16 +28,20 @@ class _RepeatingTimer:
         self._stop = threading.Event()
         self._thr: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._pending_lock = threading.Lock()
         self._start_time = time.monotonic()
         self._next_t = self._start_time + self._period
         self._last_call: Optional[float] = None
         self._call_count = 0
+        self._callback_pending = False
+        self._canceled = False
 
     def start(self):
         """Start the timer thread."""
         with self._lock:
             if self._thr is not None and self._thr.is_alive():
                 return
+            self._canceled = False
             self._stop.clear()
             self._start_time = time.monotonic()
             self._next_t = self._start_time + self._period
@@ -53,68 +62,115 @@ class _RepeatingTimer:
             if self._stop.is_set():
                 break
             
-            # Fire the callback
+            # Fire or enqueue the callback.  When executor-driven, keep at
+            # most one outstanding callback so slow executors do not build an
+            # unbounded backlog of stale timer events.
             try:
-                self._last_call = time.monotonic()
-                self._call_count += 1
                 if self._enqueue_cb is not None:
-                    # Enqueue the user callback to be run by the executor
-                    self._enqueue_cb(self._callback, None)
+                    if not self._mark_callback_pending():
+                        continue
+                    self._enqueue_cb(self._run_queued_callback, None)
                 else:
+                    with self._lock:
+                        self._last_call = time.monotonic()
+                        self._call_count += 1
                     self._callback()
+            except asyncio.CancelledError:
+                if self._enqueue_cb is not None:
+                    self._clear_callback_pending()
             except Exception:
-                pass  # Swallow callback exceptions
+                if self._enqueue_cb is not None:
+                    self._clear_callback_pending()
+                else:
+                    _logger.exception("Timer callback failed")
             finally:
                 if self._oneshot:
                     self._stop.set()
-                    break
-                
-                # Calculate next fire time with drift compensation
-                # Use the scheduled time as base, not the actual execution time
-                # This prevents drift accumulation
-                now = time.monotonic()
-                self._next_t += self._period
-                
-                # If we've fallen behind by more than one period, 
-                # reset to prevent catching up
-                if self._next_t < now:
-                    # Skip missed intervals
-                    missed = int((now - self._next_t) / self._period) + 1
-                    self._next_t += missed * self._period
+                else:
+                    # Calculate next fire time with drift compensation.  Use
+                    # the scheduled time as base, not actual execution time.
+                    now = time.monotonic()
+                    self._next_t += self._period
+
+                    # If we've fallen behind by more than one period, skip
+                    # missed intervals instead of catching up in a burst.
+                    if self._next_t < now:
+                        missed = int((now - self._next_t) / self._period) + 1
+                        self._next_t += missed * self._period
+
+    def _mark_callback_pending(self) -> bool:
+        with self._pending_lock:
+            if self._callback_pending:
+                return False
+            self._callback_pending = True
+            return True
+
+    def _clear_callback_pending(self) -> None:
+        with self._pending_lock:
+            self._callback_pending = False
+
+    def _run_queued_callback(self, _msg=None):
+        try:
+            with self._lock:
+                if self._canceled:
+                    return
+                self._last_call = time.monotonic()
+                self._call_count += 1
+            self._callback()
+        finally:
+            self._clear_callback_pending()
 
     def cancel(self):
         """Request stop and join from external threads; skip join when self-canceling."""
-        self._stop.set()
-        # Avoid joining the current thread (raises RuntimeError)
         with self._lock:
+            self._canceled = True
+            self._stop.set()
             thr = self._thr
+        self._clear_callback_pending()
+        # Avoid joining the current thread (raises RuntimeError)
         if thr is not None and threading.current_thread() is not thr:
             thr.join(timeout=1)
 
     def reset(self):
         """Reset next wake-up to now + period."""
+        restart = False
         with self._lock:
+            self._canceled = False
+            self._stop.clear()
             self._next_t = time.monotonic() + self._period
+            if self._thr is None or not self._thr.is_alive():
+                restart = True
+                self._thr = threading.Thread(target=self._run, daemon=True)
+                self._thr.start()
+        if restart:
+            self._clear_callback_pending()
 
     def is_canceled(self) -> bool:
         """Return True if the timer has been canceled."""
-        return self._stop.is_set()
+        with self._lock:
+            return self._canceled
 
     def is_ready(self) -> bool:
         """Return True if the timer is ready to fire (past scheduled time)."""
-        if self._stop.is_set():
-            return False
-        return time.monotonic() >= self._next_t
+        with self._lock:
+            if self._canceled or self._stop.is_set():
+                return False
+            next_t = self._next_t
+        return time.monotonic() >= next_t
 
     def time_until_next_call(self) -> float:
         """Return seconds until next scheduled call (0 if past due)."""
-        return max(0.0, self._next_t - time.monotonic())
+        with self._lock:
+            next_t = self._next_t
+        return max(0.0, next_t - time.monotonic())
 
     def time_since_last_call(self) -> Optional[float]:
         """Return seconds since last callback execution, or None if never called."""
-        if self._last_call is None:
+        with self._lock:
+            last_call = self._last_call
+        if last_call is None:
             return None
-        return time.monotonic() - self._last_call
+        return time.monotonic() - last_call
 
     @property
     def timer_period_ns(self) -> int:
@@ -124,7 +180,8 @@ class _RepeatingTimer:
     @property
     def call_count(self) -> int:
         """Return the number of times the callback has been invoked."""
-        return self._call_count
+        with self._lock:
+            return self._call_count
 
 
 def create_timer(period_sec: float, callback: Callable, *, oneshot: bool = False, enqueue_cb=None) -> _RepeatingTimer:

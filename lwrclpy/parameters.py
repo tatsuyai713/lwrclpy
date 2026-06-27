@@ -1,6 +1,7 @@
 from __future__ import annotations
+from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any
+from typing import Any, Sequence
 
 
 class ParameterType(IntEnum):
@@ -88,6 +89,31 @@ class SetParametersResult:
 
     def __bool__(self) -> bool:
         return self.successful
+
+
+@dataclass
+class IntegerRange:
+    from_value: int = 0
+    to_value: int = 0
+    step: int = 0
+
+
+@dataclass
+class FloatingPointRange:
+    from_value: float = 0.0
+    to_value: float = 0.0
+    step: float = 0.0
+
+
+@dataclass
+class ParameterDescriptor:
+    name: str = ""
+    type: int = ParameterType.NOT_SET
+    description: str = ""
+    additional_constraints: str = ""
+    read_only: bool = False
+    integer_range: Sequence[IntegerRange] = field(default_factory=list)
+    floating_point_range: Sequence[FloatingPointRange] = field(default_factory=list)
 
 
 def coerce_parameter(obj: Any) -> Parameter:

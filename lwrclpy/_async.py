@@ -1,0 +1,47 @@
+import asyncio
+import threading
+
+
+class _AsyncRunner:
+    def __init__(self):
+        self._loop = None
+        self._thread = None
+        self._lock = threading.Lock()
+
+    def _ensure_started(self):
+        with self._lock:
+            if self._loop is not None and self._loop.is_running():
+                return self._loop
+            ready = threading.Event()
+            loop_holder = []
+
+            def run_loop():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop_holder.append(loop)
+                ready.set()
+                loop.run_forever()
+
+            self._thread = threading.Thread(target=run_loop, name="lwrclpy-async-runner", daemon=True)
+            self._thread.start()
+            ready.wait()
+            self._loop = loop_holder[0]
+            return self._loop
+
+    def run(self, coro):
+        loop = self._ensure_started()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result()
+
+
+_runner = _AsyncRunner()
+
+
+def run_coroutine(coro):
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is not None:
+        raise RuntimeError("Cannot synchronously run coroutine callback from an active event loop")
+    return _runner.run(coro)

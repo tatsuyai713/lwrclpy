@@ -11,6 +11,7 @@ from .utils import resolve_service_type, SERVICE_REQUEST_PREFIX, SERVICE_RESPONS
 from .context import get_participant, track_entity, untrack_entity
 from .utils import get_or_create_topic
 from .future import Future
+from .message_utils import expose_callable_fields
 
 
 class Client:
@@ -49,10 +50,17 @@ class Client:
         )
         self._lock = threading.Lock()
         self._pending_future: Future | None = None
+        self._destroyed = False
 
         def _on_response(msg):
+            try:
+                expose_callable_fields(msg)
+            except Exception:
+                pass
             future = None
             with self._lock:
+                if self._destroyed:
+                    return
                 future = self._pending_future
                 self._pending_future = None
             if future:
@@ -96,16 +104,52 @@ class Client:
     def call_async(self, request) -> Future:
         """Send request asynchronously, returning a Future resolved with the response."""
         future = Future()
+        try:
+            expose_callable_fields(request)
+        except Exception:
+            pass
         with self._lock:
-            if self._pending_future is not None:
-                raise RuntimeError("Only one pending service request is supported at a time")
-            self._pending_future = future
-        self._publisher.publish(request)
+            if self._destroyed:
+                destroyed = True
+            else:
+                destroyed = False
+                if self._pending_future is not None:
+                    raise RuntimeError("Only one pending service request is supported at a time")
+                self._pending_future = future
+        if destroyed:
+            future.set_exception(RuntimeError("Client has been destroyed"))
+            return future
+        try:
+            self._publisher.publish(request)
+            try:
+                expose_callable_fields(request)
+            except Exception:
+                pass
+        except Exception as exc:
+            with self._lock:
+                if self._pending_future is future:
+                    self._pending_future = None
+            future.set_exception(exc)
         return future
 
     def send_request(self, request):
         """Compatibility alias used by some examples."""
-        self._publisher.publish(request)
+        try:
+            expose_callable_fields(request)
+        except Exception:
+            pass
+        with self._lock:
+            if self._destroyed or self._publisher is None:
+                return False
+            publisher = self._publisher
+        try:
+            publisher.publish(request)
+            try:
+                expose_callable_fields(request)
+            except Exception:
+                pass
+        except Exception:
+            return False
         return True
 
     def wait_for_service(self, timeout_sec: Optional[float] = None) -> bool:
@@ -137,6 +181,9 @@ class Client:
         Returns True when the request publisher has matched subscribers and
         the response subscription has matched publishers.
         """
+        with self._lock:
+            if self._destroyed:
+                return False
         try:
             return (
                 self._publisher.get_subscription_count() > 0
@@ -150,8 +197,15 @@ class Client:
         # Untrack from global cleanup
         untrack_entity(self)
         
-        # Clear pending future first
-        self._pending_future = None
+        # Clear pending future first and wake any waiter.
+        with self._lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
+            pending = self._pending_future
+            self._pending_future = None
+        if pending is not None:
+            pending.cancel()
         
         # Destroy subscription first (stop receiving)
         if hasattr(self, '_subscription') and self._subscription:

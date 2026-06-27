@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 import copy
+import operator
 
 # Fields injected by SWIG that should never be copied onto new instances.
 _SKIP_FIELDS = {"this", "thisown"}
@@ -271,16 +272,76 @@ class _ValueProxy:
         return int(self._v)
 
     def __add__(self, other):
-        try:
-            return self._v + other
-        except Exception:
-            return NotImplemented
+        return _proxy_binary(operator.add, self._v, other)
 
     def __radd__(self, other):
+        return _proxy_binary(operator.add, other, self._v)
+
+    def __sub__(self, other):
+        return _proxy_binary(operator.sub, self._v, other)
+
+    def __rsub__(self, other):
+        return _proxy_binary(operator.sub, other, self._v)
+
+    def __mul__(self, other):
+        return _proxy_binary(operator.mul, self._v, other)
+
+    def __rmul__(self, other):
+        return _proxy_binary(operator.mul, other, self._v)
+
+    def __truediv__(self, other):
+        return _proxy_binary(operator.truediv, self._v, other)
+
+    def __rtruediv__(self, other):
+        return _proxy_binary(operator.truediv, other, self._v)
+
+    def __floordiv__(self, other):
+        return _proxy_binary(operator.floordiv, self._v, other)
+
+    def __rfloordiv__(self, other):
+        return _proxy_binary(operator.floordiv, other, self._v)
+
+    def __mod__(self, other):
+        return _proxy_binary(operator.mod, self._v, other)
+
+    def __rmod__(self, other):
+        return _proxy_binary(operator.mod, other, self._v)
+
+    def __pow__(self, other):
+        return _proxy_binary(operator.pow, self._v, other)
+
+    def __rpow__(self, other):
+        return _proxy_binary(operator.pow, other, self._v)
+
+    def __neg__(self):
+        return -self._v
+
+    def __pos__(self):
+        return +self._v
+
+    def __abs__(self):
+        return abs(self._v)
+
+
+def _proxy_binary(op, left, right):
+    try:
+        if isinstance(left, _ValueProxy):
+            left = left()
+        if isinstance(right, _ValueProxy):
+            right = right()
+        return op(left, right)
+    except Exception:
+        return NotImplemented
+
+
+def _shadow_attr(obj, name: str, value) -> bool:
+    for setter in (object.__setattr__, setattr):
         try:
-            return other + self._v
+            setter(obj, name, value)
+            return True
         except Exception:
-            return NotImplemented
+            continue
+    return False
 
 
 # ---- Module-level helpers used by clone_message --------------------------------
@@ -330,56 +391,45 @@ def _get_value(src, name):
     return None
 
 
-def _assign(target, name, val) -> bool:
+def _assign(target, name, val, *, strict: bool = False) -> bool:
     """Assign *val* to *name* on *target* using fastddsgen conventions."""
     if name in _SKIP_FIELDS or name.startswith("_"):
         return False
-    try:
-        setter = getattr(target, name, None)
-        if callable(setter):
-            assigned = False
-            candidates = [val]
-            view = _buffer_view(val)
-            if view is not None:
-                candidates.append(view)
-                try:
-                    candidates.append(view.cast("B"))
-                except Exception:
-                    pass
-                # Last-resort fallback for bindings that do not consume
-                # Py_buffer directly.  Prefer the buffer objects above so
-                # generated uint8/octet setters can do a single C++ copy.
-                candidates.append(view.tobytes())
-            seen_candidate_ids: set[int] = set()
-            for candidate in candidates:
-                candidate_id = id(candidate)
-                if candidate_id in seen_candidate_ids:
-                    continue
-                seen_candidate_ids.add(candidate_id)
-                try:
-                    setter(candidate)
-                except Exception:
-                    continue
-                else:
-                    assigned = True
-                    break
-            if not assigned:
-                raise RuntimeError("setter rejected value")
+    setter = getattr(target, name, None)
+    if callable(setter):
+        candidates = [val]
+        view = _buffer_view(val)
+        if view is not None:
+            candidates.append(view)
             try:
-                exposed_val = setter()
+                candidates.append(view.cast("B"))
             except Exception:
-                exposed_val = val
-            # Expose rclpy-style attribute access while keeping callable behavior.
+                pass
+            # Last-resort fallback for bindings that do not consume
+            # Py_buffer directly.  Prefer the buffer objects above so
+            # generated uint8/octet setters can do a single C++ copy.
+            candidates.append(view.tobytes())
+        seen_candidate_ids: set[int] = set()
+        last_error = None
+        for candidate in candidates:
+            candidate_id = id(candidate)
+            if candidate_id in seen_candidate_ids:
+                continue
+            seen_candidate_ids.add(candidate_id)
             try:
-                setattr(target, name, _ValueProxy(exposed_val))
-            except Exception:
-                try:
-                    object.__setattr__(target, name, _ValueProxy(exposed_val))
-                except Exception:
-                    pass
-            return True
-    except Exception:
-        pass
+                setter(candidate)
+            except Exception as exc:
+                last_error = exc
+                continue
+            break
+        else:
+            if strict:
+                raise TypeError(
+                    f"Failed to assign field {type(target).__name__}.{name}: "
+                    f"setter rejected {type(val).__name__}"
+                ) from last_error
+            return False
+        return True
     # Fallback: explicit special-case for common fields present in __dict__ only
     if name == "data" and isinstance(val, (bytes, bytearray, memoryview)):
         try:
@@ -391,11 +441,12 @@ def _assign(target, name, val) -> bool:
         setattr(target, name, val)
         return True
     except Exception:
-        try:
-            object.__setattr__(target, name, val)
-            return True
-        except Exception:
-            return False
+        return False
+
+
+def _assign_required(target, name, val) -> None:
+    if not _assign(target, name, val, strict=True):
+        raise AttributeError(f"Failed to assign field {type(target).__name__}.{name}")
 
 
 def _copy_val(val):
@@ -444,10 +495,10 @@ def _copy_val(val):
                 if sub_val is not None:
                     if _is_swig_vector(sub_val) and _assign(sub_clone, fname, sub_val):
                         continue
-                    _assign(sub_clone, fname, _copy_val(sub_val))
+                    _assign_required(sub_clone, fname, _copy_val(sub_val))
             return sub_clone
-        except Exception:
-            pass
+        except Exception as exc:
+            raise TypeError(f"Failed to clone nested message {type(val).__name__}") from exc
 
     # Last resort (should rarely be reached now)
     try:
@@ -479,13 +530,7 @@ def expose_callable_fields(msg):
             continue
         fast_view = _message_field_memoryview(msg, name)
         if fast_view is not None:
-            try:
-                setattr(msg, name, fast_view)
-            except Exception:
-                try:
-                    object.__setattr__(msg, name, fast_view)
-                except Exception:
-                    pass
+            _shadow_attr(msg, name, fast_view)
             continue
         try:
             val = attr()
@@ -509,21 +554,9 @@ def expose_callable_fields(msg):
             else:
                 view = _buffer_view(val)
                 if view is not None:
-                    try:
-                        setattr(msg, name, view)
-                    except Exception:
-                        try:
-                            object.__setattr__(msg, name, view)
-                        except Exception:
-                            pass
+                    _shadow_attr(msg, name, view)
                     continue
-        try:
-            setattr(msg, name, _ValueProxy(val))
-        except Exception:
-            try:
-                object.__setattr__(msg, name, _ValueProxy(val))
-            except Exception:
-                pass
+        _shadow_attr(msg, name, _ValueProxy(val))
     return msg
 
 
@@ -562,7 +595,7 @@ def clone_message(msg, msg_ctor):
         if _is_swig_vector(val) and _assign(clone, name, val):
             continue
         copied = _copy_val(val)
-        _assign(clone, name, copied)
+        _assign_required(clone, name, copied)
 
     # Handle extra instance attributes not in the SWIG class definition
     if extra_names:
@@ -579,6 +612,6 @@ def clone_message(msg, msg_ctor):
             if _is_swig_vector(val) and _assign(clone, name, val):
                 continue
             copied = _copy_val(val)
-            _assign(clone, name, copied)
+            _assign_required(clone, name, copied)
 
     return clone

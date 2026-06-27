@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import uuid
 from typing import Any, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 from .action import Action
@@ -67,20 +69,28 @@ class PythonLaunchDescriptionSource(LaunchDescriptionSource):
 
         # Load the Python file
         import importlib.util
-        spec = importlib.util.spec_from_file_location("launch_module", path)
+        module_name = f"_lwrclpy_launch_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Could not load launch file: {path}")
         
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        previous_launch_file = getattr(context, "_current_launch_file_path", None)
+        context._current_launch_file_path = path
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
 
-        # Get the launch description
-        if not hasattr(module, 'generate_launch_description'):
-            raise RuntimeError(
-                f"Launch file '{path}' does not have a 'generate_launch_description' function"
-            )
+            # Get the launch description
+            if not hasattr(module, 'generate_launch_description'):
+                raise RuntimeError(
+                    f"Launch file '{path}' does not have a 'generate_launch_description' function"
+                )
 
-        return module.generate_launch_description()
+            return module.generate_launch_description()
+        finally:
+            context._current_launch_file_path = previous_launch_file
+            sys.modules.pop(module_name, None)
 
 
 class AnyLaunchDescriptionSource(PythonLaunchDescriptionSource):
@@ -107,6 +117,7 @@ class IncludeLaunchDescription(Action):
         super().__init__(**kwargs)
         self._launch_description_source = launch_description_source
         self._launch_arguments = list(launch_arguments) if launch_arguments else []
+        self._scope_pushed = False
 
     @property
     def launch_description_source(self) -> LaunchDescriptionSource:
@@ -122,17 +133,27 @@ class IncludeLaunchDescription(Action):
         """Execute the include action."""
         # Push a new configuration scope
         context._push_configuration_scope(forwarding=True)
+        self._scope_pushed = True
 
-        # Set launch arguments
-        for key, value in self._launch_arguments:
-            key_str = context.perform_substitution(key)
-            value_str = context.perform_substitution(value)
-            context.launch_configurations[key_str] = value_str
+        try:
+            # Set launch arguments
+            for key, value in self._launch_arguments:
+                key_str = context.perform_substitution(key)
+                value_str = context.perform_substitution(value)
+                context.launch_configurations[key_str] = value_str
 
-        # Get and return the launch description entities
-        launch_description = self._launch_description_source.get_launch_description(context)
-        
-        return launch_description.entities
+            # Get and return the launch description entities
+            launch_description = self._launch_description_source.get_launch_description(context)
+            return launch_description.entities
+        except Exception:
+            self._after_sub_entities_visited(context)
+            raise
+
+    def _after_sub_entities_visited(self, context: 'LaunchContext') -> None:
+        """Restore the configuration scope after included entities run."""
+        if self._scope_pushed:
+            self._scope_pushed = False
+            context._pop_configuration_scope()
 
     def describe(self) -> str:
         """Return a description of this action."""

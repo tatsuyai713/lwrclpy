@@ -34,7 +34,7 @@ def main():
                    f"gyro_z={gyro.z():.4f}")
     
     def range_callback(msg):
-        logger.info(f"[Range] distance={msg.range_():.3f}m, "
+        logger.info(f"[Range] distance={msg.range():.3f}m, "
                    f"fov={msg.field_of_view():.2f}rad")
     
     def temp_callback(msg):

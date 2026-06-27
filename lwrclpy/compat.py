@@ -5,7 +5,8 @@ import inspect
 def _patch_message_class(cls):
     if getattr(cls, "__lwrclpy_attr_patched__", False):
         return
-    if cls.__name__.endswith("PubSubType"):
+    cls_name = getattr(cls, "__name__", "")
+    if cls_name.endswith("PubSubType") or "vector" in cls_name.lower():
         return
     try:
         inst = cls()
@@ -79,11 +80,15 @@ def _patch_message_class(cls):
         object.__setattr__(self, name, value)
 
     # Preserve existing __getattr__/__setattr__ if present by chaining
-    if not hasattr(cls, "__getattr__"):
+    if "__getattr__" not in cls.__dict__:
         cls.__getattr__ = __getattr__
-    if not hasattr(cls, "__setattr__"):
+    if "__setattr__" not in cls.__dict__:
         cls.__setattr__ = __setattr__
     setattr(cls, "__lwrclpy_attr_patched__", True)
+
+
+def patch_message_class(cls):
+    _patch_message_class(cls)
 
 
 def _patch_module(mod: ModuleType):
@@ -97,7 +102,7 @@ def _patch_module(mod: ModuleType):
 
 
 def patch_known_message_modules():
-    for mod_name in ("sensor_msgs.msg", "std_msgs.msg", "builtin_interfaces.msg"):
+    for mod_name in ("sensor_msgs.msg", "std_msgs.msg", "builtin_interfaces.msg", "geometry_msgs.msg"):
         try:
             module = __import__(mod_name, fromlist=["msg"])
         except Exception:
@@ -128,7 +133,7 @@ def ensure_pointfield_constants():
     if not getattr(PointField, "__lwrclpy_init_patched__", False):
         _orig_init = PointField.__init__
 
-        from .message_utils import _ValueProxy  # local import to avoid cycles
+        from .message_utils import _assign  # local import to avoid cycles
 
         def _patched_init(self, **kwargs):
             try:
@@ -137,22 +142,8 @@ def ensure_pointfield_constants():
                 pass
             for k, v in kwargs.items():
                 try:
-                    setter = getattr(self, k, None)
-                    if callable(setter):
-                        try:
-                            setter(v)
-                            try:
-                                object.__setattr__(self, k, _ValueProxy(v))
-                            except Exception:
-                                pass
-                            continue
-                        except Exception:
-                            pass
-                    setattr(self, k, v)
-                    try:
-                        object.__setattr__(self, k, _ValueProxy(v))
-                    except Exception:
-                        pass
+                    if not _assign(self, k, v):
+                        setattr(self, k, v)
                 except Exception:
                     continue
 
@@ -437,25 +428,11 @@ def _patch_kwargs_init(cls):
                 _orig_init(self)
             except Exception:
                 pass
-        from .message_utils import _ValueProxy  # local import to avoid cycles
+        from .message_utils import _assign  # local import to avoid cycles
         for k, v in kwargs.items():
             try:
-                attr = getattr(self, k, None)
-                if callable(attr):
-                    try:
-                        attr(v)
-                        try:
-                            object.__setattr__(self, k, _ValueProxy(v))
-                        except Exception:
-                            pass
-                        continue
-                    except Exception:
-                        pass
-                setattr(self, k, v)
-                try:
-                    object.__setattr__(self, k, _ValueProxy(v))
-                except Exception:
-                    pass
+                if not _assign(self, k, v):
+                    setattr(self, k, v)
             except Exception:
                 continue
 

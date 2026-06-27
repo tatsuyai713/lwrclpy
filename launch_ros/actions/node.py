@@ -154,12 +154,7 @@ class Node(ExecuteProcess):
         environment variables.
         """
         # Build the environment with Node-specific variables
-        env = self._build_environment(context)
-        
-        # Also add context environment
-        env.update(context.environment)
-        
-        return env
+        return self._build_environment(context)
 
     def _find_executable(self, executable: str, package: Optional[str], context: 'LaunchContext') -> List[str]:
         """
@@ -262,11 +257,12 @@ class Node(ExecuteProcess):
 
         # Start with current environment or user-specified environment
         if self._node_env:
-            env = {}
+            env = dict(context.environment)
             for key, value in self._node_env.items():
                 env[key] = context.perform_substitution(value) if hasattr(value, 'perform') else str(value)
         else:
             env = os.environ.copy()
+            env.update(context.environment)
 
         # Add additional environment variables
         if self._node_additional_env:

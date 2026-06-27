@@ -58,10 +58,14 @@ class TimerAction(Action):
         period = float(period_str)
 
         def timer_callback():
+            if self._cancel_on_shutdown and getattr(context, "is_shutdown", False):
+                return
             # Execute actions when timer fires
             # Note: In a full implementation, this would properly integrate
             # with the launch service's execution loop
             for action in self._actions:
+                if self._cancel_on_shutdown and getattr(context, "is_shutdown", False):
+                    return
                 if hasattr(action, 'execute'):
                     action.execute(context)
 

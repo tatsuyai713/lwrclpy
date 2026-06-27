@@ -93,9 +93,14 @@ class LaunchService:
                 sub_entities = result
         
         # Process sub-entities
-        if sub_entities:
-            for sub_entity in sub_entities:
-                await self._visit_entity(sub_entity, context)
+        try:
+            if sub_entities:
+                for sub_entity in sub_entities:
+                    await self._visit_entity(sub_entity, context)
+        finally:
+            after_sub_entities = getattr(entity, "_after_sub_entities_visited", None)
+            if callable(after_sub_entities):
+                after_sub_entities(context)
 
     async def _run_async(self) -> int:
         """Run the launch description asynchronously."""
@@ -169,8 +174,11 @@ class LaunchService:
             if self._loop is not None:
                 self._loop.call_soon_threadsafe(self._request_shutdown)
 
-        original_sigint = signal.signal(signal.SIGINT, signal_handler)
-        original_sigterm = signal.signal(signal.SIGTERM, signal_handler)
+        install_signal_handlers = threading.current_thread() is threading.main_thread()
+        original_sigint = original_sigterm = None
+        if install_signal_handlers:
+            original_sigint = signal.signal(signal.SIGINT, signal_handler)
+            original_sigterm = signal.signal(signal.SIGTERM, signal_handler)
 
         try:
             self._loop = asyncio.new_event_loop()
@@ -179,8 +187,9 @@ class LaunchService:
         except KeyboardInterrupt:
             return 0
         finally:
-            signal.signal(signal.SIGINT, original_sigint)
-            signal.signal(signal.SIGTERM, original_sigterm)
+            if install_signal_handlers:
+                signal.signal(signal.SIGINT, original_sigint)
+                signal.signal(signal.SIGTERM, original_sigterm)
             if self._loop is not None:
                 self._loop.close()
                 self._loop = None
@@ -189,6 +198,8 @@ class LaunchService:
         """Request shutdown of the launch service."""
         self._shutdown_requested = True
         self._running = False
+        if self._context is not None:
+            self._context._set_is_shutdown(True, "shutdown requested")
 
     def shutdown(self) -> None:
         """Request shutdown of the launch service."""

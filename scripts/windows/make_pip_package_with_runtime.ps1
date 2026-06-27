@@ -252,6 +252,7 @@ Write-Host "[INFO] Patching generated ROS wrappers"
 $patches = @(
     "patch_action_types.py",
     "patch_service_types.py",
+    "patch_message_setter_compat.py",
     "patch_message_preload.py"
 )
 foreach ($patch in $patches) {

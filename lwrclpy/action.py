@@ -2,8 +2,11 @@ import asyncio
 import threading
 import time
 import uuid
+from collections import deque
 from enum import Enum
 from typing import Callable, Optional
+
+from ._async import run_coroutine
 
 try:
     from action_msgs.msg import GoalStatusArray, GoalStatus
@@ -43,6 +46,8 @@ _STATUS_CANCELING = 3
 _STATUS_SUCCEEDED = 4
 _STATUS_CANCELED = 5
 _STATUS_ABORTED = 6
+_RESULT_RETENTION_SEC = 900.0
+_MAX_RETAINED_RESULTS = 1024
 
 if GoalStatus is not None:
     for _name, _value in {
@@ -273,20 +278,25 @@ class ActionServer:
         cancel_callback: Optional[Callable] = None,
         handle_accepted_callback: Optional[Callable] = None,
         callback_group=None,
+        fast_callback: bool = False,
+        expose_fields: Optional[bool] = None,
     ):
-        del callback_group
         self._participant = get_participant()
         self._node = node
+        self._callback_group = self._node._resolve_callback_group(callback_group)
+        self._node._register_entity_callback_group(self, self._callback_group)
         self._execute_callback = execute_callback
         self._goal_callback = goal_callback
         self._cancel_callback = cancel_callback
         self._handle_accepted_callback = handle_accepted_callback
+        self._expose_fields = (not fast_callback) if expose_fields is None else bool(expose_fields)
         self._lock = threading.Lock()
         self._goal_handles: dict[bytes, _ServerGoalHandle] = {}
-        # map goal_id bytes -> (status_code, result_obj, goal_id_copy)
-        self._results: dict[bytes, tuple[int, object | None, object | None]] = {}
-        self._pending_result_requests: set[bytes] = set()
+        # map goal_id bytes -> (status_code, result_obj, goal_id_copy, completed_at)
+        self._results: dict[bytes, tuple[int, object | None, object | None, float]] = {}
+        self._pending_result_requests: dict[bytes, float] = {}
         self._status_entries: dict[bytes, tuple[object, int]] = {}
+        self._destroyed = False
 
         types = resolve_action_type(action_type)
         self._goal_cls = types["goal"]
@@ -356,13 +366,16 @@ class ActionServer:
         get_result_req_ctor = resolve_generated_type(self._get_result_req_cls)[1]
         cancel_req_ctor = resolve_generated_type(self._cancel_req_cls)[1]
 
+        def enqueue_action_callback(cb, msg):
+            self._node._enqueue_callback(cb, msg, self)
+
         self._send_goal_sub = Subscription(
             self._participant,
             self._create_topic(f"{self._send_goal_topic}Request", _register_type(self._send_goal_req_cls)),
             qos,
             self._on_send_goal,
             send_goal_req_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
         self._get_result_sub = Subscription(
             self._participant,
@@ -370,7 +383,7 @@ class ActionServer:
             qos,
             self._on_get_result,
             get_result_req_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
         self._cancel_sub = Subscription(
             self._participant,
@@ -378,14 +391,27 @@ class ActionServer:
             qos,
             self._on_cancel,
             cancel_req_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
 
     def _create_topic(self, name: str, type_name: str):
         topic_obj, _ = get_or_create_topic(self._participant, name, type_name)
         return topic_obj
 
+    def _publish_if_alive(self, publisher, msg) -> bool:
+        with self._lock:
+            if self._destroyed:
+                return False
+        try:
+            publisher.publish(msg)
+            return True
+        except Exception:
+            return False
+
     def _on_send_goal(self, request_msg):
+        with self._lock:
+            if self._destroyed:
+                return
         goal_id = getattr(request_msg, "goal_id", None)
         goal_attr = getattr(request_msg, "goal", None)
         # If goal is callable, call it to get the actual message
@@ -393,12 +419,12 @@ class ActionServer:
             goal_msg = goal_attr()
         else:
             goal_msg = goal_attr
-        # Expose callable fields as attributes for ROS 2 compatibility
-        try:
-            from .message_utils import expose_callable_fields
-            expose_callable_fields(goal_msg)
-        except Exception:
-            pass
+        if self._expose_fields:
+            try:
+                from .message_utils import expose_callable_fields
+                expose_callable_fields(goal_msg)
+            except Exception:
+                pass
         key = _uuid_bytes(goal_id)
         accepted = True
         if self._goal_callback is not None:
@@ -418,6 +444,8 @@ class ActionServer:
         if accepted:
             handle = _ServerGoalHandle(self, _copy_goal_id(goal_id), goal_msg)
             with self._lock:
+                if self._destroyed:
+                    return
                 self._goal_handles[key] = handle
             self._set_status(goal_id, _STATUS_ACCEPTED)
             if self._handle_accepted_callback:
@@ -427,17 +455,20 @@ class ActionServer:
                     pass
             else:
                 handle.execute()
-        self._send_goal_res_pub.publish(response)
+        self._publish_if_alive(self._send_goal_res_pub, response)
 
     def _on_get_result(self, request_msg):
         goal_id = getattr(request_msg, "goal_id", None)
         key = _uuid_bytes(goal_id)
         publish_now = False
         with self._lock:
+            if self._destroyed:
+                return
+            self._prune_results_locked(time.monotonic())
             if key in self._results:
                 publish_now = True
             else:
-                self._pending_result_requests.add(key)
+                self._pending_result_requests[key] = time.monotonic()
         if publish_now:
             self._publish_result_for_goal(key)
 
@@ -446,7 +477,10 @@ class ActionServer:
         goal_info = getattr(request_msg, "goal_info", None)
         goal_id = getattr(goal_info, "goal_id", goal_info)
         key = _uuid_bytes(goal_id)
-        handle = self._goal_handles.get(key)
+        with self._lock:
+            if self._destroyed:
+                return
+            handle = self._goal_handles.get(key)
         allowed = False
         if handle and self._cancel_callback:
             try:
@@ -462,17 +496,20 @@ class ActionServer:
                 _swig_set(response, "return_code", CancelResponse.ACCEPT.value if allowed else CancelResponse.REJECT.value)
         except Exception:
             pass
-        self._cancel_res_pub.publish(response)
+        self._publish_if_alive(self._cancel_res_pub, response)
 
     def _start_execute(self, goal_handle: _ServerGoalHandle):
         def _run():
             try:
+                with self._lock:
+                    if self._destroyed:
+                        return
                 result = self._execute_callback(goal_handle)
                 # Check if result is a coroutine (handle async execute_callback)
                 # Skip iscoroutine for SWIG objects (they're not hashable)
                 try:
                     if asyncio.iscoroutine(result):
-                        result = asyncio.run(result)
+                        result = run_coroutine(result)
                 except TypeError:
                     # Result is a SWIG object, not a coroutine
                     pass
@@ -494,6 +531,9 @@ class ActionServer:
         threading.Thread(target=_run, daemon=True).start()
 
     def _publish_feedback(self, goal_id, feedback_msg=None):
+        with self._lock:
+            if self._destroyed:
+                return
         msg = self._feedback_msg_cls()
         try:
             if hasattr(msg, "goal_id"):
@@ -502,7 +542,7 @@ class ActionServer:
                 _swig_set(msg, "feedback", feedback_msg)
         except Exception:
             pass
-        self._feedback_pub.publish(msg)
+        self._publish_if_alive(self._feedback_pub, msg)
 
     def _build_result_obj(self, result):
         """Build result object from provided result, copying attributes."""
@@ -528,7 +568,11 @@ class ActionServer:
         result_obj = self._build_result_obj(result)
         goal_id_copy = _copy_goal_id(goal_id)
         with self._lock:
-            self._results[key] = (status_code, result_obj, goal_id_copy)
+            if self._destroyed:
+                return
+            now = time.monotonic()
+            self._prune_results_locked(now)
+            self._results[key] = (status_code, result_obj, goal_id_copy, now)
             self._goal_handles.pop(key, None)
             publish_now = key in self._pending_result_requests
         self._set_status(goal_id, status_code)
@@ -538,12 +582,15 @@ class ActionServer:
     def _publish_result_for_goal(self, key: bytes):
         entry = None
         with self._lock:
+            if self._destroyed:
+                return
+            self._prune_results_locked(time.monotonic())
             entry = self._results.get(key)
             if entry is None:
                 return
-            status, result_obj, goal_id_copy = entry
+            status, result_obj, goal_id_copy, _completed_at = entry
             self._results.pop(key, None)
-            self._pending_result_requests.discard(key)
+            self._pending_result_requests.pop(key, None)
         res_msg = self._get_result_res_cls()
         try:
             if hasattr(res_msg, "status"):
@@ -554,9 +601,33 @@ class ActionServer:
                 _swig_set(res_msg, "goal_id", _copy_goal_id(goal_id_copy))
         except Exception:
             pass
-        self._get_result_res_pub.publish(res_msg)
+        if not self._publish_if_alive(self._get_result_res_pub, res_msg):
+            return
         if status in (_STATUS_SUCCEEDED, _STATUS_ABORTED, _STATUS_CANCELED):
             self._clear_status_entry(key)
+
+    def _prune_results_locked(self, now: float) -> None:
+        stale_results = [
+            key for key, (_status, _result, _goal_id, completed_at) in self._results.items()
+            if now - completed_at > _RESULT_RETENTION_SEC
+        ]
+        for key in stale_results:
+            self._results.pop(key, None)
+            self._pending_result_requests.pop(key, None)
+            self._status_entries.pop(key, None)
+
+        stale_requests = [
+            key for key, requested_at in self._pending_result_requests.items()
+            if now - requested_at > _RESULT_RETENTION_SEC
+        ]
+        for key in stale_requests:
+            self._pending_result_requests.pop(key, None)
+
+        while len(self._results) > _MAX_RETAINED_RESULTS:
+            oldest = min(self._results, key=lambda key: self._results[key][3])
+            self._results.pop(oldest, None)
+            self._pending_result_requests.pop(oldest, None)
+            self._status_entries.pop(oldest, None)
 
     def _set_status(self, goal_id, status_code: int):
         if self._status_pub is None or goal_id is None:
@@ -564,6 +635,8 @@ class ActionServer:
         key = _uuid_bytes(goal_id)
         goal_id_copy = _copy_goal_id(goal_id)
         with self._lock:
+            if self._destroyed:
+                return
             existing = self._status_entries.get(key)
             if existing is not None:
                 goal_id_copy = existing[0]
@@ -575,6 +648,8 @@ class ActionServer:
         if self._status_pub is None:
             return
         with self._lock:
+            if self._destroyed:
+                return
             removed = self._status_entries.pop(key, None)
             snapshot = list(self._status_entries.values()) if removed is not None else None
         if removed is not None and snapshot is not None:
@@ -583,6 +658,9 @@ class ActionServer:
     def _publish_status_snapshot(self, entries):
         if self._status_pub is None or self._status_msg_ctor is None or self._goal_status_ctor is None:
             return
+        with self._lock:
+            if self._destroyed:
+                return
         try:
             msg = self._status_msg_ctor()
         except Exception:
@@ -611,9 +689,21 @@ class ActionServer:
             _swig_set(msg, "status_list", status_list)
         except Exception:
             pass
-        self._status_pub.publish(msg)
+        self._publish_if_alive(self._status_pub, msg)
 
     def destroy(self):
+        try:
+            self._node._unregister_entity_callback_group(self)
+        except Exception:
+            pass
+        with self._lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
+            self._goal_handles.clear()
+            self._results.clear()
+            self._pending_result_requests.clear()
+            self._status_entries.clear()
         for pub in (
             self._send_goal_res_pub,
             self._get_result_res_pub,
@@ -690,14 +780,21 @@ class ClientGoalHandle:
         import threading
         event = threading.Event()
         result_holder = [None]
+        exception_holder = [None]
         
         def on_done(future):
-            result_holder[0] = future.result()
-            event.set()
+            try:
+                result_holder[0] = future.result()
+            except BaseException as exc:
+                exception_holder[0] = exc
+            finally:
+                event.set()
         
         future = self.get_result_async()
         future.add_done_callback(on_done)
         event.wait()
+        if exception_holder[0] is not None:
+            raise exception_holder[0]
         return result_holder[0]
 
     def get_result_async(self) -> Future:
@@ -712,14 +809,21 @@ class ClientGoalHandle:
         import threading
         event = threading.Event()
         result_holder = [None]
+        exception_holder = [None]
         
         def on_done(future):
-            result_holder[0] = future.result()
-            event.set()
+            try:
+                result_holder[0] = future.result()
+            except BaseException as exc:
+                exception_holder[0] = exc
+            finally:
+                event.set()
         
         future = self.cancel_goal_async()
         future.add_done_callback(on_done)
         event.wait()
+        if exception_holder[0] is not None:
+            raise exception_holder[0]
         return result_holder[0]
 
     def cancel_goal_async(self) -> Future:
@@ -730,19 +834,23 @@ class ClientGoalHandle:
 class ActionClient:
     """ActionClient mirroring rclpy API."""
 
-    def __init__(self, node, action_type, action_name: str, *, callback_group=None):
-        del callback_group
+    def __init__(self, node, action_type, action_name: str, *, callback_group=None,
+                 fast_callback: bool = False, expose_fields: Optional[bool] = None):
         self._participant = get_participant()
         self._node = node
+        self._callback_group = self._node._resolve_callback_group(callback_group)
+        self._node._register_entity_callback_group(self, self._callback_group)
+        self._expose_fields = (not fast_callback) if expose_fields is None else bool(expose_fields)
         self._lock = threading.Lock()
         self._feedback_callbacks: dict[bytes, Optional[Callable]] = {}
         self._send_goal_futures: dict[bytes, Future] = {}
         self._result_futures: dict[bytes, Future] = {}
         self._cancel_futures: dict[bytes, Future] = {}
         self._goal_handles: dict[bytes, ClientGoalHandle] = {}
+        self._destroyed = False
         # Track pending requests in order (FIFO) since responses don't include goal_id
-        self._pending_send_goal_keys: list[bytes] = []
-        self._pending_result_keys: list[bytes] = []
+        self._pending_send_goal_keys = deque()
+        self._pending_result_keys = deque()
 
         types = resolve_action_type(action_type)
         self._goal_cls = types["goal"]
@@ -788,13 +896,16 @@ class ActionClient:
         feedback_ctor = resolve_generated_type(self._feedback_msg_cls)[1]
         cancel_res_ctor = resolve_generated_type(self._cancel_res_cls)[1]
 
+        def enqueue_action_callback(cb, msg):
+            self._node._enqueue_callback(cb, msg, self)
+
         self._send_goal_res_sub = Subscription(
             self._participant,
             self._create_topic(f"{self._send_goal_topic}Reply", _register_type(self._send_goal_res_cls)),
             qos,
             self._on_send_goal_response,
             send_goal_res_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
         self._result_sub = Subscription(
             self._participant,
@@ -802,7 +913,7 @@ class ActionClient:
             qos,
             self._on_result_response,
             get_result_res_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
         self._feedback_sub = Subscription(
             self._participant,
@@ -810,7 +921,7 @@ class ActionClient:
             qos,
             self._on_feedback,
             feedback_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
         self._cancel_res_sub = Subscription(
             self._participant,
@@ -818,7 +929,7 @@ class ActionClient:
             qos,
             self._on_cancel_response,
             cancel_res_ctor,
-            enqueue_cb=self._node._enqueue_callback,
+            enqueue_cb=enqueue_action_callback,
         )
 
     def _create_topic(self, name: str, type_name: str):
@@ -875,14 +986,21 @@ class ActionClient:
         """
         event = threading.Event()
         goal_handle_holder = [None]
+        exception_holder = [None]
         
         def on_goal_done(future):
-            goal_handle_holder[0] = future.result()
-            event.set()
+            try:
+                goal_handle_holder[0] = future.result()
+            except BaseException as exc:
+                exception_holder[0] = exc
+            finally:
+                event.set()
         
         send_goal_future = self.send_goal_async(goal_msg, feedback_callback)
         send_goal_future.add_done_callback(on_goal_done)
         event.wait()
+        if exception_holder[0] is not None:
+            raise exception_holder[0]
         
         goal_handle = goal_handle_holder[0]
         if goal_handle is None or not goal_handle.accepted:
@@ -934,12 +1052,37 @@ class ActionClient:
         handle = ClientGoalHandle(self, _copy_goal_id(goal_id))
         handle._set_accepted(False)
         with self._lock:
+            if self._destroyed:
+                future.cancel()
+                return future
             self._send_goal_futures[key] = future
             self._goal_handles[key] = handle
             self._pending_send_goal_keys.append(key)
-        self._feedback_callbacks[key] = feedback_callback
-        self._send_goal_pub.publish(request)
+            self._feedback_callbacks[key] = feedback_callback
+        future.add_done_callback(lambda fut, key=key: self._cleanup_send_goal_future(key, fut))
+        try:
+            self._send_goal_pub.publish(request)
+        except Exception as exc:
+            with self._lock:
+                self._send_goal_futures.pop(key, None)
+                self._goal_handles.pop(key, None)
+                self._feedback_callbacks.pop(key, None)
+                try:
+                    self._pending_send_goal_keys.remove(key)
+                except ValueError:
+                    pass
+            future.set_exception(exc)
         return future
+
+    def _cleanup_send_goal_future(self, key: bytes, future: Future) -> None:
+        if not future.cancelled():
+            return
+        with self._lock:
+            if self._send_goal_futures.get(key) is not future:
+                return
+            self._send_goal_futures.pop(key, None)
+            self._goal_handles.pop(key, None)
+            self._feedback_callbacks.pop(key, None)
 
     def _on_send_goal_response(self, msg):
         # SendGoal.Response does not include goal_id, so we match by order (FIFO)
@@ -949,7 +1092,7 @@ class ActionClient:
         key = None
         with self._lock:
             if self._pending_send_goal_keys:
-                key = self._pending_send_goal_keys.pop(0)
+                key = self._pending_send_goal_keys.popleft()
                 future = self._send_goal_futures.pop(key, None)
                 handle = self._goal_handles.get(key)
                 if not accepted:
@@ -964,8 +1107,12 @@ class ActionClient:
         key = _uuid_bytes(goal_id)
         future = Future()
         with self._lock:
+            if self._destroyed:
+                future.cancel()
+                return future
             self._result_futures[key] = future
             self._pending_result_keys.append(key)
+        future.add_done_callback(lambda fut, key=key: self._cleanup_result_future(key, fut))
         request = self._get_result_req_cls()
         request_goal_id = getattr(request, "goal_id", None)
         if callable(request_goal_id):
@@ -977,8 +1124,27 @@ class ActionClient:
                 _swig_set(request, "goal_id", _copy_goal_id(goal_id))
         except Exception:
             pass
-        self._get_result_pub.publish(request)
+        try:
+            self._get_result_pub.publish(request)
+        except Exception as exc:
+            with self._lock:
+                self._result_futures.pop(key, None)
+                try:
+                    self._pending_result_keys.remove(key)
+                except ValueError:
+                    pass
+            future.set_exception(exc)
         return future
+
+    def _cleanup_result_future(self, key: bytes, future: Future) -> None:
+        if not future.cancelled():
+            return
+        with self._lock:
+            if self._result_futures.get(key) is not future:
+                return
+            self._result_futures.pop(key, None)
+            self._feedback_callbacks.pop(key, None)
+            self._goal_handles.pop(key, None)
 
     def _on_result_response(self, msg):
         # GetResult.Response does not include goal_id, so we match by order (FIFO)
@@ -986,7 +1152,7 @@ class ActionClient:
         key = None
         with self._lock:
             if self._pending_result_keys:
-                key = self._pending_result_keys.pop(0)
+                key = self._pending_result_keys.popleft()
                 future = self._result_futures.pop(key, None)
                 self._feedback_callbacks.pop(key, None)
                 self._goal_handles.pop(key, None)
@@ -994,11 +1160,12 @@ class ActionClient:
             # Expose callable fields for ROS 2 compatibility
             try:
                 from .message_utils import expose_callable_fields, _ValueProxy
-                expose_callable_fields(msg)
+                if self._expose_fields:
+                    expose_callable_fields(msg)
                 result = getattr(msg, "result", None)
                 if callable(result):
                     result = result()
-                if result:
+                if result and self._expose_fields:
                     # If result is wrapped in _ValueProxy, unwrap it
                     if isinstance(result, _ValueProxy):
                         result = result()
@@ -1016,7 +1183,11 @@ class ActionClient:
         key = _uuid_bytes(goal_id)
         future = Future()
         with self._lock:
+            if self._destroyed:
+                future.cancel()
+                return future
             self._cancel_futures[key] = future
+        future.add_done_callback(lambda fut, key=key: self._cleanup_cancel_future(key, fut))
         request = self._cancel_req_cls()
         goal_info = getattr(request, "goal_info", None)
         if callable(goal_info):
@@ -1037,8 +1208,20 @@ class ActionClient:
                 _swig_set(request, "goal_id", _copy_goal_id(goal_id))
             except Exception:
                 pass
-        self._cancel_pub.publish(request)
+        try:
+            self._cancel_pub.publish(request)
+        except Exception as exc:
+            with self._lock:
+                self._cancel_futures.pop(key, None)
+            future.set_exception(exc)
         return future
+
+    def _cleanup_cancel_future(self, key: bytes, future: Future) -> None:
+        if not future.cancelled():
+            return
+        with self._lock:
+            if self._cancel_futures.get(key) is future:
+                self._cancel_futures.pop(key, None)
 
     def _on_cancel_response(self, msg):
         return_code = getattr(msg, "return_code", CancelResponse.REJECT.value)
@@ -1053,13 +1236,14 @@ class ActionClient:
     def _on_feedback(self, msg):
         goal_id = getattr(msg, "goal_id", None)
         key = _uuid_bytes(goal_id)
-        cb = self._feedback_callbacks.get(key)
+        with self._lock:
+            cb = self._feedback_callbacks.get(key)
         if cb:
             try:
                 # Expose callable fields for ROS 2 compatibility
                 from .message_utils import expose_callable_fields, _ValueProxy
                 feedback = getattr(msg, "feedback", None)
-                if feedback:
+                if feedback and self._expose_fields:
                     # If feedback is wrapped in _ValueProxy, unwrap it
                     if isinstance(feedback, _ValueProxy):
                         feedback = feedback()
@@ -1074,6 +1258,28 @@ class ActionClient:
                 pass
 
     def destroy(self):
+        try:
+            self._node._unregister_entity_callback_group(self)
+        except Exception:
+            pass
+        with self._lock:
+            if self._destroyed:
+                return
+            self._destroyed = True
+            futures = (
+                list(self._send_goal_futures.values())
+                + list(self._result_futures.values())
+                + list(self._cancel_futures.values())
+            )
+            self._send_goal_futures.clear()
+            self._result_futures.clear()
+            self._cancel_futures.clear()
+            self._feedback_callbacks.clear()
+            self._goal_handles.clear()
+            self._pending_send_goal_keys.clear()
+            self._pending_result_keys.clear()
+        for future in futures:
+            future.cancel()
         for pub in (self._send_goal_pub, self._get_result_pub, self._cancel_pub):
             try:
                 pub.destroy()

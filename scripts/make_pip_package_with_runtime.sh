@@ -168,6 +168,11 @@ if [[ -f "${SCRIPTS_DIR}/patch_service_types.py" ]]; then
   python3 "${SCRIPTS_DIR}/patch_service_types.py" "${STAGING_ROOT}"
 fi
 
+if [[ -f "${SCRIPTS_DIR}/patch_message_setter_compat.py" ]]; then
+  echo "[INFO] Patching message setters for rclpy-compatible submessage reuse…"
+  python3 "${SCRIPTS_DIR}/patch_message_setter_compat.py" "${STAGING_ROOT}"
+fi
+
 # ========= 1.6) Patch message dependencies for correct library preloading =========
 if [[ -f "${SCRIPTS_DIR}/patch_message_dependencies.py" ]]; then
   echo "[INFO] Patching message files to preload dependent libraries…"

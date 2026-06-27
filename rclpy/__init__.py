@@ -6,9 +6,11 @@ from lwrclpy import (
     create_node as _create_node_impl,
     create_rate as _create_rate_impl,
     Parameter,
+    ParameterDescriptor,
     ParameterType,
     SetParametersResult,
-    shutdown as _core_shutdown,  # Use lwrclpy.shutdown (with force_exit)
+    IntegerRange,
+    FloatingPointRange,
     Future,
     Clock,
     ClockType,
@@ -16,6 +18,8 @@ from lwrclpy import (
     Timer,
 )
 from lwrclpy.context import init as _core_init, ok as _core_ok, get_domain_id, Context
+from lwrclpy.context import shutdown as _core_shutdown
+from lwrclpy.context import try_shutdown as _core_try_shutdown
 
 
 class _DefaultContext:
@@ -72,6 +76,10 @@ def shutdown():
     _core_shutdown()
 
 
+def try_shutdown():
+    _core_try_shutdown()
+
+
 def ok() -> bool:
     return _core_ok()
 
@@ -94,6 +102,7 @@ __all__ = [
     "Rate",
     "init",
     "shutdown",
+    "try_shutdown",
     "ok",
     "spin",
     "spin_once",
@@ -106,8 +115,11 @@ __all__ = [
     "create_node",
     "create_rate",
     "Parameter",
+    "ParameterDescriptor",
     "ParameterType",
     "SetParametersResult",
+    "IntegerRange",
+    "FloatingPointRange",
     "Duration",
     "logging",
     "qos",

@@ -74,7 +74,7 @@ def main():
     
     while (time.monotonic() - short_start) < 0.5:
         # Very short timeout - returns quickly if no work
-        had_work = executor.spin_once(timeout_sec=0.01)
+        executor.spin_once(timeout_sec=0.01)
         short_timeout_count += 1
     
     logger.info(f"spin_once called {short_timeout_count} times in 0.5s\n")

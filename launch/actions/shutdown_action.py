@@ -47,6 +47,10 @@ class Shutdown(Action):
             'type': 'shutdown',
             'reason': reason_str,
         })
+        context._set_is_shutdown(True, reason_str)
+        launch_service = getattr(context, "_launch_service", None)
+        if launch_service is not None:
+            launch_service.shutdown()
         
         return None
 
