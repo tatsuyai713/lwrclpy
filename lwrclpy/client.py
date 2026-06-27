@@ -7,7 +7,7 @@ from .publisher import Publisher
 from .subscription import Subscription
 from .qos import QoSProfile
 from .typesupport import RegisteredType
-from .utils import resolve_service_type, SERVICE_REQUEST_PREFIX, SERVICE_RESPONSE_PREFIX
+from .utils import resolve_service_type, service_topics
 from .context import get_participant, track_entity, untrack_entity
 from .utils import get_or_create_topic
 from .future import Future
@@ -40,7 +40,7 @@ class Client:
         self._req_type_name = RegisteredType(req_cls).register()
         self._res_type_name = RegisteredType(res_cls).register()
 
-        req_topic, res_topic = _service_topics(service_name, topic_prefix)
+        req_topic, res_topic = service_topics(service_name, topic_prefix)
 
         self._publisher = Publisher(
             self._participant,
@@ -227,14 +227,3 @@ class Client:
             self._callback_queue.close()
             self._callback_queue = None
 
-
-def _service_topics(name: str, prefix: str = ""):
-    cleaned = name.lstrip("/")
-    req = f"{SERVICE_REQUEST_PREFIX}{cleaned}Request"
-    res = f"{SERVICE_RESPONSE_PREFIX}{cleaned}Reply"
-    if prefix:
-        if not req.startswith(prefix):
-            req = prefix + req
-        if not res.startswith(prefix):
-            res = prefix + res
-    return req, res

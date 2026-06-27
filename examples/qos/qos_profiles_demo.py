@@ -25,15 +25,16 @@ from std_msgs.msg import String
 
 def main():
     rclpy.init()
-    node = rclpy.create_node("qos_demo")
-    logger = node.get_logger()
+    pub_node = rclpy.create_node("qos_demo_publisher")
+    sub_node = rclpy.create_node("qos_demo_subscriber")
+    logger = pub_node.get_logger()
 
     # 1. Using predefined sensor_data QoS (best-effort, volatile, depth=5)
     logger.info("=== Predefined QoS Profiles ===")
     logger.info(f"Sensor Data QoS: reliability={qos_profile_sensor_data.reliability}, "
                 f"durability={qos_profile_sensor_data.durability}")
     
-    pub_sensor = node.create_publisher(String, "sensor_topic", qos_profile_sensor_data)
+    pub_sensor = pub_node.create_publisher(String, "sensor_topic", qos_profile_sensor_data)
 
     # 2. Using services default QoS
     logger.info(f"Services QoS: reliability={qos_profile_services_default.reliability}, "
@@ -79,7 +80,7 @@ def main():
         durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
     )
     
-    pub = node.create_publisher(String, "qos_demo_topic", reliable_qos)
+    pub = pub_node.create_publisher(String, "qos_demo_topic", reliable_qos)
     
     received_count = [0]
     
@@ -87,30 +88,31 @@ def main():
         received_count[0] += 1
         logger.info(f"Received: {msg.data}")
     
-    sub = node.create_subscription(String, "qos_demo_topic", callback, reliable_qos)
+    sub = sub_node.create_subscription(String, "qos_demo_topic", callback, reliable_qos)
 
     # Publish some messages
     msg = String()
-    rate = node.create_rate(2.0)  # 2 Hz
+    rate = pub_node.create_rate(2.0)  # 2 Hz
     
     try:
         for i in range(5):
             msg.data = f"QoS demo message {i}"
             pub.publish(msg)
             logger.info(f"Published: {msg.data}")
-            rclpy.spin_once(node, timeout_sec=0.1)
+            rclpy.spin_once(sub_node, timeout_sec=0.1)
             rate.sleep()
         
         # Process remaining callbacks
         for _ in range(10):
-            rclpy.spin_once(node, timeout_sec=0.1)
+            rclpy.spin_once(sub_node, timeout_sec=0.1)
         
         logger.info(f"\nTotal messages received: {received_count[0]}")
         
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        pub_node.destroy_node()
+        sub_node.destroy_node()
         rclpy.shutdown()
 
 

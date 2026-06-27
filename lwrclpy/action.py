@@ -1,4 +1,6 @@
 import asyncio
+import concurrent.futures
+import logging
 import threading
 import time
 import uuid
@@ -24,9 +26,13 @@ from .utils import (
     resolve_name,
     get_or_create_topic,
     ACTION_PREFIX,
+    env_int,
 )
 from .publisher import Publisher
 from .subscription import Subscription
+
+
+_logger = logging.getLogger(__name__)
 
 
 class GoalResponse(Enum):
@@ -297,6 +303,10 @@ class ActionServer:
         self._pending_result_requests: dict[bytes, float] = {}
         self._status_entries: dict[bytes, tuple[object, int]] = {}
         self._destroyed = False
+        self._execute_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=env_int("LWRCLPY_ACTION_EXECUTOR_THREADS", 16, minimum=1),
+            thread_name_prefix="lwrclpy-action",
+        )
 
         types = resolve_action_type(action_type)
         self._goal_cls = types["goal"]
@@ -528,7 +538,16 @@ class ActionServer:
                     goal_handle._active = False
                 self._complete_goal(goal_handle._goal_id, None, _STATUS_ABORTED)
 
-        threading.Thread(target=_run, daemon=True).start()
+        with self._lock:
+            if self._destroyed:
+                return
+            executor = self._execute_pool
+        try:
+            executor.submit(_run)
+        except RuntimeError:
+            if goal_handle.is_active:
+                goal_handle._active = False
+            self._complete_goal(goal_handle._goal_id, None, _STATUS_ABORTED)
 
     def _publish_feedback(self, goal_id, feedback_msg=None):
         with self._lock:
@@ -700,10 +719,15 @@ class ActionServer:
             if self._destroyed:
                 return
             self._destroyed = True
+            execute_pool = self._execute_pool
             self._goal_handles.clear()
             self._results.clear()
             self._pending_result_requests.clear()
             self._status_entries.clear()
+        try:
+            execute_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            _logger.debug("Action execute pool shutdown failed", exc_info=True)
         for pub in (
             self._send_goal_res_pub,
             self._get_result_res_pub,
@@ -956,9 +980,7 @@ class ActionClient:
             time.sleep(poll_interval)
             elapsed += poll_interval
         
-        # Even if not matched, return True to allow the attempt
-        # (may work if discovery just completed)
-        return True
+        return self.server_is_ready()
 
     def server_is_ready(self) -> bool:
         """Check if the action server is ready (rclpy compatible).

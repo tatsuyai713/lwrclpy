@@ -21,17 +21,11 @@ from .utils import (
     _pubsub_type_is_plain,
     _pubsub_type_supports_data_sharing,
     _retcode_is_ok,
+    env_int,
 )
 
 T = TypeVar('T')
 _logger = logging.getLogger(__name__)
-
-
-def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
-    try:
-        return max(minimum, int(os.environ.get(name, default)))
-    except Exception:
-        return default
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -231,16 +225,16 @@ class Publisher:
         self._cuda_ipc_metadata_pub = None
         self._cuda_ipc_topic_name = ""
         self._cuda_ipc_keepalive = {}
-        self._cuda_ipc_keepalive_limit = _env_int("LWRCLPY_CUDA_IPC_KEEPALIVE", 32)
+        self._cuda_ipc_keepalive_limit = env_int("LWRCLPY_CUDA_IPC_KEEPALIVE", 32)
         self._cuda_ipc_sequence = 0
         self._cuda_ipc_lock = threading.Lock()
         self._shm_metadata_pub = None
         self._shm_topic_name = ""
         self._shm_keepalive = {}
-        self._shm_keepalive_limit = _env_int("LWRCLPY_SHM_KEEPALIVE", 32)
+        self._shm_keepalive_limit = env_int("LWRCLPY_SHM_KEEPALIVE", 32)
         self._shm_sequence = 0
         self._shm_lock = threading.Lock()
-        self._auto_shm_threshold = _env_int("LWRCLPY_AUTO_SHM_THRESHOLD", 256 * 1024)
+        self._auto_shm_threshold = env_int("LWRCLPY_AUTO_SHM_THRESHOLD", 256 * 1024)
         self._shm_subscriber_count_ttl = _env_float("LWRCLPY_SHM_SUBSCRIBER_COUNT_TTL", 0.05)
         self._shm_subscriber_count_cache = 0
         self._shm_subscriber_count_expires_at = 0.0

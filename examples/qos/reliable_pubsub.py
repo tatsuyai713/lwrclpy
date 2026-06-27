@@ -14,8 +14,9 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 
 def main():
     rclpy.init()
-    node = rclpy.create_node("reliable_demo")
-    logger = node.get_logger()
+    pub_node = rclpy.create_node("reliable_publisher")
+    sub_node = rclpy.create_node("reliable_subscriber")
+    logger = pub_node.get_logger()
     
     logger.info("=== Reliable Pub/Sub Demo ===\n")
     
@@ -36,7 +37,7 @@ def main():
     from std_msgs.msg import String
     
     # Publisher with reliable QoS
-    pub = node.create_publisher(String, "/reliable_topic", reliable_qos)
+    pub = pub_node.create_publisher(String, "/reliable_topic", reliable_qos)
     
     # Publish some messages before subscriber exists
     logger.info("--- Publishing before subscriber exists ---")
@@ -57,12 +58,12 @@ def main():
         received.append(msg.data)
         logger.info(f"Received: {msg.data}")
     
-    sub = node.create_subscription(String, "/reliable_topic", callback, reliable_qos)
+    sub = sub_node.create_subscription(String, "/reliable_topic", callback, reliable_qos)
     
     # Process for a while to receive transient local messages
     logger.info("Processing... (should receive early messages due to TRANSIENT_LOCAL)")
     for _ in range(20):
-        rclpy.spin_once(node, timeout_sec=0.1)
+        rclpy.spin_once(sub_node, timeout_sec=0.1)
     
     logger.info("")
     
@@ -75,7 +76,7 @@ def main():
         logger.info(f"Published: {msg.data}")
         
         for _ in range(5):
-            rclpy.spin_once(node, timeout_sec=0.1)
+            rclpy.spin_once(sub_node, timeout_sec=0.1)
     
     # Summary
     logger.info("")
@@ -94,7 +95,8 @@ def main():
     
     logger.info("\n=== Demo Complete ===")
     
-    node.destroy_node()
+    pub_node.destroy_node()
+    sub_node.destroy_node()
     rclpy.shutdown()
 
 

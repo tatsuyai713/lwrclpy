@@ -2,10 +2,12 @@ import sys
 import os
 import glob
 import ctypes
+import logging
 import platform
 
 _dll_dir_handles = []
 _loaded_generated_dlls = set()
+_logger = logging.getLogger(__name__)
 
 def _python_xy():
     vi = sys.version_info
@@ -61,7 +63,7 @@ def _add_dll_dir(path):
     try:
         _dll_dir_handles.append(os.add_dll_directory(path))  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _logger.debug("Failed to prepare vendored Fast DDS libraries", exc_info=True)
 
 def _resolve_generated_dll(relative_path):
     rel = os.path.normpath(relative_path)

@@ -16,6 +16,7 @@ from .utils import (
     get_or_create_topic,
     resolve_name,
     TOPIC_PREFIX,
+    env_int,
 )
 from .client import Client
 from .service import Service
@@ -31,11 +32,7 @@ def _patch_message_type_for_compat(msg_cls) -> None:
         pass
 
 
-def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
-    try:
-        return max(minimum, int(os.environ.get(name, default)))
-    except Exception:
-        return default
+_LOGGER_STATE_MAX = env_int("LWRCLPY_LOGGER_STATE_MAX", 4096, minimum=1)
 
 
 # --- rclpy.Rate 相当（壁時計ベース） -----------------------------------------
@@ -107,7 +104,7 @@ class _NodeLogger:
 
     def get_effective_level(self):
         """Get the effective logging level."""
-        from rclpy.logging import LoggingSeverity
+        from .logging import LoggingSeverity
         level = self._logger.getEffectiveLevel()
         try:
             return LoggingSeverity(level)
@@ -144,8 +141,26 @@ class _NodeLogger:
         last = _NodeLogger._throttle_last.get(key, 0)
         if now - last >= period:
             _NodeLogger._throttle_last[key] = now
+            _NodeLogger._prune_mapping(_NodeLogger._throttle_last)
             return True
         return False
+
+    @staticmethod
+    def _prune_mapping(mapping: dict) -> None:
+        while len(mapping) > _LOGGER_STATE_MAX:
+            try:
+                mapping.pop(next(iter(mapping)))
+            except Exception:
+                break
+
+    @staticmethod
+    def _add_bounded(state: set, key: str) -> None:
+        state.add(key)
+        while len(state) > _LOGGER_STATE_MAX:
+            try:
+                state.pop()
+            except KeyError:
+                break
 
     def debug_throttle(self, period: float, msg, *args, **kwargs):
         key = f"{self._name}:debug:{msg}"
@@ -179,19 +194,19 @@ class _NodeLogger:
     def debug_once(self, msg, *args, **kwargs):
         key = f"{self._name}:debug:{msg}"
         if key not in _NodeLogger._once_logged:
-            _NodeLogger._once_logged.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._once_logged, key)
             self.debug(msg, *args, **kwargs)
 
     def info_once(self, msg, *args, **kwargs):
         key = f"{self._name}:info:{msg}"
         if key not in _NodeLogger._once_logged:
-            _NodeLogger._once_logged.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._once_logged, key)
             self.info(msg, *args, **kwargs)
 
     def warn_once(self, msg, *args, **kwargs):
         key = f"{self._name}:warn:{msg}"
         if key not in _NodeLogger._once_logged:
-            _NodeLogger._once_logged.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._once_logged, key)
             self.warn(msg, *args, **kwargs)
 
     def warning_once(self, msg, *args, **kwargs):
@@ -200,13 +215,13 @@ class _NodeLogger:
     def error_once(self, msg, *args, **kwargs):
         key = f"{self._name}:error:{msg}"
         if key not in _NodeLogger._once_logged:
-            _NodeLogger._once_logged.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._once_logged, key)
             self.error(msg, *args, **kwargs)
 
     def fatal_once(self, msg, *args, **kwargs):
         key = f"{self._name}:fatal:{msg}"
         if key not in _NodeLogger._once_logged:
-            _NodeLogger._once_logged.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._once_logged, key)
             self.fatal(msg, *args, **kwargs)
 
     # Skip-first logging methods
@@ -215,21 +230,21 @@ class _NodeLogger:
         if key in _NodeLogger._skipfirst_done:
             self.debug(msg, *args, **kwargs)
         else:
-            _NodeLogger._skipfirst_done.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._skipfirst_done, key)
 
     def info_skipfirst(self, msg, *args, **kwargs):
         key = f"{self._name}:info:{msg}"
         if key in _NodeLogger._skipfirst_done:
             self.info(msg, *args, **kwargs)
         else:
-            _NodeLogger._skipfirst_done.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._skipfirst_done, key)
 
     def warn_skipfirst(self, msg, *args, **kwargs):
         key = f"{self._name}:warn:{msg}"
         if key in _NodeLogger._skipfirst_done:
             self.warn(msg, *args, **kwargs)
         else:
-            _NodeLogger._skipfirst_done.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._skipfirst_done, key)
 
     def warning_skipfirst(self, msg, *args, **kwargs):
         self.warn_skipfirst(msg, *args, **kwargs)
@@ -239,14 +254,14 @@ class _NodeLogger:
         if key in _NodeLogger._skipfirst_done:
             self.error(msg, *args, **kwargs)
         else:
-            _NodeLogger._skipfirst_done.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._skipfirst_done, key)
 
     def fatal_skipfirst(self, msg, *args, **kwargs):
         key = f"{self._name}:fatal:{msg}"
         if key in _NodeLogger._skipfirst_done:
             self.fatal(msg, *args, **kwargs)
         else:
-            _NodeLogger._skipfirst_done.add(key)
+            _NodeLogger._add_bounded(_NodeLogger._skipfirst_done, key)
 
     def get_child(self, suffix: str) -> "_NodeLogger":
         """Get a child logger with the given suffix."""
@@ -282,7 +297,7 @@ class Node:
         self._destroyed = False
         self._callback_queue: deque = deque()
         self._callback_lock = threading.Lock()
-        self._callback_queue_maxsize = _env_int("LWRCLPY_NODE_CALLBACK_QUEUE_MAXSIZE", 0)
+        self._callback_queue_maxsize = env_int("LWRCLPY_NODE_CALLBACK_QUEUE_MAXSIZE", 0)
         self._callback_queue_drop_policy = os.environ.get("LWRCLPY_NODE_CALLBACK_DROP_POLICY", "drop_oldest")
         self._callback_drop_count = 0
         self._executor_wake_event = None  # set by Executor.add_node()
@@ -492,7 +507,7 @@ class Node:
     @property
     def default_callback_group(self):
         if self._default_callback_group is None:
-            from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            from .callback_groups import MutuallyExclusiveCallbackGroup
             self._default_callback_group = MutuallyExclusiveCallbackGroup()
             self._callback_groups.append(self._default_callback_group)
         return self._default_callback_group
@@ -503,7 +518,7 @@ class Node:
 
     def create_callback_group(self, group_type=None):
         if group_type is None:
-            from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            from .callback_groups import MutuallyExclusiveCallbackGroup
             group_type = MutuallyExclusiveCallbackGroup
         group = group_type()
         if group not in self._callback_groups:

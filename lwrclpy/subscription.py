@@ -20,20 +20,14 @@ from .utils import (
     _pubsub_type_is_plain,
     _pubsub_type_supports_data_sharing,
     _retcode_is_ok,
+    env_int,
 )
 
 
 _logger = logging.getLogger(__name__)
 
 
-def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
-    try:
-        return max(minimum, int(os.environ.get(name, default)))
-    except Exception:
-        return default
-
-
-_MAX_CALLBACKS_PER_DRAIN = _env_int("LWRCLPY_MAX_CALLBACKS_PER_DRAIN", 16)
+_MAX_CALLBACKS_PER_DRAIN = env_int("LWRCLPY_MAX_CALLBACKS_PER_DRAIN", 16, minimum=1)
 _SKIP_SAMPLE = object()
 
 

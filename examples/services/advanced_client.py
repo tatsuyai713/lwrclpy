@@ -38,7 +38,7 @@ def main():
     if client.wait_for_service(timeout_sec=3.0):
         logger.info("Service is available!")
     else:
-        logger.warn("Service not available. Starting demo server...")
+        logger.warning("Service not available. Starting demo server...")
         
         # Create a simple server for demonstration
         def handle_set_bool(request, response):

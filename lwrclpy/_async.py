@@ -1,4 +1,6 @@
 import asyncio
+import atexit
+import contextlib
 import threading
 
 
@@ -33,8 +35,25 @@ class _AsyncRunner:
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result()
 
+    def shutdown(self):
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            self._loop = None
+            self._thread = None
+        if loop is None:
+            return
+        if loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and threading.current_thread() is not thread:
+            thread.join(timeout=1.0)
+        if not loop.is_closed():
+            with contextlib.suppress(Exception):
+                loop.close()
+
 
 _runner = _AsyncRunner()
+atexit.register(_runner.shutdown)
 
 
 def run_coroutine(coro):
@@ -45,3 +64,7 @@ def run_coroutine(coro):
     if running_loop is not None:
         raise RuntimeError("Cannot synchronously run coroutine callback from an active event loop")
     return _runner.run(coro)
+
+
+def shutdown_async_runner():
+    _runner.shutdown()

@@ -65,7 +65,7 @@ class FibonacciActionClient(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f"Result: {result.sequence}")
         else:
-            self.get_logger().warn(f"Goal finished with status {status}")
+            self.get_logger().warning(f"Goal finished with status {status}")
         rclpy.shutdown()
 
 

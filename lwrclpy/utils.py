@@ -1,4 +1,5 @@
 import importlib
+import os
 import threading
 import types
 
@@ -15,6 +16,25 @@ _resolve_service_type_cache = {}
 _resolve_action_type_cache = {}
 _topic_cache = {}
 _cache_lock = threading.RLock()
+
+
+def env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except Exception:
+        return default
+
+
+def service_topics(name: str, prefix: str = ""):
+    cleaned = name.lstrip("/")
+    req = f"{SERVICE_REQUEST_PREFIX}{cleaned}Request"
+    res = f"{SERVICE_RESPONSE_PREFIX}{cleaned}Reply"
+    if prefix:
+        if not req.startswith(prefix):
+            req = prefix + req
+        if not res.startswith(prefix):
+            res = prefix + res
+    return req, res
 
 
 def _get_retcode_ok_const():

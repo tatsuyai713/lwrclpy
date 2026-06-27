@@ -26,7 +26,7 @@ class FibonacciActionServer(Node):
     def goal_callback(self, goal_request):
         self.get_logger().info(f"Received goal request: order={goal_request.order}")
         if goal_request.order <= 0:
-            self.get_logger().warn("Rejecting goal with non-positive order.")
+            self.get_logger().warning("Rejecting goal with non-positive order.")
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 

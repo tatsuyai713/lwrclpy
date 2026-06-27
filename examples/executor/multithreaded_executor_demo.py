@@ -116,8 +116,8 @@ def main():
     
     # Shutdown executor gracefully
     logger.info("\nShutting down executor...")
-    success = executor.shutdown(timeout_sec=2.0)
-    logger.info(f"Shutdown completed: {success}")
+    executor.shutdown(timeout_sec=2.0)
+    logger.info("Shutdown completed")
     
     executor_thread.join(timeout=2.0)
     if executor_thread.is_alive():

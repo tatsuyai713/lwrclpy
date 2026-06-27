@@ -34,6 +34,7 @@ LAUNCH_TIMEOUT = 20.0
 LONG_RUNNING_SMOKE_TIMEOUT = 15.0
 PROCESS_TERMINATE_GRACE = 5.0
 PROCESS_KILL_GRACE = 2.0
+ERROR_DETAIL_LIMIT = 4000
 
 
 def _timeout_scale() -> float:
@@ -186,7 +187,18 @@ class ProcessCapture:
 def _contains_error(output: str) -> bool:
     if "Traceback" in output:
         return True
-    for marker in ("ModuleNotFoundError", "ImportError", "AttributeError", "SyntaxError"):
+    for marker in (
+        "ModuleNotFoundError",
+        "ImportError",
+        "AttributeError",
+        "SyntaxError",
+        "RuntimeError",
+        "ValueError",
+        "TypeError",
+        "Segmentation fault",
+        "Aborted",
+        "core dumped",
+    ):
         if marker in output:
             return True
     return False
@@ -228,7 +240,7 @@ def _run_script(
         output = proc.output()
         proc.terminate()
         if early_exit or _contains_error(output):
-            return False, output[:500]
+            return False, output[:ERROR_DETAIL_LIMIT]
         if expect_output and not matched:
             return False, f"Expected output {list(expect_output)} not found"
         return True, output[:300] if output else "OK"
@@ -238,12 +250,14 @@ def _run_script(
     except subprocess.TimeoutExpired:
         output = proc.output()
         proc.terminate()
-        detail = output[:500]
+        detail = output[:ERROR_DETAIL_LIMIT]
         return False, f"Timeout after {_timeout(timeout):.1f}s" + (f"\n{detail}" if detail else "")
 
     output = proc.output()
+    if proc.proc.returncode not in (0, None):
+        return False, output[:ERROR_DETAIL_LIMIT] or f"Process exited with code {proc.proc.returncode}"
     if _contains_error(output):
-        return False, output[:500]
+        return False, output[:ERROR_DETAIL_LIMIT]
     if expect_output and not any(k in output for k in expect_output):
         return False, f"Expected output {list(expect_output)} not found"
     return True, output[:300] if output else "OK"
@@ -280,7 +294,9 @@ def _run_pair(
     sub.terminate()
 
     if _contains_error(pub_output) or _contains_error(sub_output):
-        return False, (pub_output + sub_output)[:500]
+        return False, (pub_output + sub_output)[:ERROR_DETAIL_LIMIT]
+    if pub_done and pub.proc.returncode not in (0, None):
+        return False, pub_output[:ERROR_DETAIL_LIMIT] or f"Publisher exited with code {pub.proc.returncode}"
     if not matched:
         return False, f"Subscriber output did not include {list(subscriber_expect)}"
     if not pub_done:

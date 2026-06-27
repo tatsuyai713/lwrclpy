@@ -1,7 +1,11 @@
 import asyncio
+import logging
 import os
 import queue
 import threading
+
+
+_logger = logging.getLogger(__name__)
 
 
 class CallbackQueue:
@@ -75,7 +79,7 @@ class CallbackQueue:
                 else:
                     callback(msg)
             except (Exception, asyncio.CancelledError):
-                pass
+                _logger.exception("Unhandled exception in callback queue")
 
     @property
     def drop_count(self) -> int:

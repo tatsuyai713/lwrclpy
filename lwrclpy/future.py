@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import threading
 from typing import Any, Callable, Optional, List, TypeVar, Generic
 
 T = TypeVar('T')
+_logger = logging.getLogger(__name__)
 
 
 class Future(Generic[T]):
@@ -100,7 +102,7 @@ class Future(Generic[T]):
             try:
                 callback(self)
             except (Exception, asyncio.CancelledError):
-                pass
+                _logger.exception("Future done callback failed")
 
     def remove_done_callback(self, callback: Callable[["Future[T]"], None]) -> int:
         """Remove a callback. Returns number of callbacks removed."""
@@ -120,7 +122,7 @@ class Future(Generic[T]):
             try:
                 cb(self)
             except (Exception, asyncio.CancelledError):
-                continue
+                _logger.exception("Future done callback failed")
 
     def cancel(self) -> bool:
         """Attempt to cancel the future.
@@ -139,7 +141,7 @@ class Future(Generic[T]):
 
     async def _await_impl(self) -> T:
         """Implementation for await support."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         # Create an asyncio Event for integration
         async_event = asyncio.Event()

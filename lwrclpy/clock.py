@@ -109,6 +109,31 @@ _TimePoint = Time
 from .duration import Duration
 
 
+_SLEEP_CHECK_INTERVAL_SEC = 0.1
+
+
+def _context_ok() -> bool:
+    try:
+        from .context import is_shutdown
+        return not is_shutdown()
+    except Exception:
+        return True
+
+
+def _sleep_seconds(seconds: float) -> bool:
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    try:
+        while True:
+            if not _context_ok():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(remaining, _SLEEP_CHECK_INTERVAL_SEC))
+    except KeyboardInterrupt:
+        return False
+
+
 class Clock:
     """Time provider similar to rclpy.clock.Clock.
     
@@ -190,13 +215,11 @@ class Clock:
             return True
         
         duration_ns = until.nanoseconds - now.nanoseconds
-        time.sleep(duration_ns / 1_000_000_000)
-        return True
+        return _sleep_seconds(duration_ns / 1_000_000_000)
 
     def sleep_for(self, duration: Duration) -> bool:
         """Sleep for the specified duration.
         
         Returns True if sleep completed, False if interrupted.
         """
-        time.sleep(duration.nanoseconds / 1_000_000_000)
-        return True
+        return _sleep_seconds(duration.nanoseconds / 1_000_000_000)

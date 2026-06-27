@@ -64,7 +64,7 @@ class RobotController(Node):
         self.command_count += 1
         
         if not self.enabled:
-            self.get_logger().warn(f"Received command '{msg.data}' but robot is disabled")
+            self.get_logger().warning(f"Received command '{msg.data}' but robot is disabled")
             return
         
         self.get_logger().info(f"Executing command: {msg.data}")

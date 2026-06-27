@@ -14,8 +14,9 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 
 def main():
     rclpy.init()
-    node = rclpy.create_node("best_effort_demo")
-    logger = node.get_logger()
+    pub_node = rclpy.create_node("best_effort_publisher")
+    sub_node = rclpy.create_node("best_effort_subscriber")
+    logger = pub_node.get_logger()
     
     logger.info("=== Best Effort Pub/Sub Demo ===\n")
     
@@ -36,7 +37,7 @@ def main():
     from std_msgs.msg import Float32
     
     # High-frequency publisher
-    pub = node.create_publisher(Float32, "/sensor_data", best_effort_qos)
+    pub = pub_node.create_publisher(Float32, "/sensor_data", best_effort_qos)
     
     # Statistics
     stats = {"sent": 0, "received": 0, "dropped": 0, "last_seq": -1}
@@ -50,16 +51,16 @@ def main():
             if seq != expected:
                 dropped = seq - expected
                 stats["dropped"] += dropped
-                logger.warn(f"Dropped {dropped} messages (got {seq}, expected {expected})")
+                logger.warning(f"Dropped {dropped} messages (got {seq}, expected {expected})")
         
         stats["last_seq"] = seq
     
-    sub = node.create_subscription(Float32, "/sensor_data", callback, best_effort_qos)
+    sub = sub_node.create_subscription(Float32, "/sensor_data", callback, best_effort_qos)
     
     # Allow DDS discovery
     time.sleep(0.5)
     for _ in range(10):
-        rclpy.spin_once(node, timeout_sec=0.1)
+        rclpy.spin_once(sub_node, timeout_sec=0.1)
     
     # Publish at high rate
     logger.info("--- High-frequency publishing (100 Hz for 2 seconds) ---\n")
@@ -76,14 +77,14 @@ def main():
         
         # Process callbacks occasionally
         if seq % 10 == 0:
-            rclpy.spin_once(node, timeout_sec=0.001)
+            rclpy.spin_once(sub_node, timeout_sec=0.001)
         
         # 100 Hz
         time.sleep(0.01)
     
     # Process remaining
     for _ in range(50):
-        rclpy.spin_once(node, timeout_sec=0.01)
+        rclpy.spin_once(sub_node, timeout_sec=0.01)
     
     # Summary
     logger.info("--- Summary ---")
@@ -100,7 +101,8 @@ def main():
     
     logger.info("\n=== Demo Complete ===")
     
-    node.destroy_node()
+    pub_node.destroy_node()
+    sub_node.destroy_node()
     rclpy.shutdown()
 
 

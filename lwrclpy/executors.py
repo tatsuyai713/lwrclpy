@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import functools
 import inspect
+import logging
 import threading
 import time
 import traceback
@@ -9,6 +10,9 @@ from typing import Iterable, Optional, List
 from collections import deque
 from ._async import run_coroutine
 from .context import ok
+
+
+_logger = logging.getLogger(__name__)
 
 
 class _ExecutorWakeEvent:
@@ -101,7 +105,7 @@ class Executor:
         try:
             handler()
         except Exception:
-            pass
+            _logger.exception("Unhandled exception while executing callback")
         return True
 
     def spin_some(self, timeout_sec: Optional[float] = None):

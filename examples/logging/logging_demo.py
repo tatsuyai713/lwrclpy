@@ -26,7 +26,7 @@ def main():
     logger.info("--- Log Levels ---")
     logger.debug("This is a DEBUG message (may not show by default)")
     logger.info("This is an INFO message")
-    logger.warn("This is a WARNING message")
+    logger.warning("This is a WARNING message")
     logger.error("This is an ERROR message")
     logger.fatal("This is a FATAL message")
     logger.info("")
@@ -38,7 +38,7 @@ def main():
     
     sensor_logger = get_logger("sensor_processor")
     sensor_logger.info("Processing sensor data...")
-    sensor_logger.warn("Sensor reading out of range!")
+    sensor_logger.warning("Sensor reading out of range!")
     logger.info("")
     
     # 4. Child loggers
@@ -99,7 +99,7 @@ def main():
             if value < 0:
                 self.logger.error(f"Invalid reading: {value}")
             elif value > 100:
-                self.logger.warn(f"Reading above threshold: {value}")
+                self.logger.warning(f"Reading above threshold: {value}")
             else:
                 self.logger.debug(f"Normal reading: {value}")
     

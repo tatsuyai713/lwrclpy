@@ -39,7 +39,7 @@ def main():
     
     def on_battery(msg):
         if msg.data < 20.0:
-            logger.warn(f"Low battery: {msg.data:.1f}%")
+            logger.warning(f"Low battery: {msg.data:.1f}%")
     
     sub_status = node.create_subscription(String, "/robot/status", on_status, 10)
     sub_battery = node.create_subscription(Float32, "/robot/battery", on_battery, 10)

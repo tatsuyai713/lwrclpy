@@ -1,4 +1,5 @@
 import os
+import warnings
 from ._bootstrap_fastdds import ensure_fastdds
 ensure_fastdds()
 
@@ -10,7 +11,7 @@ if os.environ.get("LWRCLPY_PATCH_MSG_ATTRS") == "1":
         patch_known_message_modules()
         patch_loaded_msg_modules()
     except Exception:
-        pass
+        warnings.warn("Failed to apply lwrclpy message attribute compatibility patches", RuntimeWarning, stacklevel=2)
 
 # Eager compatibility patching imports generated message packages.  Keep that
 # opt-in so ``import lwrclpy`` mirrors rclpy and does not load message modules.
@@ -21,17 +22,19 @@ if os.environ.get("LWRCLPY_EAGER_COMPAT_PATCHES") == "1":
         ensure_common_interface_constants()
         patch_kwargs_for_common_interfaces()
     except Exception:
-        pass
+        warnings.warn("Failed to apply lwrclpy eager compatibility patches", RuntimeWarning, stacklevel=2)
 
 from .context import init, ok, get_participant, get_domain_id, try_shutdown, Context
 from .context import shutdown as _context_shutdown
 
-def shutdown():
-    """Shutdown lwrclpy and exit cleanly.
-    
-    This uses force_exit=True by default to avoid Fast DDS v3 "double free" errors.
+def shutdown(*, force_exit: bool = False):
+    """Shutdown lwrclpy.
+
+    The default mirrors rclpy and performs a normal Python shutdown path.
+    ``force_exit=True`` remains available for applications that explicitly need
+    to bypass Python cleanup to work around native Fast DDS teardown issues.
     """
-    _context_shutdown(force_exit=True)
+    _context_shutdown(force_exit=force_exit)
 from .executors import spin, spin_once, spin_some, spin_until_future_complete, SingleThreadedExecutor, MultiThreadedExecutor
 from .node import Node, Rate, create_node, create_rate
 from .parameters import (
@@ -67,7 +70,7 @@ if os.environ.get("LWRCLPY_EAGER_SERVICE_ALIASES") == "1":
         from .service_aliases import install_service_aliases as _install_service_aliases
         _install_service_aliases()
     except Exception:
-        pass
+        warnings.warn("Failed to install lwrclpy service aliases", RuntimeWarning, stacklevel=2)
 
 __all__ = [
     "init", "shutdown", "ok", "spin", "spin_once", "spin_some", "spin_until_future_complete",
