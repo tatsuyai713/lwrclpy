@@ -12,6 +12,7 @@ import random
 import rclpy
 from sensor_msgs.msg import LaserScan, Imu, Range, Temperature
 from builtin_interfaces.msg import Time
+from std_msgs.msg import Header
 
 
 def make_stamp(node):
@@ -22,6 +23,13 @@ def make_stamp(node):
     stamp.sec(sec)
     stamp.nanosec(nsec)
     return stamp
+
+
+def make_header(node, frame_id):
+    header = Header()
+    header.stamp(make_stamp(node))
+    header.frame_id(frame_id)
+    return header
 
 
 def main():
@@ -47,10 +55,7 @@ def main():
         # 1. Publish LaserScan
         scan = LaserScan()
         
-        header = scan.header()
-        header.stamp(make_stamp(node))
-        header.frame_id("laser_frame")
-        scan.header(header)
+        scan.header(make_header(node, "laser_frame"))
         
         scan.angle_min(-math.pi / 2)  # -90 degrees
         scan.angle_max(math.pi / 2)   # +90 degrees
@@ -77,10 +82,7 @@ def main():
         # 2. Publish IMU
         imu = Imu()
         
-        imu_header = imu.header()
-        imu_header.stamp(make_stamp(node))
-        imu_header.frame_id("imu_frame")
-        imu.header(imu_header)
+        imu.header(make_header(node, "imu_frame"))
         
         # Orientation (quaternion)
         from geometry_msgs.msg import Quaternion, Vector3
@@ -111,10 +113,7 @@ def main():
         # 3. Publish Range (ultrasonic sonar)
         sonar = Range()
         
-        sonar_header = sonar.header()
-        sonar_header.stamp(make_stamp(node))
-        sonar_header.frame_id("sonar_frame")
-        sonar.header(sonar_header)
+        sonar.header(make_header(node, "sonar_frame"))
         
         sonar.radiation_type(0)  # ULTRASOUND
         sonar.field_of_view(0.5)  # 30 degrees
@@ -126,10 +125,7 @@ def main():
         # 4. Publish Temperature
         temp = Temperature()
         
-        temp_header = temp.header()
-        temp_header.stamp(make_stamp(node))
-        temp_header.frame_id("temp_sensor")
-        temp.header(temp_header)
+        temp.header(make_header(node, "temp_sensor"))
         
         temp.temperature(25.0 + math.sin(scan_count * 0.1) * 2.0)
         temp.variance(0.1)
