@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from enum import IntEnum
 from typing import Optional
@@ -110,9 +111,61 @@ class RcutilsLogger:
     def error_once(self, message: str, *args, **kwargs):
         self.error(message, *args, **kwargs)
 
+    def debug_skipfirst(self, message: str, *args, **kwargs):
+        self.debug(message, *args, **kwargs)
+
+    def info_skipfirst(self, message: str, *args, **kwargs):
+        self.info(message, *args, **kwargs)
+
+    def warn_skipfirst(self, message: str, *args, **kwargs):
+        self.warn(message, *args, **kwargs)
+
+    def warning_skipfirst(self, message: str, *args, **kwargs):
+        self.warning(message, *args, **kwargs)
+
+    def error_skipfirst(self, message: str, *args, **kwargs):
+        self.error(message, *args, **kwargs)
+
 
 def get_logger(name: str) -> RcutilsLogger:
     return RcutilsLogger(name)
 
 
-__all__ = ["LoggingSeverity", "RcutilsLogger", "get_logger"]
+def set_logger_level(name: str, level: LoggingSeverity):
+    get_logger(name).set_level(level)
+
+
+def get_logger_effective_level(name: str) -> LoggingSeverity:
+    return get_logger(name).get_effective_level()
+
+
+def get_logging_directory() -> str:
+    return os.environ.get("ROS_LOG_DIR") or os.environ.get("RCUTILS_LOGGING_DIRECTORY") or os.getcwd()
+
+
+def initialize():
+    _ensure_ros_handler()
+
+
+def shutdown():
+    global _ros_handler
+    handler = _ros_handler
+    if handler is None:
+        return
+    for name in list(_configured_loggers):
+        logging.getLogger(name).removeHandler(handler)
+    handler.close()
+    _configured_loggers.clear()
+    _ros_handler = None
+
+
+__all__ = [
+    "LoggingSeverity",
+    "RcutilsLogger",
+    "get_logger",
+    "get_logger_effective_level",
+    "get_logging_directory",
+    "initialize",
+    "set_logger_level",
+    "shutdown",
+]
