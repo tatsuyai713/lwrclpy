@@ -203,6 +203,7 @@ install_one(){
   # Re-export the class at package level for ROS-like import:
   #   from .String import String as String
   local init="${dst_pkg}/__init__.py"
+  ensure_init "${dst_pkg}"
   grep -q "from .${name} import ${name} as ${name}" "${init}" 2>/dev/null || \
     echo "from .${name} import ${name} as ${name}" >> "${init}"
 }

@@ -44,6 +44,12 @@ def _buffer_view(value):
             return memoryview(lwrclpy_memoryview())
         except Exception:
             pass
+    memoryview_method = getattr(value, "memoryview", None)
+    if callable(memoryview_method):
+        try:
+            return memoryview(memoryview_method())
+        except Exception:
+            pass
     get_buffer = getattr(value, "get_buffer", None)
     if callable(get_buffer):
         try:

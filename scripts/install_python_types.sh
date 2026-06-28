@@ -116,6 +116,7 @@ install_one(){
   # BUT: skip this for action types - they will be handled by add_all_action_shims()
   if [[ "${pkg_dir}" != */action ]]; then
     local init="${dst_pkg}/__init__.py"
+    ensure_init "${dst_pkg}"
     grep -q "from .${name} import ${name} as ${name}" "${init}" 2>/dev/null || \
       echo "from .${name} import ${name} as ${name}" >> "${init}"
   fi

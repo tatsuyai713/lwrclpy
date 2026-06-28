@@ -74,6 +74,7 @@ foreach ($typeDir in $typeDirs) {
     }
 
     $init = Join-Path $dstPkg "__init__.py"
+    Ensure-Init $dstPkg
     $export = "from .$name import $name as $name"
     $content = Get-Content $init -Raw
     if (-not $content.Contains($export)) {
