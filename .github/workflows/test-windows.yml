@@ -93,12 +93,38 @@ jobs:
           }
           python -m pip install $wheel.FullName
 
-      - name: Run tests
+      - name: Run unit tests
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          .\test_venv\Scripts\Activate.ps1
+          $env:PYTHONFAULTHANDLER = "1"
+          $unitTests = Get-ChildItem test -Filter "test_*.py" |
+            Where-Object { $_.Name -notlike "test_examples_*" } |
+            Sort-Object Name
+          foreach ($testFile in $unitTests) {
+            Write-Host "Running unit test $($testFile.FullName)"
+            python -u $testFile.FullName 2>&1 | Tee-Object -FilePath test_output.log -Append
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+      - name: Run example tests
         shell: pwsh
         timeout-minutes: 75
         run: |
           .\test_venv\Scripts\Activate.ps1
-          python -u test/test_examples_windows.py 2>&1 | Tee-Object -FilePath test_output.log
+          $env:PYTHONFAULTHANDLER = "1"
+          python -u test/test_examples_windows.py 2>&1 | Tee-Object -FilePath test_output.log -Append
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-windows-${{ matrix.arch }}-py${{ matrix.python-version }}
+          path: test_output.log
+          if-no-files-found: ignore

@@ -72,12 +72,39 @@ jobs:
           fi
           pip install "$WHEEL_FILE"
 
-      - name: Run tests
+      - name: Run unit tests
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          source test_venv/bin/activate
+          export PYTHONFAULTHANDLER=1
+          for test_file in test/test_*.py; do
+            case "$(basename "$test_file")" in
+              test_examples_*) continue ;;
+            esac
+            echo "Running unit test $test_file"
+            python -u "$test_file" 2>&1 | tee -a test_output.log
+            TEST_EXIT_CODE=${PIPESTATUS[0]}
+            if [ "$TEST_EXIT_CODE" -ne 0 ]; then
+              exit "$TEST_EXIT_CODE"
+            fi
+          done
+
+      - name: Run example tests
         timeout-minutes: 75
         run: |
           set -x
           source test_venv/bin/activate
-          python -u test/test_examples_ubuntu.py 2>&1 | tee test_output.log
+          export PYTHONFAULTHANDLER=1
+          python -u test/test_examples_ubuntu.py 2>&1 | tee -a test_output.log
           TEST_EXIT_CODE=${PIPESTATUS[0]}
           echo "Test exit code: $TEST_EXIT_CODE"
           exit $TEST_EXIT_CODE
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}
+          path: test_output.log
+          if-no-files-found: ignore
