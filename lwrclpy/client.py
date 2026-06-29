@@ -27,6 +27,7 @@ class Client:
         enqueue_cb=None,
     ):
         self._participant = get_participant()
+        self._service_type = service_type
         self._service_name = service_name
         self._prefix = topic_prefix
         self._callback_queue = None if enqueue_cb is not None else CallbackQueue()
@@ -226,4 +227,3 @@ class Client:
         if self._callback_queue is not None:
             self._callback_queue.close()
             self._callback_queue = None
-

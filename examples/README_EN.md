@@ -60,6 +60,7 @@ examples/
 │   ├── set_bool/
 │   ├── trigger/
 │   └── advanced_client.py
+├── tf2/                  # tf2_py / tf2_ros compatible broadcaster/listener
 ├── timers/               # Timer features
 │   ├── wall_timer.py
 │   ├── oneshot_and_periodic.py
@@ -239,6 +240,7 @@ The `pubsub/typed_messages/` directory contains examples for common ROS message 
 | `geometry_msgs` | `geometry_publisher.py` | `geometry_subscriber.py` |
 | `sensor_msgs` | `sensor_publisher.py` | `sensor_subscriber.py` |
 | `nav_msgs` | `navigation_demo.py` | - |
+| `tf2_msgs/TFMessage` | `tf2/tf2_listener_broadcaster_demo.py` | same process demo |
 
 ### Geometry Messages
 - `Point`, `Pose`, `PoseStamped`, `Twist`, `Vector3`, `Quaternion`
@@ -248,6 +250,28 @@ The `pubsub/typed_messages/` directory contains examples for common ROS message 
 
 ### Navigation Messages
 - `Odometry`, `Path`
+
+---
+
+## TF (`tf2_py` / `tf2_ros`)
+
+`tf2/tf2_listener_broadcaster_demo.py` is the minimal example for the bundled
+`tf2_py` / `tf2_ros` compatibility packages. It exercises
+`TransformBroadcaster`, `TransformListener`, and `Buffer`.
+
+```bash
+python examples/tf2/tf2_listener_broadcaster_demo.py
+```
+
+Expected output:
+
+```text
+TF OK: camera -> world x=1.0
+```
+
+The TF implementation is pure Python and supports latest-transform storage and
+chained frame lookup. Advanced time interpolation from geometry2's C++ `tf2_py`
+extension and `BufferClient` are not implemented yet.
 
 ---
 

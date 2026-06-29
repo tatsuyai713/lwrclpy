@@ -265,6 +265,12 @@ foreach ($patch in $patches) {
 Write-Host "[INFO] Staging Python packages"
 Copy-Tree (Join-Path $repoRoot "lwrclpy") (Join-Path $stagingRoot "lwrclpy")
 Copy-Tree (Join-Path $repoRoot "rclpy") (Join-Path $stagingRoot "rclpy")
+$thirdPartyNotices = Join-Path $repoRoot "THIRD_PARTY_NOTICES.md"
+if (Test-Path $thirdPartyNotices) {
+    Copy-Item $thirdPartyNotices (Join-Path $stagingRoot "rclpy\THIRD_PARTY_NOTICES.md") -Force
+}
+Copy-Tree (Join-Path $repoRoot "tf2_py") (Join-Path $stagingRoot "tf2_py")
+Copy-Tree (Join-Path $repoRoot "tf2_ros") (Join-Path $stagingRoot "tf2_ros")
 Copy-Tree (Join-Path $repoRoot "launch") (Join-Path $stagingRoot "launch")
 Copy-Tree (Join-Path $repoRoot "launch_ros") (Join-Path $stagingRoot "launch_ros")
 
@@ -383,7 +389,7 @@ include_package_data = True
 zip_safe = False
 
 [options.package_data]
-* = **/*.py, **/*.pyd, **/*.dll, **/*Wrapper.*
+* = **/*.py, **/*.pyd, **/*.dll, **/*Wrapper.*, **/LICENSE, **/*.md
 "@ | ForEach-Object { Write-Utf8NoBom (Join-Path $stagingRoot "setup.cfg") $_ }
 
 @'

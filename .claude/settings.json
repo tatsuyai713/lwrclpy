@@ -1,0 +1,21 @@
+{
+  "promptSuggestionEnabled": false,
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER" : "0",
+    "ANTHROPIC_BASE_URL": "http://192.168.23.80:1234",
+    "ANTHROPIC_AUTH_TOKEN": "dummy",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.6-27b-mtp",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.6-27b-mtp",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.6-27b-mtp"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "plansDirectory" : "./plans",
+  "prefersReducedMotion" : true,
+  "terminalProgressBarEnabled" : false,
+  "effortLevel" : "high"
+}

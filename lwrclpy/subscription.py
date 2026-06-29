@@ -901,6 +901,7 @@ class Subscription:
                  content_filter_options=None):
         self._participant = participant
         self._topic = topic
+        self._qos_profile = qos
         self._callback = callback
         self._msg_ctor = msg_ctor
         self._msg_module = msg_module

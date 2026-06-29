@@ -192,6 +192,14 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/lwrclpy/" "${ST
 echo "[INFO] Staging 'rclpy' compatibility shim…"
 rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/rclpy/" "${STAGING_ROOT}/rclpy/"
 
+if [[ -f "${REPO_ROOT}/THIRD_PARTY_NOTICES.md" ]]; then
+  install -m 0644 "${REPO_ROOT}/THIRD_PARTY_NOTICES.md" "${STAGING_ROOT}/rclpy/THIRD_PARTY_NOTICES.md"
+fi
+
+echo "[INFO] Staging 'tf2_py' and 'tf2_ros' compatibility packages…"
+rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/tf2_py/" "${STAGING_ROOT}/tf2_py/"
+rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/tf2_ros/" "${STAGING_ROOT}/tf2_ros/"
+
 echo "[INFO] Staging 'launch' package…"
 rsync -a --exclude='__pycache__' --exclude='*.pyc' "${REPO_ROOT}/launch/" "${STAGING_ROOT}/launch/"
 
@@ -653,7 +661,7 @@ install_requires =
 
 [options.package_data]
 # Include ALL .so files (including versioned), not only lib*.so
-* = **/*.py, **/*Wrapper.*, **/*.so, **/*.so.*
+* = **/*.py, **/*Wrapper.*, **/*.so, **/*.so.*, **/LICENSE, **/*.md
 PYSETUPCFG
 
 # setup.py: force has_ext_modules() to True so wheel is NOT treated as pure-python

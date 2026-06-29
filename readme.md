@@ -50,6 +50,7 @@ lwrclpyは、ROS 2のPythonクライアントライブラリ「rclpy」のAPIを
 | **Logging** | ✅ | ✅ | レベル/スロットリング対応 |
 | **Context/Domain ID** | ✅ | ✅ | 複数コンテキスト対応 |
 | **Launch System** | ✅ | ✅ | launch/launch_ros API互換 |
+| **TF (`tf2_py` / `tf2_ros`)** | ✅ | ✅ | `Buffer` / broadcaster / listener対応。lwrclpy wheel同梱 |
 | **Lifecycle Nodes** | ❌ 未対応 | ✅ | 将来対応予定 |
 | **Component Nodes** | ❌ 未対応 | ✅ | 将来対応予定 |
 | **ros2 CLI** | ❌ 不要 | ✅ | lwrclpyはCLI不要 |
@@ -638,6 +639,60 @@ python3 my_launch.py
 python3 my_launch.py verbose:=false
 ```
 
+### TF (`tf2_py` / `tf2_ros`)
+
+lwrclpyは、ROS 2 geometry2のPython APIに近い`tf2_py` / `tf2_ros`互換パッケージを同梱します。
+ROS 2の追加インストールなしで、通常のTF broadcaster/listenerパターンを使えます。
+
+対応している主なAPI:
+
+- `tf2_ros.Buffer`
+- `tf2_ros.TransformBroadcaster`
+- `tf2_ros.StaticTransformBroadcaster`
+- `tf2_ros.TransformListener`
+- `tf2_ros.StaticTransformListener`
+- `tf2_py.BufferCore`
+
+基本例:
+
+```python
+import rclpy
+from geometry_msgs.msg import TransformStamped
+from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformBroadcaster, TransformListener
+
+rclpy.init()
+node = Node("tf_example")
+
+buffer = Buffer(node=node)
+listener = TransformListener(buffer, node)
+broadcaster = TransformBroadcaster(node)
+
+tf = TransformStamped()
+tf.header.frame_id = "world"
+tf.child_frame_id = "camera"
+tf.transform.translation.x = 1.0
+tf.transform.rotation.w = 1.0
+
+broadcaster.sendTransform(tf)
+rclpy.spin_once(node, timeout_sec=0.1)
+
+if buffer.can_transform("world", "camera", Time()):
+    result = buffer.lookup_transform("world", "camera", Time())
+    print(result.child_frame_id)
+```
+
+動作確認:
+
+```bash
+python3 examples/tf2/tf2_listener_broadcaster_demo.py
+```
+
+現在の実装はlwrclpy wheelで完結するpure Python版です。最新のtransformを保持してframe間の連結lookupを行います。
+ROS 2 geometry2のC++ `tf2_py`拡張が提供する高度な時系列補間や、`tf2_msgs/action/LookupTransform`ベースの
+`BufferClient`は未対応です。
+
 ---
 
 ## 🔗 ROS 2との相互運用
@@ -690,6 +745,7 @@ python3 examples/pubsub/string/talker.py
 | **QoS** | `qos/` | 各種QoSプロファイル |
 | **Parameters** | `parameters/` | ノードパラメータ |
 | **Launch** | `launch/` | ROS 2互換Launchシステム |
+| **TF** | `tf2/` | `tf2_py` / `tf2_ros`互換のbroadcaster/listener |
 | **Logging** | `logging/` | ログレベル設定 |
 | **Clock** | `clock/` | ROS Time/Sim Time |
 | **Context** | `context/` | Domain ID設定 |
@@ -735,7 +791,12 @@ macOSでは初回のDDSディスカバリに数秒かかることがあります
 
 - 本リポジトリ: Apache-2.0
 - 生成コードにはeProsima Fast-DDSのテンプレートが含まれます
-- rclpy互換レイヤーはApache-2.0（詳細は`rclpy/LICENSE`参照）
+- rclpy互換レイヤーはROS 2 rclpyの公開APIに合わせたApache-2.0互換shimです
+  - 詳細: `THIRD_PARTY_NOTICES.md`
+  - パッケージ別ライセンス: `rclpy/LICENSE`
+- `tf2_py` / `tf2_ros`互換パッケージはROS 2 geometry2のBSDライセンスAPI/実装に由来します
+  - 詳細: `THIRD_PARTY_NOTICES.md`
+  - パッケージ別ライセンス: `tf2_py/LICENSE`, `tf2_ros/LICENSE`
 
 ---
 
@@ -744,3 +805,4 @@ macOSでは初回のDDSディスカバリに数秒かかることがあります
 - [eProsima Fast DDS](https://github.com/eProsima/Fast-DDS) - 高性能DDSミドルウェア
 - [ROS 2](https://ros.org/) - ロボット開発フレームワーク
 - [rclpy](https://github.com/ros2/rclpy) - 公式ROS 2 Pythonクライアントライブラリ
+- [geometry2](https://github.com/ros2/geometry2) - TF / tf2_ros Python API

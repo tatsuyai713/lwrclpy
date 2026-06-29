@@ -47,6 +47,7 @@ lwrclpy reimplements the "rclpy" API (ROS 2's Python client library) on top of F
 | **Logging** | ✅ | ✅ | Levels/throttling supported |
 | **Context/Domain ID** | ✅ | ✅ | Multiple contexts supported |
 | **Launch System** | ✅ | ✅ | launch/launch_ros API compatible |
+| **TF (`tf2_py` / `tf2_ros`)** | ✅ | ✅ | `Buffer`, broadcasters, and listeners bundled in the lwrclpy wheel |
 | **Lifecycle Nodes** | ❌ Not supported | ✅ | Planned for future |
 | **Component Nodes** | ❌ Not supported | ✅ | Planned for future |
 | **ros2 CLI** | ❌ Not needed | ✅ | lwrclpy doesn't require CLI |
@@ -455,6 +456,62 @@ python3 my_launch.py
 python3 my_launch.py verbose:=false
 ```
 
+### TF (`tf2_py` / `tf2_ros`)
+
+lwrclpy bundles `tf2_py` / `tf2_ros` compatibility packages that follow the
+Python API shape from ROS 2 geometry2. You can use the common TF
+broadcaster/listener pattern without installing ROS 2.
+
+Main supported APIs:
+
+- `tf2_ros.Buffer`
+- `tf2_ros.TransformBroadcaster`
+- `tf2_ros.StaticTransformBroadcaster`
+- `tf2_ros.TransformListener`
+- `tf2_ros.StaticTransformListener`
+- `tf2_py.BufferCore`
+
+Basic example:
+
+```python
+import rclpy
+from geometry_msgs.msg import TransformStamped
+from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformBroadcaster, TransformListener
+
+rclpy.init()
+node = Node("tf_example")
+
+buffer = Buffer(node=node)
+listener = TransformListener(buffer, node)
+broadcaster = TransformBroadcaster(node)
+
+tf = TransformStamped()
+tf.header.frame_id = "world"
+tf.child_frame_id = "camera"
+tf.transform.translation.x = 1.0
+tf.transform.rotation.w = 1.0
+
+broadcaster.sendTransform(tf)
+rclpy.spin_once(node, timeout_sec=0.1)
+
+if buffer.can_transform("world", "camera", Time()):
+    result = buffer.lookup_transform("world", "camera", Time())
+    print(result.child_frame_id)
+```
+
+Smoke test:
+
+```bash
+python3 examples/tf2/tf2_listener_broadcaster_demo.py
+```
+
+This is a pure-Python implementation intended to work from the lwrclpy wheel.
+It stores the latest transform and supports chained frame lookup. Advanced time
+interpolation from geometry2's C++ `tf2_py` extension and the
+`tf2_msgs/action/LookupTransform` based `BufferClient` are not implemented yet.
+
 ---
 
 ## 🔗 ROS 2 Interoperability
@@ -504,6 +561,7 @@ See [examples/README.md](examples/README.md) for details.
 | **QoS** | `qos/` | Various QoS profiles |
 | **Parameters** | `parameters/` | Node parameters |
 | **Launch** | `launch/` | ROS 2 compatible Launch system |
+| **TF** | `tf2/` | `tf2_py` / `tf2_ros` compatible broadcaster/listener |
 | **Logging** | `logging/` | Log level settings |
 | **Clock** | `clock/` | ROS Time/Sim Time |
 | **Context** | `context/` | Domain ID settings |
@@ -549,7 +607,14 @@ Initial DDS discovery may take a few seconds on macOS. For inter-process communi
 
 - This repository: Apache-2.0
 - Generated code includes eProsima Fast-DDS templates
-- rclpy compatibility layer is Apache-2.0 (see `rclpy/LICENSE`)
+- The rclpy compatibility layer is an Apache-2.0-compatible shim matching the
+  public ROS 2 rclpy API surface
+  - Details: `THIRD_PARTY_NOTICES.md`
+  - Package license: `rclpy/LICENSE`
+- `tf2_py` / `tf2_ros` compatibility packages are derived from the
+  BSD-licensed ROS 2 geometry2 Python APIs/implementation
+  - Details: `THIRD_PARTY_NOTICES.md`
+  - Package licenses: `tf2_py/LICENSE`, `tf2_ros/LICENSE`
 
 ---
 
@@ -558,3 +623,4 @@ Initial DDS discovery may take a few seconds on macOS. For inter-process communi
 - [eProsima Fast DDS](https://github.com/eProsima/Fast-DDS) - High-performance DDS middleware
 - [ROS 2](https://ros.org/) - Robot development framework
 - [rclpy](https://github.com/ros2/rclpy) - Official ROS 2 Python client library
+- [geometry2](https://github.com/ros2/geometry2) - TF / tf2_ros Python API

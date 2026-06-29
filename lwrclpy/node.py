@@ -22,6 +22,7 @@ from .client import Client
 from .service import Service
 from .clock import Clock
 from .guard_condition import GuardCondition
+from .topic_endpoint_info import TopicEndpointInfo, TopicEndpointTypeEnum
 
 
 def _patch_message_type_for_compat(msg_cls) -> None:
@@ -832,6 +833,202 @@ class Node:
 
     def get_name(self):
         return self._name
+
+    # ------------------- Graph introspection -------------------
+    def _dds_topic_from_query(self, topic_name: str, no_mangle: bool = False) -> str:
+        return topic_name if no_mangle else self._resolve_topic_name(topic_name)
+
+    def _ros_topic_name_from_dds(self, topic_name: str) -> str:
+        name = str(topic_name or "")
+        if name.startswith(self._pubsub_prefix):
+            name = name[len(self._pubsub_prefix):]
+        if not name.startswith("/"):
+            name = "/" + name
+        return name
+
+    def _entity_topic_name(self, entity, *, no_demangle: bool = False) -> str:
+        getter = getattr(entity, "get_topic_name", None)
+        if callable(getter):
+            name = getter()
+        else:
+            topic = getattr(entity, "_topic", None)
+            try:
+                name = topic.get_name()
+            except Exception:
+                name = getattr(topic, "m_topicName", "")
+        return str(name) if no_demangle else self._ros_topic_name_from_dds(str(name))
+
+    def _type_name_from_class(self, cls) -> str:
+        module = getattr(cls, "__module__", "")
+        name = getattr(cls, "__name__", "")
+        parts = module.split(".") if module else []
+        if len(parts) >= 2 and parts[-1] in {"msg", "srv", "action"}:
+            return f"{parts[-2]}/{parts[-1]}/{name}"
+        if len(parts) >= 3 and parts[-2] in {"msg", "srv", "action"}:
+            return f"{parts[-3]}/{parts[-2]}/{name}"
+        return f"{module}.{name}" if module and name else name
+
+    def _entity_topic_type(self, entity) -> str:
+        msg_cls = getattr(entity, "_msg_ctor", None)
+        if msg_cls is not None:
+            return self._type_name_from_class(msg_cls)
+        return ""
+
+    def _service_type_name(self, entity) -> str:
+        srv_type = getattr(entity, "_service_type", None)
+        if srv_type is not None:
+            return self._type_name_from_class(srv_type)
+        req_cls = getattr(entity, "_request_cls", None)
+        if req_cls is not None:
+            module = getattr(req_cls, "__module__", "")
+            package = module.split(".")[0] if module else ""
+            service = getattr(req_cls, "__qualname__", "").split(".")[0] or getattr(req_cls, "__name__", "")
+            if package and service:
+                return f"{package}/srv/{service}"
+        return ""
+
+    def _endpoint_gid(self, entity) -> list[int]:
+        native = getattr(entity, "_writer", None) or getattr(entity, "_reader", None)
+        for attr in ("guid", "get_guid", "guid_prefix"):
+            try:
+                value = getattr(native, attr)
+            except Exception:
+                continue
+            try:
+                value = value()
+            except TypeError:
+                pass
+            except Exception:
+                continue
+            data = self._bytes_from_endpoint_value(value)
+            if data:
+                return data[:16] + [0] * max(0, 16 - len(data))
+        return [0] * 16
+
+    @staticmethod
+    def _bytes_from_endpoint_value(value) -> list[int]:
+        if value is None:
+            return []
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return [int(b) & 0xFF for b in bytes(value)]
+        data = []
+        try:
+            iterator = iter(value)
+        except TypeError:
+            return []
+        for item in iterator:
+            try:
+                data.append(int(item) & 0xFF)
+            except Exception:
+                return []
+        return data
+
+    def _endpoint_info(self, entity, endpoint_type: TopicEndpointTypeEnum) -> TopicEndpointInfo:
+        return TopicEndpointInfo(
+            node_name=self._name,
+            node_namespace=self.get_namespace(),
+            topic_type=self._entity_topic_type(entity),
+            endpoint_type=endpoint_type,
+            endpoint_gid=self._endpoint_gid(entity),
+            qos_profile=getattr(entity, "_qos_profile", None),
+        )
+
+    def _matching_entities_for_topic(self, entities, topic_name: str, *, no_mangle: bool = False):
+        expected = self._dds_topic_from_query(topic_name, no_mangle=no_mangle)
+        return [
+            entity
+            for entity in list(entities)
+            if self._entity_topic_name(entity, no_demangle=True) == expected
+        ]
+
+    def get_publishers_info_by_topic(self, topic_name: str, no_mangle: bool = False) -> List[TopicEndpointInfo]:
+        self._raise_if_destroyed()
+        return [
+            self._endpoint_info(pub, TopicEndpointTypeEnum.PUBLISHER)
+            for pub in self._matching_entities_for_topic(self._publishers, topic_name, no_mangle=no_mangle)
+        ]
+
+    def get_subscriptions_info_by_topic(self, topic_name: str, no_mangle: bool = False) -> List[TopicEndpointInfo]:
+        self._raise_if_destroyed()
+        return [
+            self._endpoint_info(sub, TopicEndpointTypeEnum.SUBSCRIPTION)
+            for sub in self._matching_entities_for_topic(self._subscriptions, topic_name, no_mangle=no_mangle)
+        ]
+
+    def count_publishers(self, topic_name: str) -> int:
+        self._raise_if_destroyed()
+        return len(self._matching_entities_for_topic(self._publishers, topic_name))
+
+    def count_subscribers(self, topic_name: str) -> int:
+        self._raise_if_destroyed()
+        return len(self._matching_entities_for_topic(self._subscriptions, topic_name))
+
+    def _names_and_types(self, entities, *, no_demangle: bool = False):
+        topics: dict[str, set[str]] = {}
+        for entity in list(entities):
+            name = self._entity_topic_name(entity, no_demangle=no_demangle)
+            topic_type = self._entity_topic_type(entity)
+            topics.setdefault(name, set()).add(topic_type)
+        return [(name, sorted(types)) for name, types in sorted(topics.items())]
+
+    def get_topic_names_and_types(self, no_demangle: bool = False):
+        self._raise_if_destroyed()
+        topics: dict[str, set[str]] = {}
+        for name, types in self._names_and_types(self._publishers + self._subscriptions, no_demangle=no_demangle):
+            topics.setdefault(name, set()).update(types)
+        return [(name, sorted(types)) for name, types in sorted(topics.items())]
+
+    def _node_matches(self, node_name: str, node_namespace: str) -> bool:
+        namespace = node_namespace or "/"
+        if not namespace.startswith("/"):
+            namespace = "/" + namespace
+        return node_name == self._name and namespace.rstrip("/") == self.get_namespace().rstrip("/")
+
+    def get_publisher_names_and_types_by_node(self, node_name: str, node_namespace: str, no_demangle: bool = False):
+        self._raise_if_destroyed()
+        if not self._node_matches(node_name, node_namespace):
+            return []
+        return self._names_and_types(self._publishers, no_demangle=no_demangle)
+
+    def get_subscriber_names_and_types_by_node(self, node_name: str, node_namespace: str, no_demangle: bool = False):
+        self._raise_if_destroyed()
+        if not self._node_matches(node_name, node_namespace):
+            return []
+        return self._names_and_types(self._subscriptions, no_demangle=no_demangle)
+
+    def get_node_names(self) -> List[str]:
+        self._raise_if_destroyed()
+        return [self._name]
+
+    def get_node_names_and_namespaces(self) -> List[tuple[str, str]]:
+        self._raise_if_destroyed()
+        return [(self._name, self.get_namespace())]
+
+    def get_node_names_and_namespaces_with_enclaves(self) -> List[tuple[str, str, str]]:
+        self._raise_if_destroyed()
+        return [(self._name, self.get_namespace(), "")]
+
+    def _service_names_and_types(self, entities):
+        services: dict[str, set[str]] = {}
+        for entity in list(entities):
+            services.setdefault(getattr(entity, "_service_name", ""), set()).add(self._service_type_name(entity))
+        return [(name, sorted(types)) for name, types in sorted(services.items()) if name]
+
+    def get_service_names_and_types(self):
+        self._raise_if_destroyed()
+        return self._service_names_and_types(self._services)
+
+    def get_service_names_and_types_by_node(self, node_name: str, node_namespace: str):
+        self._raise_if_destroyed()
+        if not self._node_matches(node_name, node_namespace):
+            return []
+        return self._service_names_and_types(self._services)
+
+    def get_client_names_and_types_by_node(self, node_name: str, node_namespace: str):
+        self._raise_if_destroyed()
+        if not self._node_matches(node_name, node_namespace):
+            return []
+        return self._service_names_and_types(self._clients)
 
     def destroy_node(self):
         with self._callback_lock:

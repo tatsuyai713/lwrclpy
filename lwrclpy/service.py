@@ -19,6 +19,7 @@ class Service:
 
     def __init__(self, service_type, service_name: str, callback, qos_profile: QoSProfile, topic_prefix: str = "", *, enqueue_cb=None):
         self._participant = get_participant()
+        self._service_type = service_type
         self._service_name = service_name
         self._callback = callback
         self._prefix = topic_prefix
@@ -115,4 +116,3 @@ class Service:
         if self._callback_queue is not None:
             self._callback_queue.close()
             self._callback_queue = None
-

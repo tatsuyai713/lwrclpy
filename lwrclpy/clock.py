@@ -1,5 +1,6 @@
 import time
 import threading
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Callable, List
 
@@ -9,6 +10,36 @@ class ClockType(Enum):
     ROS_TIME = 1
     SYSTEM_TIME = 2
     STEADY_TIME = 3
+
+
+@dataclass
+class JumpThreshold:
+    min_forward: Optional["Duration"] = None
+    min_backward: Optional["Duration"] = None
+    on_clock_change: bool = False
+
+
+@dataclass
+class TimeJump:
+    clock_change: bool = False
+    delta: Optional["Duration"] = None
+
+
+class JumpHandle:
+    def __init__(self, clock: "Clock", pre_callback=None, post_callback=None):
+        self._clock = clock
+        self._pre_callback = pre_callback
+        self._post_callback = post_callback
+
+    def unregister(self):
+        self._clock.remove_time_jump_callback(self)
+
+    def __call__(self, delta_ns: int):
+        jump = TimeJump(delta=Duration(nanoseconds=delta_ns))
+        if self._pre_callback is not None:
+            self._pre_callback(jump)
+        if self._post_callback is not None:
+            self._post_callback(jump)
 
 
 class Time:
@@ -198,6 +229,12 @@ class Clock:
         """Add a callback to be notified of time jumps (delta in nanoseconds)."""
         with self._lock:
             self._time_jump_callbacks.append(callback)
+
+    def create_jump_callback(self, threshold: JumpThreshold, pre_callback=None, post_callback=None) -> JumpHandle:
+        del threshold
+        handle = JumpHandle(self, pre_callback=pre_callback, post_callback=post_callback)
+        self.add_time_jump_callback(handle)
+        return handle
 
     def remove_time_jump_callback(self, callback: Callable[[int], None]):
         """Remove a time jump callback."""

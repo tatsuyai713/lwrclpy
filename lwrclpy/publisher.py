@@ -215,6 +215,7 @@ class Publisher:
     ):
         self._participant = participant
         self._topic = topic
+        self._qos_profile = qos
         self._msg_ctor = msg_ctor
         self._msg_module = msg_module
         self._event_callbacks = event_callbacks

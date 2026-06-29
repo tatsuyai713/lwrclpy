@@ -49,6 +49,7 @@ examples/
 ├── qos/                     # QoS
 ├── services/                # Service
 ├── shared_memory/           # lwrclpy 独自: CPU SharedMemory サイドチャネル
+├── tf2/                     # tf2_py / tf2_ros 互換 TF broadcaster/listener
 ├── timers/                  # Timer
 └── video/                   # Video/YOLO examples
 ```
@@ -429,6 +430,27 @@ qos = QoSProfile(
 | `nav_msgs` | `pubsub/typed_messages/navigation_demo.py` | - |
 | `sensor_msgs/Image` + SharedMemory | `shared_memory/image_shared_memory_publisher.py` | `shared_memory/image_shared_memory_subscriber.py` |
 | `sensor_msgs/Image` + CUDA IPC | `cuda_ipc/image_cuda_ipc_publisher.py` | `cuda_ipc/image_cuda_ipc_subscriber.py` |
+| `tf2_msgs/TFMessage` | `tf2/tf2_listener_broadcaster_demo.py` | same process demo |
+
+---
+
+## TF (`tf2_py` / `tf2_ros`)
+
+`tf2/tf2_listener_broadcaster_demo.py` は、lwrclpy同梱の `tf2_py` / `tf2_ros`
+互換パッケージで `TransformBroadcaster`、`TransformListener`、`Buffer` を使う最小例です。
+
+```bash
+python examples/tf2/tf2_listener_broadcaster_demo.py
+```
+
+期待される出力:
+
+```text
+TF OK: camera -> world x=1.0
+```
+
+このTF実装はpure Python版で、最新transformの保持とframe間の連結lookupに対応します。
+geometry2のC++ `tf2_py`拡張による高度な時系列補間と`BufferClient`は未対応です。
 
 ---
 
