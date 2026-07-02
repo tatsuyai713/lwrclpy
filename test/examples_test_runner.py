@@ -122,6 +122,9 @@ class ProcessCapture:
     def __init__(self, command: Sequence[str], cwd: Optional[str] = None) -> None:
         if cwd is None:
             cwd = str(EXAMPLES_ROOT)
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         self.proc = subprocess.Popen(
             list(command),
             stdout=subprocess.PIPE,
@@ -130,6 +133,7 @@ class ProcessCapture:
             cwd=cwd,
             env=_env_with_project(),
             bufsize=1,
+            creationflags=creationflags,
         )
         self.stdout_lines: List[str] = []
         self.stderr_lines: List[str] = []
@@ -162,26 +166,33 @@ class ProcessCapture:
         with self._output_lock:
             return "".join(self.stdout_lines + self.stderr_lines)
 
+    def join_output(self, timeout: float = 1.0) -> None:
+        for thread in (self._stdout_thread, self._stderr_thread):
+            thread.join(timeout=timeout)
+
     def terminate(self, grace: float = PROCESS_TERMINATE_GRACE) -> None:
         if self.proc.poll() is not None:
+            self.join_output(timeout=0.5)
             return
         try:
             if os.name == "nt":
-                self.proc.terminate()
+                try:
+                    self.proc.send_signal(signal.CTRL_BREAK_EVENT)
+                except Exception:
+                    self.proc.terminate()
             else:
                 self.proc.send_signal(signal.SIGINT)
         except Exception:
             self.proc.terminate()
         try:
-            self.proc.wait(timeout=_timeout(grace))
+            self.proc.wait(timeout=_timeout(1.0 if os.name == "nt" else grace))
         except subprocess.TimeoutExpired:
             self.proc.kill()
             try:
                 self.proc.wait(timeout=_timeout(PROCESS_KILL_GRACE))
             except subprocess.TimeoutExpired:
                 pass
-        for thread in (self._stdout_thread, self._stderr_thread):
-            thread.join(timeout=0.2)
+        self.join_output(timeout=0.5)
 
 
 def _contains_error(output: str) -> bool:
@@ -279,29 +290,32 @@ def _run_pair(
     _sleep(DDS_DISCOVERY_DELAY)
     pub = ProcessCapture([sys.executable, str(publisher)] + list(publisher_args or []))
 
-    pub_done = False
-    try:
-        pub.proc.wait(timeout=_timeout(publisher_timeout))
-        pub_done = True
-    except subprocess.TimeoutExpired:
-        pass
-
     matched = _wait_for_keywords(sub, subscriber_expect, subscriber_timeout)
+    if sub.proc.poll() is not None:
+        sub.join_output(timeout=1.0)
+    if pub.proc.poll() is not None:
+        pub.join_output(timeout=1.0)
     sub_output = sub.output()
     pub_output = pub.output()
+    pub_returncode = pub.proc.poll()
+    sub_returncode = sub.proc.poll()
 
     pub.terminate()
     sub.terminate()
 
     if _contains_error(pub_output) or _contains_error(sub_output):
         return False, (pub_output + sub_output)[:ERROR_DETAIL_LIMIT]
-    if pub_done and pub.proc.returncode not in (0, None):
-        return False, pub_output[:ERROR_DETAIL_LIMIT] or f"Publisher exited with code {pub.proc.returncode}"
+    if pub_returncode not in (0, None):
+        return False, pub_output[:ERROR_DETAIL_LIMIT] or f"Publisher exited with code {pub_returncode}"
     if not matched:
-        return False, f"Subscriber output did not include {list(subscriber_expect)}"
-    if not pub_done:
-        # publisher is allowed to be long-running; not a failure
-        return True, "Publisher running; subscriber received messages"
+        detail = (
+            f"Subscriber output did not include {list(subscriber_expect)}\n"
+            f"Publisher return code: {pub_returncode}\n"
+            f"Subscriber return code: {sub_returncode}\n"
+            f"Publisher output:\n{pub_output or '<empty>'}\n"
+            f"Subscriber output:\n{sub_output or '<empty>'}"
+        )
+        return False, detail[:ERROR_DETAIL_LIMIT]
     return True, "OK"
 
 

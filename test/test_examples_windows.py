@@ -19,4 +19,4 @@ if __name__ == "__main__":
         exit_code = 1
     sys.stdout.flush()
     sys.stderr.flush()
-    os._exit(exit_code)
+    sys.exit(exit_code)

@@ -6,7 +6,7 @@ on:
       package_version:
         description: "Package version, for example 0.5.1"
         required: false
-        default: "0.5.1"
+        default: "0.6.1"
         type: string
       fastdds_python_repos_ref:
         description: "Fast-DDS-python repos ref"
@@ -22,7 +22,7 @@ on:
       package_version:
         description: "Package version, for example 0.5.1"
         required: true
-        default: "0.5.1"
+        default: "0.6.1"
         type: string
       fastdds_python_repos_ref:
         description: "Fast-DDS-python repos ref"
