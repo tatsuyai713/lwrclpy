@@ -5,7 +5,7 @@ import unittest
 
 import rclpy  # noqa: F401 - importing rclpy applies lwrclpy compatibility patches
 from geometry_msgs.msg import Pose, Quaternion
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 
 
 class MessageCompatibilityTests(unittest.TestCase):
@@ -37,6 +37,23 @@ class MessageCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(36, len(first.pose().covariance()))
         self.assertEqual(36, len(second.pose().covariance()))
+
+    def test_sequence_of_submessages_can_be_reused(self):
+        pose = Pose()
+        from geometry_msgs.msg import PoseStamped
+
+        pose_stamped = PoseStamped()
+        pose_stamped.pose(pose)
+        poses = [pose_stamped]
+
+        first = Path()
+        second = Path()
+
+        first.poses(poses)
+        second.poses(poses)
+
+        self.assertEqual(1, len(first.poses()))
+        self.assertEqual(1, len(second.poses()))
 
 
 if __name__ == "__main__":

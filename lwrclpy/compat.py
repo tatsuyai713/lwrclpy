@@ -10,8 +10,18 @@ def _is_swig_moved_value_error(exc: BaseException) -> bool:
     )
 
 
-def _clone_swig_message_arg(value):
-    if not hasattr(value, "this"):
+def _contains_swig_message(value) -> bool:
+    if hasattr(value, "this"):
+        return True
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_swig_message(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_swig_message(item) for item in value.values())
+    return False
+
+
+def _clone_message_arg(value):
+    if not _contains_swig_message(value):
         return value
     from .message_utils import _copy_val
     return _copy_val(value)
@@ -35,7 +45,7 @@ def _make_field_accessor(original):
             return original(self)
         if len(args) == 1:
             try:
-                return original(self, _clone_swig_message_arg(args[0]))
+                return original(self, _clone_message_arg(args[0]))
             except RuntimeError as exc:
                 if not _is_swig_moved_value_error(exc):
                     raise
