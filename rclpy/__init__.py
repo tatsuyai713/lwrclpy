@@ -20,6 +20,20 @@ from lwrclpy import (
 from lwrclpy.context import init as _core_init, ok as _core_ok, get_domain_id, Context
 from lwrclpy.context import shutdown as _core_shutdown
 from lwrclpy.context import try_shutdown as _core_try_shutdown
+from lwrclpy.compat import (
+    install_message_import_hook,
+    patch_kwargs_for_common_interfaces,
+    patch_loaded_msg_modules,
+)
+
+
+def _apply_rclpy_message_compatibility() -> None:
+    patch_loaded_msg_modules()
+    patch_kwargs_for_common_interfaces()
+    install_message_import_hook()
+
+
+_apply_rclpy_message_compatibility()
 
 
 class _DefaultContext:

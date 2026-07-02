@@ -4,33 +4,33 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import pkgutil
 from types import ModuleType
 
-
-_DEFAULT_SERVICE_PACKAGES = (
-    "action_msgs",
-    "diagnostic_msgs",
-    "example_interfaces",
-    "gazebo_msgs",
-    "lifecycle_msgs",
-    "nav_msgs",
-    "rcl_interfaces",
-    "sensor_msgs",
-    "std_msgs",
-    "test_msgs",
-    "tf2_msgs",
-)
 
 _PATCHED_MODULES: set[str] = set()
 
 
 def install_service_aliases(extra_packages: list[str] | tuple[str, ...] | None = None) -> None:
     """Ensure every <Name>_Request/<Name>_Response pair has a rclpy-compatible wrapper class."""
-    packages = list(_DEFAULT_SERVICE_PACKAGES)
+    packages = list(_iter_service_packages())
     if extra_packages:
         packages.extend(extra_packages)
-    for pkg in packages:
+    for pkg in dict.fromkeys(packages):
         _patch_package(pkg)
+
+
+def _iter_service_packages():
+    for module_info in pkgutil.iter_modules():
+        package = module_info.name
+        if package.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.find_spec(f"{package}.srv")
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            continue
+        if spec is not None:
+            yield package
 
 
 def _patch_package(package: str) -> None:

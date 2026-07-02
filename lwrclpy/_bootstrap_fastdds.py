@@ -119,31 +119,25 @@ def _find_message_libs():
     else:
         lib_ext = '.so'
     
-    # Known ROS message package patterns
-    ros_msg_packages = {
-        'action_msgs', 'builtin_interfaces', 'diagnostic_msgs', 'example_interfaces',
-        'gazebo_msgs', 'geometry_msgs', 'lifecycle_msgs', 'nav_msgs', 'pendulum_msgs',
-        'rcl_interfaces', 'sensor_msgs', 'shape_msgs', 'std_msgs', 'std_srvs',
-        'stereo_msgs', 'test_msgs', 'tf2_msgs', 'trajectory_msgs', 'unique_identifier_msgs',
-        'visualization_msgs'
-    }
-    
     # Search for message type libraries in site-packages
     for base in candidates:
         if not os.path.isdir(base):
             continue
-        # Look for ROS message packages only
         try:
             for pkg_name in os.listdir(base):
-                # Skip non-ROS packages for performance
-                if pkg_name not in ros_msg_packages:
-                    continue
-                    
                 pkg_path = os.path.join(base, pkg_name)
                 # Skip non-directories, symlinks, and relative paths
                 if not os.path.isdir(pkg_path):
                     continue
                 if not os.path.isabs(pkg_path):
+                    continue
+                if pkg_name.startswith(('_', '.')):
+                    continue
+                has_ros_types = any(
+                    os.path.isdir(os.path.join(pkg_path, subdir))
+                    for subdir in ("msg", "srv", "action")
+                )
+                if not has_ros_types:
                     continue
                 # Find native message libraries recursively.
                 try:

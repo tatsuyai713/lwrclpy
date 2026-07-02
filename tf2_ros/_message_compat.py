@@ -97,20 +97,44 @@ def patch_message_class(cls) -> None:
 
 
 def patch_tf_message_modules() -> None:
-    for mod_name in (
-        "builtin_interfaces.msg",
-        "std_msgs.msg",
-        "geometry_msgs.msg",
-        "tf2_msgs.msg",
-    ):
+    import builtins
+    import sys
+
+    for module_name, module in list(sys.modules.items()):
+        if module and (module_name.endswith(".msg") or ".msg." in module_name):
+            _patch_module(module)
+
+    if getattr(builtins, "__tf2_ros_msg_import_hook__", False):
+        return
+
+    original_import = builtins.__import__
+
+    def _tf2_ros_import(name, globals=None, locals=None, fromlist=(), level=0):
+        module = original_import(name, globals, locals, fromlist, level)
         try:
-            module = __import__(mod_name, fromlist=["msg"])
+            candidates = {name}
+            if fromlist:
+                candidates.update(f"{name}.{item}" for item in fromlist if isinstance(item, str))
+            package = name.split(".")[0]
+            candidates.add(f"{package}.msg")
+            for candidate in candidates:
+                if candidate.endswith(".msg") or ".msg." in candidate:
+                    loaded = sys.modules.get(candidate)
+                    if loaded is not None:
+                        _patch_module(loaded)
+        except Exception:
+            pass
+        return module
+
+    builtins.__import__ = _tf2_ros_import
+    builtins.__tf2_ros_msg_import_hook__ = True
+
+
+def _patch_module(module) -> None:
+    for name in dir(module):
+        try:
+            obj = getattr(module, name)
         except Exception:
             continue
-        for name in dir(module):
-            try:
-                obj = getattr(module, name)
-            except Exception:
-                continue
-            if isinstance(obj, type):
-                patch_message_class(obj)
+        if isinstance(obj, type):
+            patch_message_class(obj)

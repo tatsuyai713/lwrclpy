@@ -17,9 +17,7 @@ if os.environ.get("LWRCLPY_PATCH_MSG_ATTRS") == "1":
 # opt-in so ``import lwrclpy`` mirrors rclpy and does not load message modules.
 if os.environ.get("LWRCLPY_EAGER_COMPAT_PATCHES") == "1":
     try:
-        from .compat import ensure_pointfield_constants, ensure_common_interface_constants, patch_kwargs_for_common_interfaces
-        ensure_pointfield_constants()
-        ensure_common_interface_constants()
+        from .compat import patch_kwargs_for_common_interfaces
         patch_kwargs_for_common_interfaces()
     except Exception:
         warnings.warn("Failed to apply lwrclpy eager compatibility patches", RuntimeWarning, stacklevel=2)

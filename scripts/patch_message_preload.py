@@ -20,18 +20,7 @@ import os
 import sys
 import site
 from pathlib import Path
-from typing import List, Set
-
-
-# Known ROS message package patterns
-ROS_MSG_PACKAGES = {
-    'action_msgs', 'builtin_interfaces', 'diagnostic_msgs', 'example_interfaces',
-    'gazebo_msgs', 'geometry_msgs', 'lifecycle_msgs', 'nav_msgs', 'pendulum_msgs',
-    'rcl_interfaces', 'sensor_msgs', 'shape_msgs', 'std_msgs', 'std_srvs',
-    'stereo_msgs', 'test_msgs', 'tf2_msgs', 'trajectory_msgs', 'unique_identifier_msgs',
-    'visualization_msgs', 'rosgraph_msgs', 'composition_interfaces', 'logging_demo',
-    'action_tutorials_interfaces', 'example_interfaces'
-}
+from typing import List
 
 
 def find_message_packages(site_packages_dir: Path) -> List[Path]:
@@ -42,26 +31,12 @@ def find_message_packages(site_packages_dir: Path) -> List[Path]:
         print(f"[WARN] Site-packages directory not found: {site_packages_dir}")
         return packages
     
-    # Scan for known packages
-    for pkg_name in ROS_MSG_PACKAGES:
-        pkg_dir = site_packages_dir / pkg_name
-        if pkg_dir.exists() and pkg_dir.is_dir():
-            init_file = pkg_dir / "__init__.py"
-            if init_file.exists():
-                packages.append(pkg_dir)
-    
-    # Also scan for any package that has msg/, srv/, or action/ subdirectories
-    # This handles future packages not in the known list
     try:
         for item in site_packages_dir.iterdir():
             if not item.is_dir():
                 continue
             if item.name.startswith('_') or item.name.startswith('.'):
                 continue
-            if item.name in ROS_MSG_PACKAGES:
-                continue  # Already handled above
-            
-            # Check if it looks like a ROS message package
             has_msg = (item / 'msg').exists()
             has_srv = (item / 'srv').exists()
             has_action = (item / 'action').exists()
@@ -70,7 +45,7 @@ def find_message_packages(site_packages_dir: Path) -> List[Path]:
                 init_file = item / "__init__.py"
                 if init_file.exists():
                     packages.append(item)
-                    print(f"[INFO] Found additional ROS package: {item.name}")
+                    print(f"[INFO] Found ROS package: {item.name}")
     except Exception as e:
         print(f"[WARN] Error scanning for additional packages: {e}")
     
