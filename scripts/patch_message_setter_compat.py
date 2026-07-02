@@ -22,6 +22,19 @@ _METHOD_RE = re.compile(
     r"(?P<cfunc>[A-Za-z_][A-Za-z_0-9]*)\(self, \*args\)\n"
 )
 
+_OLD_PATCHED_METHOD_RE = re.compile(
+    r"(?P<indent>    )def (?P<name>[A-Za-z_][A-Za-z_0-9]*)\(self, \*args\):\n"
+    r"(?P=indent)    # __LWRCLPY_SUBMESSAGE_SETTER_COMPAT__\n"
+    r"(?P=indent)    if len\(args\) == 1 and hasattr\(args\[0\], \"this\"\):\n"
+    r"(?P=indent)        try:\n"
+    r"(?P=indent)            from lwrclpy\.message_utils import clone_message\n"
+    r"(?P=indent)            return (?P<wrapper>_[A-Za-z_][A-Za-z_0-9]*Wrapper)\."
+    r"(?P<cfunc>[A-Za-z_][A-Za-z_0-9]*)\(self, clone_message\(args\[0\], type\(args\[0\]\)\)\)\n"
+    r"(?P=indent)        except Exception:\n"
+    r"(?P=indent)            pass\n"
+    r"(?P=indent)    return (?P=wrapper)\.(?P=cfunc)\(self, \*args\)\n"
+)
+
 
 def _should_patch_file(path: Path) -> bool:
     if path.name == "__init__.py" or path.name.startswith("_"):
@@ -31,7 +44,7 @@ def _should_patch_file(path: Path) -> bool:
 
 
 def _patch_content(content: str) -> tuple[str, int]:
-    if "__LWRCLPY_SUBMESSAGE_SETTER_COMPAT__" in content:
+    if "__LWRCLPY_SUBMESSAGE_SETTER_COMPAT_V2__" in content:
         return content, 0
 
     count = 0
@@ -52,16 +65,27 @@ def _patch_content(content: str) -> tuple[str, int]:
         cfunc = match.group("cfunc")
         return (
             f"{indent}def {name}(self, *args):\n"
-            f"{indent}    # __LWRCLPY_SUBMESSAGE_SETTER_COMPAT__\n"
-            f"{indent}    if len(args) == 1 and hasattr(args[0], \"this\"):\n"
+            f"{indent}    # __LWRCLPY_SUBMESSAGE_SETTER_COMPAT_V2__\n"
+            f"{indent}    if len(args) == 1:\n"
             f"{indent}        try:\n"
-            f"{indent}            from lwrclpy.message_utils import clone_message\n"
-            f"{indent}            return {wrapper}.{cfunc}(self, clone_message(args[0], type(args[0])))\n"
+            f"{indent}            from lwrclpy.message_utils import _copy_val\n"
+            f"{indent}            def _contains_swig_message(value):\n"
+            f"{indent}                if hasattr(value, \"this\"):\n"
+            f"{indent}                    return True\n"
+            f"{indent}                if isinstance(value, (list, tuple, set)):\n"
+            f"{indent}                    return any(_contains_swig_message(item) for item in value)\n"
+            f"{indent}                if isinstance(value, dict):\n"
+            f"{indent}                    return any(_contains_swig_message(item) for item in value.values())\n"
+            f"{indent}                return False\n"
+            f"{indent}            if _contains_swig_message(args[0]):\n"
+            f"{indent}                return {wrapper}.{cfunc}(self, _copy_val(args[0]))\n"
             f"{indent}        except Exception:\n"
             f"{indent}            pass\n"
             f"{indent}    return {wrapper}.{cfunc}(self, *args)\n"
+            f"{indent}{name}.__lwrclpy_setter_compat_patched__ = True\n"
         )
 
+    content = _OLD_PATCHED_METHOD_RE.sub(replace, content)
     return _METHOD_RE.sub(replace, content), count
 
 

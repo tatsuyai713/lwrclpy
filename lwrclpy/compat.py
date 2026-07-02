@@ -2,31 +2,6 @@ from types import ModuleType
 import inspect
 
 
-def _is_swig_moved_value_error(exc: BaseException) -> bool:
-    text = str(exc)
-    return (
-        "cannot release ownership as memory is not owned" in text
-        or "cannot release ownership" in text and "&&" in text
-    )
-
-
-def _contains_swig_message(value) -> bool:
-    if hasattr(value, "this"):
-        return True
-    if isinstance(value, (list, tuple, set)):
-        return any(_contains_swig_message(item) for item in value)
-    if isinstance(value, dict):
-        return any(_contains_swig_message(item) for item in value.values())
-    return False
-
-
-def _clone_message_arg(value):
-    if not _contains_swig_message(value):
-        return value
-    from .message_utils import _copy_val
-    return _copy_val(value)
-
-
 def _is_swig_sequence_instance(value) -> bool:
     type_name = type(value).__name__.lower()
     if "vector" in type_name or "array" in type_name:
@@ -37,45 +12,6 @@ def _is_swig_sequence_instance(value) -> bool:
         and (hasattr(value, "size") or hasattr(value, "__len__"))
         and (hasattr(value, "begin") or hasattr(value, "end") or hasattr(value, "front") or hasattr(value, "back"))
     )
-
-
-def _make_field_accessor(original):
-    def _field_accessor(self, *args):
-        if not args:
-            return original(self)
-        if len(args) == 1:
-            try:
-                return original(self, _clone_message_arg(args[0]))
-            except RuntimeError as exc:
-                if not _is_swig_moved_value_error(exc):
-                    raise
-                try:
-                    from .message_utils import _copy_val
-                    cloned = _copy_val(args[0])
-                    return original(self, cloned)
-                except Exception:
-                    raise exc
-            except Exception:
-                raise
-        try:
-            return original(self, *args)
-        except RuntimeError as exc:
-            if len(args) != 1 or not _is_swig_moved_value_error(exc):
-                raise
-            try:
-                from .message_utils import _copy_val
-                cloned = _copy_val(args[0])
-                return original(self, cloned)
-            except Exception:
-                raise exc
-
-    try:
-        _field_accessor.__name__ = getattr(original, "__name__", "_field_accessor")
-        _field_accessor.__doc__ = getattr(original, "__doc__", None)
-    except Exception:
-        pass
-    _field_accessor.__lwrclpy_accessor_patched__ = True
-    return _field_accessor
 
 
 def _patch_message_class(cls):
@@ -118,18 +54,6 @@ def _patch_message_class(cls):
 
     if not simple_fields:
         return
-
-    for name in simple_fields:
-        try:
-            original = getattr(cls, name)
-        except Exception:
-            continue
-        if not callable(original) or getattr(original, "__lwrclpy_accessor_patched__", False):
-            continue
-        try:
-            setattr(cls, name, _make_field_accessor(original))
-        except Exception:
-            continue
 
     # Pre-warm message_utils field name caches so that clone_message /
     # expose_callable_fields never need to call dir() for this class.
