@@ -5,6 +5,7 @@ import unittest
 
 import rclpy  # noqa: F401 - importing rclpy applies lwrclpy compatibility patches
 from geometry_msgs.msg import Pose, Quaternion
+from nav_msgs.msg import Odometry
 
 
 class MessageCompatibilityTests(unittest.TestCase):
@@ -23,6 +24,19 @@ class MessageCompatibilityTests(unittest.TestCase):
 
         self.assertAlmostEqual(first.orientation().z(), 0.5)
         self.assertAlmostEqual(second.orientation().z(), 0.5)
+
+    def test_nested_message_with_fixed_array_can_be_reused(self):
+        odom = Odometry()
+        pose_with_covariance = odom.pose()
+
+        first = Odometry()
+        second = Odometry()
+
+        first.pose(pose_with_covariance)
+        second.pose(pose_with_covariance)
+
+        self.assertEqual(36, len(first.pose().covariance()))
+        self.assertEqual(36, len(second.pose().covariance()))
 
 
 if __name__ == "__main__":

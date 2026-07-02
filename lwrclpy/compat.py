@@ -17,6 +17,18 @@ def _clone_swig_message_arg(value):
     return _copy_val(value)
 
 
+def _is_swig_sequence_instance(value) -> bool:
+    type_name = type(value).__name__.lower()
+    if "vector" in type_name or "array" in type_name:
+        return hasattr(value, "__iter__")
+    return (
+        hasattr(value, "this")
+        and hasattr(value, "__iter__")
+        and (hasattr(value, "size") or hasattr(value, "__len__"))
+        and (hasattr(value, "begin") or hasattr(value, "end") or hasattr(value, "front") or hasattr(value, "back"))
+    )
+
+
 def _make_field_accessor(original):
     def _field_accessor(self, *args):
         if not args:
@@ -60,11 +72,13 @@ def _patch_message_class(cls):
     if getattr(cls, "__lwrclpy_attr_patched__", False):
         return
     cls_name = getattr(cls, "__name__", "")
-    if cls_name.endswith("PubSubType") or "vector" in cls_name.lower():
+    if cls_name.endswith("PubSubType") or "vector" in cls_name.lower() or "array" in cls_name.lower():
         return
     try:
         inst = cls()
     except Exception:
+        return
+    if _is_swig_sequence_instance(inst):
         return
 
     simple_fields = []

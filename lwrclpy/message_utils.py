@@ -30,6 +30,18 @@ def _is_swig_vector(value) -> bool:
     return hasattr(value, '__iter__') and hasattr(value, 'size') and 'vector' in type(value).__name__
 
 
+def _is_swig_sequence(value) -> bool:
+    type_name = type(value).__name__.lower()
+    if "vector" in type_name or "array" in type_name:
+        return hasattr(value, "__iter__")
+    return (
+        hasattr(value, "this")
+        and hasattr(value, "__iter__")
+        and (hasattr(value, "size") or hasattr(value, "__len__"))
+        and (hasattr(value, "begin") or hasattr(value, "end") or hasattr(value, "front") or hasattr(value, "back"))
+    )
+
+
 def _swig_vector_len(value) -> int | None:
     try:
         return int(value.size())
@@ -491,6 +503,15 @@ def _copy_val(val):
         return {_copy_val(v) for v in val}
     if isinstance(val, dict):
         return {k: _copy_val(v) for k, v in val.items()}
+
+    if _is_swig_sequence(val):
+        try:
+            return [_copy_val(v) for v in val]
+        except Exception:
+            try:
+                return list(val)
+            except Exception:
+                return val
 
     # Callable (SWIG getter) -- call it to get the actual value
     if callable(val):
