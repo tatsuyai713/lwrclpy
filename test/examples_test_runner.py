@@ -176,10 +176,15 @@ class ProcessCapture:
             return
         try:
             if os.name == "nt":
-                try:
-                    self.proc.send_signal(signal.CTRL_BREAK_EVENT)
-                except Exception:
-                    self.proc.terminate()
+                # Console control events can be delivered more broadly than the
+                # child process group on hosted Windows runners. These examples
+                # are disposable subprocesses, so forcefully terminate the tree.
+                subprocess.run(
+                    ["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
             else:
                 self.proc.send_signal(signal.SIGINT)
         except Exception:
@@ -224,7 +229,9 @@ def _wait_for_keywords(proc: ProcessCapture, keywords: Sequence[str], timeout: f
         if all(keyword in output for keyword in required):
             return True
         if proc.proc.poll() is not None:
-            return False
+            proc.join_output(timeout=1.0)
+            output = proc.output()
+            return all(keyword in output for keyword in required)
         time.sleep(0.05)
     return False
 
