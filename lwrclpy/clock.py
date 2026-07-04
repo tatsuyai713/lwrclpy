@@ -174,6 +174,7 @@ class Clock:
     def __init__(self, *, clock_type: ClockType = ClockType.SYSTEM_TIME):
         self._clock_type = clock_type
         self._lock = threading.Lock()
+        self._time_update_condition = threading.Condition(self._lock)
         self._ros_time_override: Optional[int] = None
         self._ros_time_is_active = False
         self._time_jump_callbacks: List[Callable] = []
@@ -209,21 +210,24 @@ class Clock:
             old_time = self._ros_time_override
             self._ros_time_override = time_point.nanoseconds
             self._ros_time_is_active = True
-            
-            # Notify time jump callbacks
-            if old_time is not None:
-                delta = time_point.nanoseconds - old_time
-                for cb in self._time_jump_callbacks:
-                    try:
-                        cb(delta)
-                    except Exception:
-                        pass
+            callbacks = list(self._time_jump_callbacks) if old_time is not None else []
+            self._time_update_condition.notify_all()
+        # Invoke jump callbacks outside the lock: a callback that reads the
+        # clock or unregisters itself would otherwise deadlock on self._lock.
+        if callbacks:
+            delta = time_point.nanoseconds - old_time
+            for cb in callbacks:
+                try:
+                    cb(delta)
+                except Exception:
+                    pass
 
     def clear_ros_time_override(self):
         """Clear ROS time override."""
         with self._lock:
             self._ros_time_override = None
             self._ros_time_is_active = False
+            self._time_update_condition.notify_all()
 
     def add_time_jump_callback(self, callback: Callable[[int], None]):
         """Add a callback to be notified of time jumps (delta in nanoseconds)."""
@@ -242,21 +246,43 @@ class Clock:
             if callback in self._time_jump_callbacks:
                 self._time_jump_callbacks.remove(callback)
 
+    def _ros_override_active(self) -> bool:
+        with self._lock:
+            return (
+                self._clock_type == ClockType.ROS_TIME
+                and self._ros_time_is_active
+                and self._ros_time_override is not None
+            )
+
     def sleep_until(self, until: Time) -> bool:
-        """Sleep until the specified time.
-        
+        """Sleep until the specified time on this clock's time base.
+
+        For a ROS_TIME clock with an active override this waits for the
+        simulated time to reach *until* (woken by set_ros_time_override),
+        matching rclpy semantics instead of sleeping wall-clock time.
+        Returns True if sleep completed, False if interrupted.
+        """
+        try:
+            while True:
+                if not _context_ok():
+                    return False
+                now = self.now()
+                if now.nanoseconds >= until.nanoseconds:
+                    return True
+                if self._ros_override_active():
+                    with self._time_update_condition:
+                        self._time_update_condition.wait(_SLEEP_CHECK_INTERVAL_SEC)
+                else:
+                    remaining = (until.nanoseconds - now.nanoseconds) / 1_000_000_000
+                    time.sleep(min(remaining, _SLEEP_CHECK_INTERVAL_SEC))
+        except KeyboardInterrupt:
+            return False
+
+    def sleep_for(self, duration: Duration) -> bool:
+        """Sleep for the specified duration on this clock's time base.
+
         Returns True if sleep completed, False if interrupted.
         """
         now = self.now()
-        if until <= now:
-            return True
-        
-        duration_ns = until.nanoseconds - now.nanoseconds
-        return _sleep_seconds(duration_ns / 1_000_000_000)
-
-    def sleep_for(self, duration: Duration) -> bool:
-        """Sleep for the specified duration.
-        
-        Returns True if sleep completed, False if interrupted.
-        """
-        return _sleep_seconds(duration.nanoseconds / 1_000_000_000)
+        until = Time(nanoseconds=now.nanoseconds + duration.nanoseconds, clock_type=now.clock_type)
+        return self.sleep_until(until)

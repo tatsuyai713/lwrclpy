@@ -18,15 +18,102 @@ from typing import Any
 _SHM_ATTR = "_lwrclpy_shared_memory_buffers"
 
 
+# Names of segments this process created (owns).  Used to avoid unregistering
+# the owner's resource-tracker entry when the same process also opens the
+# segment as a reader (the tracker cache is a set, not a refcount).
+_owned_shm_names: set[str] = set()
+_owned_shm_names_lock = threading.Lock()
+
+
 def _shared_memory_open(*, name: str | None = None, create: bool = False, size: int = 0, track: bool = True):
     try:
-        return shared_memory.SharedMemory(name=name, create=create, size=size, track=track)
+        shm = shared_memory.SharedMemory(name=name, create=create, size=size, track=track)
     except TypeError:
-        return shared_memory.SharedMemory(name=name, create=create, size=size)
+        # Python < 3.13 has no ``track`` parameter and always registers the
+        # segment with the resource tracker.  A non-owning open must be
+        # unregistered, otherwise this process unlinks the publisher-owned
+        # segment when it exits.
+        shm = shared_memory.SharedMemory(name=name, create=create, size=size)
+        if not track and not create:
+            skip = False
+            with _owned_shm_names_lock:
+                skip = shm._name in _owned_shm_names
+            if not skip:
+                try:
+                    from multiprocessing import resource_tracker
+                    resource_tracker.unregister(shm._name, "shared_memory")
+                except Exception:
+                    pass
+    if create:
+        with _owned_shm_names_lock:
+            _owned_shm_names.add(shm._name)
+    return shm
+
+
+def _forget_owned_shm_name(shm) -> None:
+    try:
+        with _owned_shm_names_lock:
+            _owned_shm_names.discard(shm._name)
+    except Exception:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return whether *pid* refers to a live process without signaling it."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) calls TerminateProcess on Windows; never use it here.
+        try:
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return exit_code.value == STILL_ACTIVE
+                return True
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+    return True
+
+
+_host_id_cache: str | None = None
 
 
 def local_host_id() -> str:
-    return socket.gethostname()
+    """Return an identifier scoped to this machine and boot.
+
+    The hostname alone can collide across containers that do not share
+    /dev/shm; machine-id and boot-id disambiguate where available, and the
+    boot-id also invalidates metadata files that survived a reboot.
+    """
+    global _host_id_cache
+    if _host_id_cache is None:
+        parts = [socket.gethostname()]
+        for path in ("/etc/machine-id", "/proc/sys/kernel/random/boot_id"):
+            try:
+                with open(path, "r", encoding="ascii") as f:
+                    value = f.read().strip()
+                if value:
+                    parts.append(value)
+            except Exception:
+                pass
+        _host_id_cache = "-".join(parts)
+    return _host_id_cache
 
 
 def _sanitize_topic_name(topic_name: str) -> str:
@@ -99,6 +186,10 @@ def read_latest_metadata(topic: str, field: str) -> SharedMemoryMetadata | None:
         return None
     if metadata.host_id and metadata.host_id != local_host_id():
         return None
+    # Metadata files persist in tempdir across publisher restarts; a dead
+    # owner means the shared-memory block is gone or about to be reused.
+    if metadata.owner_pid and not _pid_alive(metadata.owner_pid):
+        return None
     return metadata
 
 
@@ -157,17 +248,11 @@ def count_local_shared_memory_subscribers(topic: str) -> int:
             except Exception:
                 pass
             continue
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _pid_alive(pid):
             try:
                 os.unlink(path)
             except Exception:
                 pass
-            continue
-        except PermissionError:
-            pass
-        except Exception:
             continue
         count += 1
     return count
@@ -306,6 +391,7 @@ class SharedMemoryAllocation:
                 pass
             except Exception:
                 pass
+            _forget_owned_shm_name(self._shm)
 
     def __del__(self):
         try:

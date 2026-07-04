@@ -90,15 +90,15 @@ class Client:
         Waits on the Future's internal event directly instead of busy-polling.
         """
         future = self.call_async(request)
-        try:
-            return future.result(timeout=timeout)
-        except TimeoutError:
+        if not future._event.wait(timeout):
             # Timeout -- clear pending future to allow next request
             with self._lock:
                 if self._pending_future is future:
                     self._pending_future = None
             future.cancel()
             return None
+        try:
+            return future.result()
         except Exception:
             return None
 

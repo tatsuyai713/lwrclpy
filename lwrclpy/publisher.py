@@ -515,13 +515,16 @@ class Publisher:
         metadata = None
         try:
             from .cuda_ipc import export_cuda_ipc_metadata
+            with self._cuda_ipc_lock:
+                self._cuda_ipc_sequence += 1
+                sequence_number = self._cuda_ipc_sequence
             metadata = export_cuda_ipc_metadata(
                 cuda_array,
                 topic=self._cuda_ipc_topic_name,
                 field=field,
                 nbytes=nbytes,
                 device_id=device_id,
-                sequence_number=self._cuda_ipc_sequence + 1,
+                sequence_number=sequence_number,
             )
         except Exception as exc:
             self._record_zero_copy_fallback(exc)
@@ -534,7 +537,6 @@ class Publisher:
                 set_string_data(meta_msg, metadata.to_json())
                 self._cuda_ipc_metadata_pub.publish(meta_msg)
                 with self._cuda_ipc_lock:
-                    self._cuda_ipc_sequence = metadata.sequence_number
                     self._cuda_ipc_keepalive[metadata.token] = cuda_array
                     if len(self._cuda_ipc_keepalive) > self._cuda_ipc_keepalive_limit:
                         oldest = next(iter(self._cuda_ipc_keepalive))
@@ -586,11 +588,14 @@ class Publisher:
         allocation = None
         try:
             from .shared_memory import export_shared_memory_metadata
+            with self._shm_lock:
+                self._shm_sequence += 1
+                sequence_number = self._shm_sequence
             allocation = export_shared_memory_metadata(
                 payload,
                 topic=self._shm_topic_name,
                 field=field,
-                sequence_number=self._shm_sequence + 1,
+                sequence_number=sequence_number,
             )
         except Exception:
             allocation = None
@@ -613,7 +618,6 @@ class Publisher:
                 set_string_data(meta_msg, allocation.metadata.to_json())
                 self._shm_metadata_pub.publish(meta_msg)
                 with self._shm_lock:
-                    self._shm_sequence = allocation.metadata.sequence_number
                     self._shm_keepalive[allocation.metadata.token] = allocation
                     while len(self._shm_keepalive) > self._shm_keepalive_limit:
                         oldest_token = next(iter(self._shm_keepalive))
@@ -778,7 +782,7 @@ class Publisher:
         duration = fastdds.Duration_t()
         if timeout is None:
             duration.seconds = getattr(fastdds, "DURATION_INFINITE_SEC", 0x7fffffff)
-            duration.nanosec = getattr(fastdds, "DURATION_INFINITE_NSEC", 0x7fffffff)
+            duration.nanosec = getattr(fastdds, "DURATION_INFINITE_NSEC", 0xffffffff)
         else:
             if isinstance(timeout, Duration):
                 total_ns = timeout.nanoseconds
@@ -790,7 +794,7 @@ class Publisher:
             duration.nanosec = total_ns % 1_000_000_000
         try:
             rc = self._writer.wait_for_acknowledgments(duration)
-            return bool(rc) if isinstance(rc, bool) else True
+            return _retcode_is_ok(rc, none_is_ok=True)
         except Exception:
             return False
         finally:

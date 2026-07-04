@@ -149,12 +149,20 @@ class QoSProfile:
             return
         try:
             ns = duration_value.nanoseconds
+            seconds = ns // 1_000_000_000
+            nanosec = ns % 1_000_000_000
+            if seconds >= 0x7FFFFFFF:
+                # Fast DDS Duration_t.seconds is int32; anything at or above
+                # the sentinel maps to the canonical DDS infinity instead of
+                # silently overflowing (which the except below would swallow).
+                seconds = getattr(fastdds, "DURATION_INFINITE_SEC", 0x7FFFFFFF)
+                nanosec = getattr(fastdds, "DURATION_INFINITE_NSEC", 0xFFFFFFFF)
             if hasattr(target, "seconds") and hasattr(target, "nanosec"):
-                target.seconds = ns // 1_000_000_000
-                target.nanosec = ns % 1_000_000_000
+                target.seconds = seconds
+                target.nanosec = nanosec
             elif hasattr(target, "sec") and hasattr(target, "nanosec"):
-                target.sec = ns // 1_000_000_000
-                target.nanosec = ns % 1_000_000_000
+                target.sec = seconds
+                target.nanosec = nanosec
         except Exception:
             pass
 

@@ -13,7 +13,7 @@ import threading
 import time
 from ._async import run_coroutine
 from .qos import QoSProfile
-from .message_utils import expose_callable_fields, _get_value
+from .message_utils import expose_callable_fields, _buffer_view, _get_value
 from .utils import (
     _matched_handle_count,
     _matched_status_count,
@@ -119,6 +119,52 @@ def _make_content_filter_predicate(content_filter_options):
     return predicate
 
 
+def _field_payload_nbytes(msg, field: str) -> int | None:
+    """Return the current byte length of a message sequence field, if cheap."""
+    helper = getattr(msg, f"_lwrclpy_{field}_nbytes", None)
+    if callable(helper):
+        try:
+            return int(helper())
+        except Exception:
+            pass
+    try:
+        value = getattr(msg, field)
+    except Exception:
+        return None
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            return None
+    if value is None:
+        return None
+    view = _buffer_view(value)
+    if view is not None:
+        return view.nbytes
+    try:
+        size = value.size() if callable(getattr(value, "size", None)) else len(value)
+        return int(size)
+    except Exception:
+        return None
+
+
+def _side_channel_matches_payload(msg, field: str, metadata_nbytes: int) -> bool:
+    """Guard against attaching stale side-channel metadata to a message.
+
+    Metadata and payload travel on separate DDS topics with no per-sample
+    correlation, so the only safe cases are: the payload field was cleared by
+    the publisher (signal message), or the payload has exactly the announced
+    byte length (dual publish).  A differing size means the metadata belongs
+    to another sample and must not shadow the real data.
+    """
+    payload_nbytes = _field_payload_nbytes(msg, field)
+    if payload_nbytes is None:
+        return False
+    if payload_nbytes == 0:
+        return True
+    return payload_nbytes == int(metadata_nbytes)
+
+
 def _sample_info_attr(sample_info, name, default=None):
     try:
         value = getattr(sample_info, name)
@@ -137,6 +183,16 @@ def _sample_info_int(value, default=0) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _copy_swig_struct(value):
+    """Copy a SWIG proxy via its generated copy constructor when possible."""
+    if value is None:
+        return None
+    try:
+        return type(value)(value)
+    except Exception:
+        return value
 
 
 def _force_data_sharing_on_reader(rq: "fastdds.DataReaderQos") -> bool:
@@ -330,13 +386,15 @@ class MessageInfo:
         if self._sample_info is not None:
             try:
                 _ = self.is_valid
-                _ = self.sample_identity
                 _ = self.source_timestamp
                 _ = self.publication_sequence_number
                 _ = self.reception_sequence_number
-                _ = self.publisher_gid
-                _ = self.publisher_handle
                 _ = self.from_intra_process
+                # These are SWIG proxies pointing into the native SampleInfo;
+                # copy them so they survive the sample info's storage.
+                self._sample_identity = _copy_swig_struct(self.sample_identity)
+                self._publisher_gid = _copy_swig_struct(self.publisher_gid)
+                self._publisher_handle = _copy_swig_struct(self.publisher_handle)
             except Exception:
                 pass
 
@@ -410,7 +468,13 @@ class _LoanedSamples:
             info = self._native.info(index)
         except Exception as exc:
             raise RuntimeError("Failed to access loaned DDS sample info") from exc
-        return MessageInfo(info)
+        message_info = MessageInfo(info)
+        # The native SampleInfo lives inside the reader loan; cache all fields
+        # now and drop the reference so the MessageInfo stays valid after
+        # return_loan() (e.g. when the user stores it beyond the callback).
+        message_info._eager_populate()
+        message_info._sample_info = None
+        return message_info
 
     def items(self) -> Iterator[Tuple[Any, MessageInfo]]:
         for index in range(len(self)):
@@ -698,6 +762,9 @@ class _ReaderListener(fastdds.DataReaderListener):
                     finally:
                         samples.return_loan()
 
+            # Release the reader loan if a bounded node queue drops this
+            # callback before it runs; otherwise the loan leaks forever.
+            callback_with_loan._lwrclpy_on_dropped = loaned.return_loan
             try:
                 self._enqueue_cb(callback_with_loan, None)
                 self._enqueued_callback_count += 1
@@ -783,6 +850,11 @@ class _ReaderListener(fastdds.DataReaderListener):
                     for samples in loaned:
                         samples.return_loan()
 
+        def _release_dropped_batch(loaned=tuple(loans)):
+            for samples in loaned:
+                samples.return_loan()
+
+        callback_batch._lwrclpy_on_dropped = _release_dropped_batch
         try:
             self._enqueue_cb(callback_batch, None)
             self._enqueued_callback_count += 1
@@ -845,6 +917,13 @@ class _ReaderListener(fastdds.DataReaderListener):
     def _enqueue_drain(self, reader):
         def drain_task(_msg=None, listener=self, reader=reader):
             listener._drain_reader_callbacks(reader)
+
+        def _on_drain_dropped(listener=self):
+            with listener._pending_lock:
+                listener._callback_pending = False
+                listener._reschedule_requested = False
+
+        drain_task._lwrclpy_on_dropped = _on_drain_dropped
 
         if self._is_closed():
             return
@@ -1041,6 +1120,8 @@ class Subscription:
         try:
             from .cuda_ipc import attach_cuda_buffer
             for metadata in tuple(self._cuda_ipc_latest_by_field.values()):
+                if not _side_channel_matches_payload(msg, metadata.field, metadata.nbytes):
+                    continue
                 attach_cuda_buffer(msg, metadata)
         except Exception:
             pass
@@ -1072,6 +1153,8 @@ class Subscription:
                             metadata_items[field] = metadata
                             self._shm_latest_by_field[field] = metadata
             for metadata in tuple(metadata_items.values()):
+                if not _side_channel_matches_payload(msg, metadata.field, metadata.nbytes):
+                    continue
                 attach_shared_memory_buffer(msg, metadata)
         except Exception:
             pass

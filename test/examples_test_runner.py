@@ -177,14 +177,10 @@ class ProcessCapture:
         try:
             if os.name == "nt":
                 # Console control events can be delivered more broadly than the
-                # child process group on hosted Windows runners. These examples
-                # are disposable subprocesses, so forcefully terminate the tree.
-                subprocess.run(
-                    ["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
+                # child process group on hosted Windows runners.  Use Python's
+                # TerminateProcess wrapper directly instead of taskkill /T,
+                # which can make the runner lose the parent process output.
+                self.proc.terminate()
             else:
                 self.proc.send_signal(signal.SIGINT)
         except Exception:
@@ -293,11 +289,17 @@ def _run_pair(
 ) -> Tuple[bool, str]:
     print_test_start(name)
     sub = ProcessCapture([sys.executable, str(subscriber)] + list(subscriber_args or []))
+    print(f"[runner] subscriber pid={sub.proc.pid}", flush=True)
     # Allow DDS discovery time between separate processes
     _sleep(DDS_DISCOVERY_DELAY)
     pub = ProcessCapture([sys.executable, str(publisher)] + list(publisher_args or []))
+    print(f"[runner] publisher pid={pub.proc.pid}", flush=True)
 
     matched = _wait_for_keywords(sub, subscriber_expect, subscriber_timeout)
+    print(
+        f"[runner] wait matched={matched} pub_rc={pub.proc.poll()} sub_rc={sub.proc.poll()}",
+        flush=True,
+    )
     if sub.proc.poll() is not None:
         sub.join_output(timeout=1.0)
     if pub.proc.poll() is not None:
@@ -307,8 +309,11 @@ def _run_pair(
     pub_returncode = pub.proc.poll()
     sub_returncode = sub.proc.poll()
 
+    print("[runner] terminating publisher", flush=True)
     pub.terminate()
+    print("[runner] terminating subscriber", flush=True)
     sub.terminate()
+    print("[runner] terminated pair", flush=True)
 
     if _contains_error(pub_output) or _contains_error(sub_output):
         return False, (pub_output + sub_output)[:ERROR_DETAIL_LIMIT]

@@ -1,8 +1,8 @@
 import asyncio
-import concurrent.futures
 import functools
 import inspect
 import logging
+import multiprocessing
 import threading
 import time
 import traceback
@@ -10,6 +10,7 @@ from typing import Iterable, Optional, List
 from collections import deque
 from ._async import run_coroutine
 from .context import ok
+from .future import Future
 
 
 _logger = logging.getLogger(__name__)
@@ -71,15 +72,19 @@ class Executor:
             if node not in self._nodes:
                 self._nodes.append(node)
                 # Give the node a reference to our wake event so that
-                # _enqueue_callback can wake us immediately.
-                node._executor_wake_event = self._wake_event
+                # _enqueue_callback can wake us immediately.  Do not steal the
+                # wake event from another executor already spinning this node
+                # (e.g. a throwaway executor made by module-level spin_once).
+                if getattr(node, "_executor_wake_event", None) is None:
+                    node._executor_wake_event = self._wake_event
                 self._wake_event.set()
 
     def remove_node(self, node):
         with self._nodes_lock:
             if node in self._nodes:
                 self._nodes.remove(node)
-                node._executor_wake_event = None
+                if getattr(node, "_executor_wake_event", None) is self._wake_event:
+                    node._executor_wake_event = None
 
     def get_nodes(self) -> List:
         """Return a copy of the nodes list (thread-safe)."""
@@ -131,10 +136,11 @@ class Executor:
         for _cb, _msg, _node, future in queued_tasks:
             if future is not None and not future.done():
                 future.cancel()
-        # Disconnect wake events from nodes
+        # Disconnect our wake event from nodes (leave other executors' intact)
         with self._nodes_lock:
             for node in self._nodes:
-                node._executor_wake_event = None
+                if getattr(node, "_executor_wake_event", None) is self._wake_event:
+                    node._executor_wake_event = None
 
     def _is_stopped(self) -> bool:
         with self._stopped_lock:
@@ -145,9 +151,13 @@ class Executor:
         self._wake_event.set()
 
     def create_task(self, callback, *args, **kwargs):
-        """Queue a callback for executor execution and return a Future."""
+        """Queue a callback for executor execution and return a Future.
+
+        Returns an lwrclpy Future (rclpy.task.Future compatible) so it works
+        with spin_until_future_complete, add_done_callback, and await.
+        """
         task = functools.partial(callback, *args, **kwargs)
-        future: concurrent.futures.Future = concurrent.futures.Future()
+        future = Future()
         if self._is_stopped():
             future.cancel()
             return future
@@ -224,7 +234,14 @@ class MultiThreadedExecutor(Executor):
         if self._is_stopped():
             return
         with self._threads_lock:
-            thread_count = self._num_threads or max(1, len(self.get_nodes()))
+            # rclpy defaults to the CPU count; sizing by node count would give
+            # a single thread for the common one-node case and deadlock
+            # nested-callback patterns that rely on parallel workers.
+            try:
+                default_threads = multiprocessing.cpu_count()
+            except Exception:
+                default_threads = 2
+            thread_count = self._num_threads or max(2, default_threads)
             if thread_count <= 0:
                 thread_count = 1
             for _ in range(thread_count):

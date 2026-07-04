@@ -88,12 +88,13 @@ class CudaIpcBuffer:
     CUDA binding can consume ``handle`` and metadata directly.
     """
 
-    __slots__ = ("metadata", "_cupy_mem", "_cupy_ptr", "_lock")
+    __slots__ = ("metadata", "_cupy_mem", "_cupy_ptr", "_ipc_ptr", "_lock")
 
     def __init__(self, metadata: CudaIpcMetadata):
         self.metadata = metadata
         self._cupy_mem = None
         self._cupy_ptr = None
+        self._ipc_ptr = 0
         self._lock = threading.Lock()
 
     @property
@@ -130,19 +131,46 @@ class CudaIpcBuffer:
 
         with self._lock:
             if self._cupy_mem is None:
-                mem_ptr = runtime.ipcOpenMemHandle(self.handle)
-                self._cupy_mem = cp.cuda.UnownedMemory(mem_ptr, self.nbytes, self)
+                # The IPC handle must be opened with the exporting allocation's
+                # device current; UnownedMemory also needs the right device so
+                # later kernels/copies use the correct context.
+                with cp.cuda.Device(self.device_id):
+                    mem_ptr = runtime.ipcOpenMemHandle(self.handle)
+                self._ipc_ptr = int(mem_ptr)
+                self._cupy_mem = cp.cuda.UnownedMemory(
+                    mem_ptr, self.nbytes, self, device_id=self.device_id
+                )
                 self._cupy_ptr = cp.cuda.MemoryPointer(self._cupy_mem, 0)
             dtype = np.dtype(self.dtype_typestr)
-            arr = cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr)
-            if self.metadata.strides:
-                arr = cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr, strides=tuple(self.metadata.strides))
-            return arr
+            strides = tuple(self.metadata.strides) if self.metadata.strides else None
+            return cp.ndarray(self.shape, dtype=dtype, memptr=self._cupy_ptr, strides=strides)
 
     def close(self) -> None:
+        """Unmap the imported allocation.
+
+        Callers must ensure no arrays returned by ``open_cupy()`` are still in
+        use; the mapping becomes invalid immediately.
+        """
         with self._lock:
+            ipc_ptr = self._ipc_ptr
             self._cupy_ptr = None
             self._cupy_mem = None
+            self._ipc_ptr = 0
+        if ipc_ptr:
+            try:
+                from cupy.cuda import runtime
+                runtime.ipcCloseMemHandle(ipc_ptr)
+            except Exception:
+                pass
+
+    def __del__(self):
+        # Arrays returned by open_cupy() keep this buffer alive through the
+        # UnownedMemory owner reference, so reaching __del__ implies no live
+        # views remain and the IPC mapping can be released safely.
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class _CudaIpcFieldProxy:

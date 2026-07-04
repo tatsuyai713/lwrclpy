@@ -327,9 +327,34 @@ class Node:
         if self._destroyed:
             raise RuntimeError("Node has been destroyed")
 
-    def _resolve_topic_name(self, name: str) -> str:
+    def _track_entity(self, collection: list, entity) -> None:
+        """Register an entity on the node, closing the create/destroy race.
+
+        If destroy_node() ran while the entity was being constructed, tear the
+        entity down instead of leaking a live DDS endpoint that destroy_node
+        will never see.
+        """
+        with self._callback_lock:
+            if not self._destroyed:
+                collection.append(entity)
+                return
+        for method_name in ("destroy", "cancel", "close"):
+            method = getattr(entity, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+                break
+        raise RuntimeError("Node has been destroyed")
+
+    def _resolve_topic_name(self, name: str, *, avoid_ros_namespace_conventions: bool = False) -> str:
         """Apply ROS 2 name resolution and DDS topic prefix (rt/)."""
         resolved = resolve_name(name, self._namespace, self._name).lstrip("/")
+        if avoid_ros_namespace_conventions:
+            # rclpy QoS flag: use the expanded name as the raw DDS topic name
+            # (no rt/ prefix) for interop with non-ROS DDS endpoints.
+            return resolved
         if resolved.startswith(self._pubsub_prefix):
             return resolved
         return f"{self._pubsub_prefix}{resolved}" if self._pubsub_prefix else resolved
@@ -617,7 +642,9 @@ class Node:
             ts = RegisteredType(msg_cls)
             type_name = ts.register()
             self._type_cache[key] = type_name
-        resolved_topic = self._resolve_topic_name(topic)
+        resolved_topic = self._resolve_topic_name(
+            topic, avoid_ros_namespace_conventions=qos.avoid_ros_namespace_conventions
+        )
         topic_obj, owned = self._create_topic(resolved_topic, type_name)
         self._topics[resolved_topic] = (topic_obj, owned)
         pub = Publisher(
@@ -632,7 +659,7 @@ class Node:
         )
         self._configure_cuda_ipc_publisher(pub, resolved_topic, qos)
         self._configure_shared_memory_publisher(pub, resolved_topic, qos)
-        self._publishers.append(pub)
+        self._track_entity(self._publishers, pub)
         return pub
 
     def create_subscription(
@@ -672,7 +699,9 @@ class Node:
             ts = RegisteredType(msg_cls)
             type_name = ts.register()
             self._type_cache[key] = type_name
-        resolved_topic = self._resolve_topic_name(topic)
+        resolved_topic = self._resolve_topic_name(
+            topic, avoid_ros_namespace_conventions=qos.avoid_ros_namespace_conventions
+        )
         topic_obj, owned = self._create_topic(resolved_topic, type_name)
         self._topics[resolved_topic] = (topic_obj, owned)
         # メッセージ生成
@@ -699,7 +728,7 @@ class Node:
         self._register_entity_callback_group(sub, group)
         self._configure_cuda_ipc_subscription(sub, resolved_topic, qos)
         self._configure_shared_memory_subscription(sub, resolved_topic, qos)
-        self._subscriptions.append(sub)
+        self._track_entity(self._subscriptions, sub)
         bind_subscription_callback(sub)
         return sub
 
@@ -711,7 +740,7 @@ class Node:
         enqueue_client_callback, bind_client_callback = self._make_deferred_entity_enqueue()
 
         client = Client(srv_type, resolved, qos, topic_prefix=self._service_prefix, enqueue_cb=enqueue_client_callback)
-        self._clients.append(client)
+        self._track_entity(self._clients, client)
         self._register_entity_callback_group(client, group)
         bind_client_callback(client)
         return client
@@ -724,7 +753,7 @@ class Node:
         enqueue_service_callback, bind_service_callback = self._make_deferred_entity_enqueue()
 
         service = Service(srv_type, resolved, callback, qos, topic_prefix=self._service_prefix, enqueue_cb=enqueue_service_callback)
-        self._services.append(service)
+        self._track_entity(self._services, service)
         self._register_entity_callback_group(service, group)
         bind_service_callback(service)
         return service
@@ -733,14 +762,14 @@ class Node:
         self._raise_if_destroyed()
         from .action import ActionServer
         server = ActionServer(self, action_type, action_name, execute_callback, **kwargs)
-        self._action_servers.append(server)
+        self._track_entity(self._action_servers, server)
         return server
 
     def create_action_client(self, action_type, action_name: str, **kwargs):
         self._raise_if_destroyed()
         from .action import ActionClient
         client = ActionClient(self, action_type, action_name, **kwargs)
-        self._action_clients.append(client)
+        self._track_entity(self._action_clients, client)
         return client
 
     def create_timer(self, period_sec: float, callback, *, callback_group=None, oneshot: bool = False):
@@ -751,7 +780,7 @@ class Node:
 
         # Enqueue timer callbacks into the node's callback queue
         t = create_timer(period_sec, callback, oneshot=oneshot, enqueue_cb=enqueue_timer_callback)
-        self._timers.append(t)
+        self._track_entity(self._timers, t)
         self._register_entity_callback_group(t, group)
         bind_timer_callback(t)
         return t
@@ -765,7 +794,7 @@ class Node:
         enqueue_guard_callback, bind_guard_callback = self._make_deferred_entity_enqueue()
 
         gc = GuardCondition(callback, enqueue_guard_callback)
-        self._guard_conditions.append(gc)
+        self._track_entity(self._guard_conditions, gc)
         self._register_entity_callback_group(gc, group)
         bind_guard_callback(gc)
         return gc
@@ -1103,7 +1132,12 @@ class Node:
         self._guard_conditions.clear()
         self._entity_callback_groups.clear()
         with self._callback_lock:
+            pending_callbacks = list(self._callback_queue)
             self._callback_queue.clear()
+        # Notify owners of discarded callbacks (releases reader loans and
+        # pending flags held by queued-but-never-run callbacks).
+        for item in pending_callbacks:
+            self._notify_dropped_callback(item[0])
         
         # Note: Topics are managed by Fast DDS and shared across multiple
         # DataWriters/DataReaders. We don't delete them explicitly to avoid
@@ -1158,7 +1192,7 @@ class Node:
         except Exception:
             return None
         self._cuda_ipc_metadata_publishers[metadata_topic] = pub
-        self._publishers.append(pub)
+        self._track_entity(self._publishers, pub)
         return pub
 
     def _create_cuda_ipc_metadata_subscription(self, source_topic: str, qos: QoSProfile, callback) -> Subscription | None:
@@ -1198,7 +1232,7 @@ class Node:
         except Exception:
             return None
         self._cuda_ipc_metadata_subscriptions.append(sub)
-        self._subscriptions.append(sub)
+        self._track_entity(self._subscriptions, sub)
         return sub
 
     def _create_shared_memory_metadata_publisher(self, source_topic: str, qos: QoSProfile) -> Publisher | None:
@@ -1224,7 +1258,7 @@ class Node:
         except Exception:
             return None
         self._shm_metadata_publishers[metadata_topic] = pub
-        self._publishers.append(pub)
+        self._track_entity(self._publishers, pub)
         return pub
 
     def _create_shared_memory_metadata_subscription(self, source_topic: str, qos: QoSProfile, callback) -> Subscription | None:
@@ -1264,7 +1298,7 @@ class Node:
         except Exception:
             return None
         self._shm_metadata_subscriptions.append(sub)
-        self._subscriptions.append(sub)
+        self._track_entity(self._subscriptions, sub)
         return sub
 
     def _configure_cuda_ipc_publisher(self, pub: Publisher, resolved_topic: str, qos: QoSProfile) -> None:
@@ -1312,21 +1346,42 @@ class Node:
         return get_or_create_topic(self._participant, name, type_name)
 
     # ---- executor enqueue/dequeue -------------------------------------------------
+    @staticmethod
+    def _notify_dropped_callback(cb) -> None:
+        """Tell a dropped callback's owner so pending flags/loans are released.
+
+        Producers (timers, guard conditions, subscription drains, loan-holding
+        callbacks) attach a ``_lwrclpy_on_dropped`` attribute; without this
+        notification a bounded queue overflow would leave their one-pending
+        guard set forever or leak DDS reader loans.
+        """
+        hook = getattr(cb, "_lwrclpy_on_dropped", None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                pass
+
     def _enqueue_callback(self, cb, msg, entity=None):
         dropped_new = False
+        dropped_item = None
         with self._callback_lock:
             if self._destroyed:
-                return
-            if self._callback_queue_maxsize and len(self._callback_queue) >= self._callback_queue_maxsize:
+                dropped_new = True
+            elif self._callback_queue_maxsize and len(self._callback_queue) >= self._callback_queue_maxsize:
                 if self._callback_queue_drop_policy == "drop_newest":
                     self._callback_drop_count += 1
                     dropped_new = True
                 else:
-                    self._callback_queue.popleft()
+                    dropped_item = self._callback_queue.popleft()
                     self._callback_drop_count += 1
-            if dropped_new:
-                return
-            self._callback_queue.append((cb, msg, entity))
+            if not dropped_new:
+                self._callback_queue.append((cb, msg, entity))
+        if dropped_item is not None:
+            self._notify_dropped_callback(dropped_item[0])
+        if dropped_new:
+            self._notify_dropped_callback(cb)
+            return
         # Wake the executor immediately after enqueuing
         wake = self._executor_wake_event
         if wake is not None:
@@ -1344,12 +1399,14 @@ class Node:
     def _pop_callback(self):
         with self._callback_lock:
             remaining = len(self._callback_queue)
+        skipped = []
+        result = None
         for _ in range(remaining):
             with self._callback_lock:
                 try:
                     item = self._callback_queue.popleft()
                 except IndexError:
-                    return None
+                    break
             if len(item) == 3:
                 cb, msg, entity = item
             else:
@@ -1357,11 +1414,17 @@ class Node:
                 entity = None
             group = self._begin_callback_execution(entity)
             if entity is not None and self._get_callback_group(entity) is not None and group is None:
-                with self._callback_lock:
-                    self._callback_queue.append(item)
+                # Keep skipped items aside and restore them to the FRONT of
+                # the queue below; re-appending to the back would let a later
+                # callback of the same busy group overtake this one.
+                skipped.append(item)
                 continue
-            return cb, msg, entity, group
-        return None
+            result = (cb, msg, entity, group)
+            break
+        if skipped:
+            with self._callback_lock:
+                self._callback_queue.extendleft(reversed(skipped))
+        return result
 
     def _has_pending_work(self) -> bool:
         """Internal: check if callbacks are queued or timers are still active."""

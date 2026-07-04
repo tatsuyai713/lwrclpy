@@ -37,31 +37,34 @@ class Future(Generic[T]):
         """Return True if the future is running (not done yet)."""
         return not self.done()
 
-    def result(self, timeout: Optional[float] = None) -> T:
-        """Wait for and return the result.
-        
-        Raises:
-            TimeoutError: If timeout is reached before result is available.
-            CancelledError: If the future was cancelled.
-            Exception: If the future completed with an exception.
+    def result(self, timeout: Optional[float] = None) -> Optional[T]:
+        """Return the result of a done future.
+
+        Follows rclpy.task.Future semantics: a pending future returns None
+        immediately instead of blocking, and a future completed with an
+        exception re-raises it.  Passing a timeout (lwrclpy extension) waits
+        up to that many seconds first and raises TimeoutError if the future
+        is still pending afterwards.
         """
-        if not self._event.wait(timeout):
+        if timeout is not None and not self._event.wait(timeout):
             raise TimeoutError("Future result not ready")
         with self._lock:
-            if self._cancelled:
-                raise asyncio.CancelledError("Future was cancelled")
+            if not self._done or self._cancelled:
+                return None
             if self._exception:
                 raise self._exception
             return _expose_result_fields(self._result)
 
     def exception(self, timeout: Optional[float] = None) -> Optional[BaseException]:
-        """Wait for the future and return any exception.
-        
-        Returns None if the future completed successfully.
+        """Return the exception of a done future, or None.
+
+        Follows rclpy semantics: does not block when no timeout is given.
         """
-        if not self._event.wait(timeout):
+        if timeout is not None and not self._event.wait(timeout):
             raise TimeoutError("Future not ready")
         with self._lock:
+            if not self._done or self._cancelled:
+                return None
             return self._exception
 
     def set_result(self, value: T) -> None:
@@ -133,7 +136,6 @@ class Future(Generic[T]):
             if self._done:
                 return False
             self._cancelled = True
-            self._exception = asyncio.CancelledError()
             self._done = True
         self._event.set()
         self._run_callbacks()

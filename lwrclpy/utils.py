@@ -495,55 +495,52 @@ def get_or_create_topic(participant, name: str, type_name: str):
     import fastdds  # local import to avoid mandatory dependency at import-time
 
     cache_key = (id(participant), name)
+    # Hold the lock across find/create: two threads racing to create the same
+    # topic would otherwise both miss the cache and the second create_topic
+    # call would fail with a spurious RuntimeError.
     with _cache_lock:
         cached = _topic_cache.get(cache_key)
-    if cached is not None:
-        cached_participant, topic_obj, cached_type = cached
-        if cached_participant is not participant:
-            with _cache_lock:
-                if _topic_cache.get(cache_key) is cached:
-                    _topic_cache.pop(cache_key, None)
+        if cached is not None and cached[0] is not participant:
+            _topic_cache.pop(cache_key, None)
             cached = None
-    if cached is not None:
-        _cached_participant, topic_obj, cached_type = cached
-        if cached_type and cached_type != type_name:
-            raise RuntimeError(
-                f"Topic '{name}' already exists with type '{cached_type}' (requested '{type_name}')"
-            )
-        return topic_obj, False
+        if cached is not None:
+            _cached_participant, topic_obj, cached_type = cached
+            if cached_type and cached_type != type_name:
+                raise RuntimeError(
+                    f"Topic '{name}' already exists with type '{cached_type}' (requested '{type_name}')"
+                )
+            return topic_obj, False
 
-    # Try to reuse an existing Topic instance first
-    try:
-        duration = fastdds.Duration_t()
-        duration.seconds = 0
-        duration.nanosec = 0
-        existing_topic = participant.find_topic(name, duration)
-    except Exception:
-        existing_topic = None
-    if existing_topic is not None:
-        # Ensure type matches
-        get_type_name = getattr(existing_topic, "get_type_name", None)
-        if not callable(get_type_name):
-            return existing_topic, False
+        # Try to reuse an existing Topic instance first
         try:
-            existing_type = get_type_name()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Topic '{name}' already exists but its type could not be verified"
-            ) from exc
-        if existing_type and existing_type != type_name:
-            raise RuntimeError(
-                f"Topic '{name}' already exists with type '{existing_type}' (requested '{type_name}')"
-            )
-        with _cache_lock:
+            duration = fastdds.Duration_t()
+            duration.seconds = 0
+            duration.nanosec = 0
+            existing_topic = participant.find_topic(name, duration)
+        except Exception:
+            existing_topic = None
+        if existing_topic is not None:
+            # Ensure type matches
+            get_type_name = getattr(existing_topic, "get_type_name", None)
+            if not callable(get_type_name):
+                return existing_topic, False
+            try:
+                existing_type = get_type_name()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Topic '{name}' already exists but its type could not be verified"
+                ) from exc
+            if existing_type and existing_type != type_name:
+                raise RuntimeError(
+                    f"Topic '{name}' already exists with type '{existing_type}' (requested '{type_name}')"
+                )
             _topic_cache[cache_key] = (participant, existing_topic, existing_type)
-        return existing_topic, False
+            return existing_topic, False
 
-    tq = fastdds.TopicQos()
-    participant.get_default_topic_qos(tq)
-    topic_obj = participant.create_topic(name, type_name, tq)
-    if topic_obj is None:
-        raise RuntimeError(f"Failed to create topic '{name}'")
-    with _cache_lock:
+        tq = fastdds.TopicQos()
+        participant.get_default_topic_qos(tq)
+        topic_obj = participant.create_topic(name, type_name, tq)
+        if topic_obj is None:
+            raise RuntimeError(f"Failed to create topic '{name}'")
         _topic_cache[cache_key] = (participant, topic_obj, type_name)
-    return topic_obj, True
+        return topic_obj, True

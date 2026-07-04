@@ -36,6 +36,15 @@ class _RepeatingTimer:
         self._callback_pending = False
         self._canceled = False
 
+        # Queued-callback wrapper carrying the drop hook: if a bounded node
+        # queue evicts this callback, the pending flag must be cleared or the
+        # timer would never fire again.
+        def _queued_callback(_msg=None, timer=self):
+            timer._run_queued_callback(_msg)
+
+        _queued_callback._lwrclpy_on_dropped = self._clear_callback_pending
+        self._queued_callback = _queued_callback
+
     def start(self):
         """Start the timer thread."""
         with self._lock:
@@ -69,7 +78,7 @@ class _RepeatingTimer:
                 if self._enqueue_cb is not None:
                     if not self._mark_callback_pending():
                         continue
-                    self._enqueue_cb(self._run_queued_callback, None)
+                    self._enqueue_cb(self._queued_callback, None)
                 else:
                     with self._lock:
                         self._last_call = time.monotonic()
