@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Service + client in one process to show round-trip using new API."""
-import threading
 import time
 import rclpy
 from std_srvs.srv import Trigger
@@ -17,9 +16,7 @@ def main():
 
     srv = node.create_service(Trigger, "ping", on_trigger)
     client = node.create_client(Trigger, "ping")
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spin_thread.start()
-    
+
     # Wait for DDS discovery (in-process should be fast but still needed)
     time.sleep(0.5)
     client.wait_for_service()
@@ -27,16 +24,18 @@ def main():
     try:
         req = Trigger.Request()
         for i in range(3):
-            resp = client.call(req, timeout=1.0)
-            if resp is None:
+            future = client.call_async(req)
+            if not rclpy.spin_until_future_complete(node, future, timeout_sec=1.0):
                 raise RuntimeError("Timed out waiting for Trigger response")
+            resp = future.result()
+            if resp is None:
+                raise RuntimeError("Trigger response was empty")
             node.get_logger().info(f"call {i}: success={resp.success} msg={resp.message}")
     finally:
         client.destroy()
         srv.destroy()
         node.destroy_node()
         rclpy.shutdown()
-        spin_thread.join(timeout=1.0)
 
 
 if __name__ == "__main__":
