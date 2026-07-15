@@ -13,6 +13,10 @@ on:
         description: "Release tag to create or replace"
         required: false
         type: string
+      reuse_build_run_id:
+        description: "Existing workflow run ID to reuse wheel artifacts from"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -21,12 +25,18 @@ permissions:
 jobs:
   build-ubuntu-wheels:
     uses: ./.github/workflows/build-ubuntu.yml
+    with:
+      reuse_build_run_id: ${{ inputs.reuse_build_run_id }}
 
   build-macos-wheels:
     uses: ./.github/workflows/build-macos.yml
+    with:
+      reuse_build_run_id: ${{ inputs.reuse_build_run_id }}
 
   build-windows-wheels:
     uses: ./.github/workflows/build-windows.yml
+    with:
+      reuse_build_run_id: ${{ inputs.reuse_build_run_id }}
 
   test-ubuntu-wheels:
     needs: build-ubuntu-wheels

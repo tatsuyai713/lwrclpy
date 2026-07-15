@@ -13,6 +13,11 @@ on:
         required: false
         default: "v2.6.1"
         type: string
+      reuse_build_run_id:
+        description: "Existing workflow run ID to reuse wheel artifacts from"
+        required: false
+        default: ""
+        type: string
     outputs:
       run_id:
         description: "Run ID of the build workflow"
@@ -105,11 +110,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout code
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Set up Python ${{ matrix.python-version }}
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
@@ -117,6 +124,7 @@ jobs:
           cache: pip
 
       - name: Set up Java 17
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -124,6 +132,7 @@ jobs:
           cache: gradle
 
       - name: Restore Fast DDS build cache
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/cache@v4
         with:
           path: |
@@ -135,6 +144,7 @@ jobs:
             lwrclpy-fastdds-${{ runner.os }}-${{ matrix.arch }}-py${{ matrix.python-version }}-${{ matrix.vcpkg-triplet }}-${{ inputs.fastdds_python_repos_ref }}-
 
       - name: Install build tools
+        if: ${{ inputs.reuse_build_run_id == '' }}
         shell: pwsh
         run: |
           choco install cmake ninja -y --no-progress
@@ -146,6 +156,7 @@ jobs:
           }
 
       - name: Prepare vcpkg
+        if: ${{ inputs.reuse_build_run_id == '' }}
         shell: pwsh
         env:
           LWRCLPY_WINDOWS_BUILD_ROOT: ${{ matrix.build-root }}
@@ -167,6 +178,7 @@ jobs:
           "LWRCLPY_WINDOWS_BUILD_ARCH=$env:LWRCLPY_WINDOWS_BUILD_ARCH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Windows wheel
+        if: ${{ inputs.reuse_build_run_id == '' }}
         shell: pwsh
         env:
           PKG_VERSION: ${{ inputs.package_version }}
@@ -192,6 +204,15 @@ jobs:
             -VcpkgTriplet "$env:VCPKG_DEFAULT_TRIPLET" `
             -BuildArch "$env:LWRCLPY_WINDOWS_BUILD_ARCH" `
             -Jobs 2
+
+      - name: Reuse wheel artifact
+        if: ${{ inputs.reuse_build_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-windows-${{ matrix.arch }}-py${{ matrix.python-version }}
+          path: wheelhouse/
+          run-id: ${{ inputs.reuse_build_run_id }}
+          repository: ${{ github.repository }}
 
       - name: Upload repaired wheel
         uses: actions/upload-artifact@v4

@@ -2,6 +2,12 @@ name: Build macOS Wheels
 
 on:
   workflow_call:
+    inputs:
+      reuse_build_run_id:
+        description: "Existing workflow run ID to reuse wheel artifacts from"
+        required: false
+        default: ""
+        type: string
     outputs:
       run_id:
         description: "Run ID of the build workflow"
@@ -18,9 +24,11 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout code
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/checkout@v4
 
       - name: Checkout submodules
+        if: ${{ inputs.reuse_build_run_id == '' }}
         run: |
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git submodule sync --recursive
@@ -34,12 +42,14 @@ jobs:
           git submodule update --init --recursive --depth=1 --jobs=1
 
       - name: Set up Python ${{ matrix.python-version }}
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
           cache: pip
 
       - name: Restore Fast DDS build cache
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/cache@v4
         with:
           path: |
@@ -52,6 +62,7 @@ jobs:
             lwrclpy-fastdds-${{ runner.os }}-py${{ matrix.python-version }}-
 
       - name: Install system dependencies
+        if: ${{ inputs.reuse_build_run_id == '' }}
         run: |
           brew install \
             cmake \
@@ -61,12 +72,14 @@ jobs:
             swig
 
       - name: Create virtual environment
+        if: ${{ inputs.reuse_build_run_id == '' }}
         run: |
           python -m venv build_venv
           source build_venv/bin/activate
           python -m pip install --upgrade pip wheel setuptools
 
       - name: Install FastDDS v3, Generate Python types, and Build wheel
+        if: ${{ inputs.reuse_build_run_id == '' }}
         run: |
           source build_venv/bin/activate
           export PREFIX_V3="${GITHUB_WORKSPACE}/.lwrclpy-cache/fast-dds-v3"
@@ -83,6 +96,15 @@ jobs:
           cd ../..
           rm -rf dist/
           bash scripts/mac/mac_make_pip_package_with_runtime.sh
+
+      - name: Reuse wheel artifact
+        if: ${{ inputs.reuse_build_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-macos-py${{ matrix.python-version }}
+          path: dist/
+          run-id: ${{ inputs.reuse_build_run_id }}
+          repository: ${{ github.repository }}
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
