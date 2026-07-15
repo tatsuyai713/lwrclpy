@@ -11,6 +11,7 @@ import os
 import logging
 import threading
 import time
+import weakref
 from ._async import run_coroutine
 from .qos import QoSProfile
 from .message_utils import expose_callable_fields, _buffer_view, _get_value
@@ -414,7 +415,7 @@ class _LoanedSamples:
     manager when possible so Fast DDS reader resources are returned promptly.
     """
 
-    __slots__ = ("_native", "_expose_fn", "_returned", "_release_cb")
+    __slots__ = ("_native", "_expose_fn", "_returned", "_release_cb", "__weakref__")
 
     def __init__(self, native, *, raw_mode: bool = False, expose_fields: bool = True, release_cb=None):
         self._native = native
@@ -485,6 +486,11 @@ class _LoanedSamples:
     @property
     def returned(self) -> bool:
         return self._returned
+
+    def _invalidate_without_return(self) -> None:
+        self._returned = True
+        self._release_cb = None
+        self._native = None
 
     def return_loan(self) -> bool:
         if self._returned:
@@ -998,6 +1004,7 @@ class Subscription:
         self._state_lock = threading.Lock()
         self._no_active_loans = threading.Condition(self._state_lock)
         self._active_loans = 0
+        self._active_loan_objects = weakref.WeakSet()
         self._destroy_loan_timeout = float(os.environ.get("LWRCLPY_DESTROY_LOAN_TIMEOUT", "1.0"))
 
         # Create Subscriber
@@ -1079,8 +1086,10 @@ class Subscription:
                 raise RuntimeError("Cannot loan messages from a destroyed Subscription")
             self._active_loans += 1
 
-    def _release_loan(self) -> None:
+    def _release_loan(self, loaned: Optional[_LoanedSamples] = None) -> None:
         with self._state_lock:
+            if loaned is not None:
+                self._active_loan_objects.discard(loaned)
             if self._active_loans > 0:
                 self._active_loans -= 1
             if self._active_loans == 0:
@@ -1088,7 +1097,15 @@ class Subscription:
 
     def _activate_loaned_samples(self, loaned: _LoanedSamples) -> _LoanedSamples:
         self._register_loan()
-        loaned._release_cb = self._release_loan
+        with self._state_lock:
+            self._active_loan_objects.add(loaned)
+
+        def release_loan(loan=loaned, subscription_ref=weakref.ref(self)):
+            subscription = subscription_ref()
+            if subscription is not None:
+                subscription._release_loan(loan)
+
+        loaned._release_cb = release_loan
         return loaned
 
     def _set_cuda_ipc_topic(self, topic_name: str) -> None:
@@ -1328,6 +1345,14 @@ class Subscription:
                     "(loans=%d); skipping DDS entity deletion",
                     self._active_loans,
                 )
+                for loaned in list(self._active_loan_objects):
+                    try:
+                        loaned._invalidate_without_return()
+                    except Exception:
+                        pass
+                self._active_loan_objects.clear()
+                self._active_loans = 0
+                self._no_active_loans.notify_all()
                 return
 
         with self._reader_lock:

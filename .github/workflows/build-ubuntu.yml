@@ -32,7 +32,6 @@ jobs:
     timeout-minutes: 150
     steps:
       - name: Checkout code
-        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/checkout@v4
 
       - name: Checkout submodules
@@ -50,7 +49,6 @@ jobs:
           git submodule update --init --recursive --depth=1 --jobs=1
 
       - name: Set up Python ${{ matrix.python-version }}
-        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
@@ -121,6 +119,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --name "wheel-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}" \
             --dir dist
+          python scripts/overlay_python_sources_into_wheel.py dist/*.whl --source-root .
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
