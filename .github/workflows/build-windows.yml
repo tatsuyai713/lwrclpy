@@ -119,7 +119,6 @@ jobs:
         with:
           python-version: "${{ matrix.python-version }}"
           architecture: "${{ matrix.python-architecture }}"
-          cache: pip
 
       - name: Set up Java 17
         if: ${{ inputs.reuse_build_run_id == '' }}

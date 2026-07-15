@@ -52,7 +52,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
-          cache: pip
 
       - name: Restore Fast DDS build cache
         if: ${{ inputs.reuse_build_run_id == '' }}
