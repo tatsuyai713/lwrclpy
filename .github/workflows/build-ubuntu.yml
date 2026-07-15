@@ -45,6 +45,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
+          cache: pip
+
+      - name: Restore Fast DDS build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .lwrclpy-cache/fast-dds-v3
+            .lwrclpy-cache/fast-dds-gen-v3
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: lwrclpy-fastdds-${{ runner.os }}-${{ matrix.platform.arch }}-py${{ matrix.python-version }}-${{ hashFiles('scripts/install_fastdds_v3_colcon.sh', 'scripts/patch_fastdds_python_loan_helpers.py') }}
+          restore-keys: |
+            lwrclpy-fastdds-${{ runner.os }}-${{ matrix.platform.arch }}-py${{ matrix.python-version }}-
 
       - name: Install system dependencies
         run: |
@@ -69,14 +82,17 @@ jobs:
       - name: Install FastDDS v3, Generate Python types, and Build wheel
         run: |
           source build_venv/bin/activate
+          export PREFIX_V3="${GITHUB_WORKSPACE}/.lwrclpy-cache/fast-dds-v3"
+          export GEN_PREFIX="${GITHUB_WORKSPACE}/.lwrclpy-cache/fast-dds-gen-v3"
+          export WS="${GITHUB_WORKSPACE}/.lwrclpy-cache/fastdds_python_ws"
+          export LWRCLPY_USE_FASTDDS_CACHE=1
           bash scripts/install_fastdds_v3_colcon.sh
-          export PATH="/opt/fast-dds-gen-v3/bin:$PATH"
-          export FASTDDSGEN_BIN="/opt/fast-dds-gen-v3/bin/fastddsgen"
-          export PREFIX_V3="/opt/fast-dds-v3"
+          export PATH="${GEN_PREFIX}/bin:$PATH"
+          export FASTDDSGEN_BIN="${GEN_PREFIX}/bin/fastddsgen"
           export JOBS="${{ matrix.platform.build-jobs }}"
-          export CMAKE_PREFIX_PATH="/opt/fast-dds-v3:${CMAKE_PREFIX_PATH:-}"
-          export LD_LIBRARY_PATH="/opt/fast-dds-v3/lib:/opt/fast-dds-v3/lib64:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH="/opt/fast-dds-v3/lib/python$(python -c 'import sys;print("{}.{}".format(*sys.version_info[:2]))')/site-packages:${PYTHONPATH:-}"
+          export CMAKE_PREFIX_PATH="${PREFIX_V3}:${CMAKE_PREFIX_PATH:-}"
+          export LD_LIBRARY_PATH="${PREFIX_V3}/lib:${PREFIX_V3}/lib64:${LD_LIBRARY_PATH:-}"
+          export PYTHONPATH="${PREFIX_V3}/lib/python$(python -c 'import sys;print("{}.{}".format(*sys.version_info[:2]))')/site-packages:${PYTHONPATH:-}"
           cd scripts && bash gen_python_types.sh
           cd ..
           rm -rf dist/

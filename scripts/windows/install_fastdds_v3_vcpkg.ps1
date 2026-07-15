@@ -65,6 +65,38 @@ function Install-VcpkgPackages($VcpkgExe, $Triplet) {
     }
 }
 
+function Test-FastDdsCache {
+    $fastddsgenBat = Join-Path $GenPrefix "bin\fastddsgen.bat"
+    $fastddsgenExe = Join-Path $GenPrefix "bin\fastddsgen"
+    if (-not (Test-Path $fastddsgenBat) -and -not (Test-Path $fastddsgenExe)) {
+        return $false
+    }
+    if (-not (Test-Path (Join-Path $Prefix "bin\fastdds.dll")) -and
+        -not (Test-Path (Join-Path $Prefix "lib\fastdds.dll"))) {
+        return $false
+    }
+    if (-not (Get-ChildItem -Path $Prefix -Filter "_fastdds_python*.pyd" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        return $false
+    }
+
+    $oldPath = $env:PATH
+    $oldPythonPath = $env:PYTHONPATH
+    try {
+        $env:PATH = "$vcpkgInstalled\bin;$vcpkgInstalled\debug\bin;$Prefix\bin;$Prefix\lib;$GenPrefix\bin;$oldPath"
+        $pythonDirs = Get-ChildItem -Path $Prefix -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\site-packages$" } |
+            ForEach-Object { $_.FullName }
+        if ($pythonDirs) {
+            $env:PYTHONPATH = (($pythonDirs -join ";") + ";" + $oldPythonPath)
+        }
+        python -c "import fastdds; print('[OK] cached fastdds Python binding available')"
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $env:PATH = $oldPath
+        $env:PYTHONPATH = $oldPythonPath
+    }
+}
+
 function Clone-Ref($Url, $Ref, $Destination, $Name) {
     git clone --depth 1 --branch $Ref $Url $Destination | Out-Host
     if ($LASTEXITCODE -eq 0) {
@@ -150,6 +182,12 @@ $vcpkgInstalled = Join-Path $VcpkgRoot "installed\$VcpkgTriplet"
 $vcpkgToolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
 if (-not (Test-Path $vcpkgToolchain)) {
     throw "vcpkg toolchain file not found: $vcpkgToolchain"
+}
+
+if ($env:LWRCLPY_USE_FASTDDS_CACHE -eq "1" -and (Test-FastDdsCache)) {
+    Write-Host "[INFO] Using cached Fast DDS installation at $Prefix"
+    Write-Host "[INFO] Using cached Fast-DDS-Gen installation at $GenPrefix"
+    return
 }
 
 Invoke-Step "Preparing workspace at $Workspace" {

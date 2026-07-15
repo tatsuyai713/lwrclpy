@@ -108,6 +108,33 @@ java -version
 
 need git; need curl; need "${PYBIN}"
 
+fastdds_python_site_dir() {
+  "${PYBIN}" - <<'PY'
+import sys
+print(f"lib/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages")
+PY
+}
+
+fastdds_cache_is_usable() {
+  local py_site
+  py_site="$(fastdds_python_site_dir)"
+  [[ -x "${GEN_PREFIX}/bin/fastddsgen" ]] || return 1
+  [[ -f "${PREFIX_V3}/lib/libfastdds.dylib" ]] || return 1
+  [[ -f "${PREFIX_V3}/lib/libfastcdr.dylib" ]] || return 1
+  PYTHONPATH="${PREFIX_V3}/${py_site}:${PYTHONPATH:-}" \
+  DYLD_LIBRARY_PATH="${PREFIX_V3}/lib:${PREFIX_V3}/lib64:${DYLD_LIBRARY_PATH:-}" \
+    "${PYBIN}" - <<'PY'
+import fastdds
+print("[OK] cached fastdds Python binding available")
+PY
+}
+
+if [[ "${LWRCLPY_USE_FASTDDS_CACHE:-0}" == "1" ]] && fastdds_cache_is_usable; then
+  log "Using cached Fast DDS installation at ${PREFIX_V3}"
+  log "Using cached Fast-DDS-Gen installation at ${GEN_PREFIX}"
+  exit 0
+fi
+
 # ===== Workspace & venv =====
 log "Preparing workspace at: ${WS}"
 rm -rf "${WS}"

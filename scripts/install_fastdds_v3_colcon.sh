@@ -122,6 +122,27 @@ need git
 need curl
 need "${PYBIN}"
 
+fastdds_python_site_dir() {
+  "${PYBIN}" - <<'PY'
+import sys
+print(f"lib/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages")
+PY
+}
+
+fastdds_cache_is_usable() {
+  local py_site
+  py_site="$(fastdds_python_site_dir)"
+  [[ -x "${GEN_PREFIX}/bin/fastddsgen" ]] || return 1
+  [[ -f "${PREFIX_V3}/lib/libfastdds.so" || -f "${PREFIX_V3}/lib64/libfastdds.so" ]] || return 1
+  [[ -f "${PREFIX_V3}/lib/libfastcdr.so" || -f "${PREFIX_V3}/lib64/libfastcdr.so" ]] || return 1
+  PYTHONPATH="${PREFIX_V3}/${py_site}:${PYTHONPATH:-}" \
+  LD_LIBRARY_PATH="${PREFIX_V3}/lib:${PREFIX_V3}/lib64:${LD_LIBRARY_PATH:-}" \
+    "${PYBIN}" - <<'PY'
+import fastdds
+print("[OK] cached fastdds Python binding available")
+PY
+}
+
 # ===== Helper: robust JAVA_HOME detection (works on amd64/arm64) =====
 detect_java_home() {
   local preferred_path=""
@@ -160,6 +181,12 @@ export JAVA_HOME="${JAVA_HOME_DETECTED}"
 export PATH="${JAVA_HOME}/bin:${PATH}"
 log "Using JAVA_HOME=${JAVA_HOME}"
 java -version
+
+if [[ "${LWRCLPY_USE_FASTDDS_CACHE:-0}" == "1" ]] && fastdds_cache_is_usable; then
+  log "Using cached Fast DDS installation at ${PREFIX_V3}"
+  log "Using cached Fast-DDS-Gen installation at ${GEN_PREFIX}"
+  exit 0
+fi
 
 # ===== Workspace & virtualenv =====
 log "Preparing workspace at: ${WS}"
