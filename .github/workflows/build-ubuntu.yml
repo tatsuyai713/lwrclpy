@@ -113,12 +113,14 @@ jobs:
 
       - name: Reuse wheel artifact
         if: ${{ inputs.reuse_build_run_id != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: wheel-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}
-          path: dist/
-          run-id: ${{ inputs.reuse_build_run_id }}
-          repository: ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh run download "${{ inputs.reuse_build_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "wheel-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}" \
+            --dir dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4

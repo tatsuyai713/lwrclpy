@@ -207,12 +207,15 @@ jobs:
 
       - name: Reuse wheel artifact
         if: ${{ inputs.reuse_build_run_id != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: wheel-windows-${{ matrix.arch }}-py${{ matrix.python-version }}
-          path: wheelhouse/
-          run-id: ${{ inputs.reuse_build_run_id }}
-          repository: ${{ github.repository }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path wheelhouse -Force | Out-Null
+          gh run download "${{ inputs.reuse_build_run_id }}" `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --name "wheel-windows-${{ matrix.arch }}-py${{ matrix.python-version }}" `
+            --dir wheelhouse
 
       - name: Upload repaired wheel
         uses: actions/upload-artifact@v4
