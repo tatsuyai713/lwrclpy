@@ -62,19 +62,32 @@ class Colors:
     BOLD = "\033[1m"
 
 
+def _stdout_encoding() -> str:
+    return getattr(sys.stdout, "encoding", None) or "ascii"
+
+
+def _display_text(text: str) -> str:
+    encoding = _stdout_encoding()
+    try:
+        text.encode(encoding)
+        return text
+    except UnicodeEncodeError:
+        return text.encode(encoding, errors="replace").decode(encoding)
+
+
 def print_header(text: str) -> None:
     print(f"\n{Colors.BOLD}{Colors.BLUE}{'=' * 70}{Colors.RESET}")
-    print(f"{Colors.BOLD}{Colors.BLUE}{text}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}{_display_text(text)}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.BLUE}{'=' * 70}{Colors.RESET}\n")
 
 
 def print_test_start(name: str) -> None:
-    print(f"\n{Colors.BOLD}Testing: {name}{Colors.RESET}")
+    print(f"\n{Colors.BOLD}Testing: {_display_text(name)}{Colors.RESET}")
     print("-" * 70)
 
 
 def _display_symbol(symbol: str, fallback: str) -> str:
-    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    encoding = _stdout_encoding()
     try:
         symbol.encode(encoding)
         return symbol
@@ -84,17 +97,17 @@ def _display_symbol(symbol: str, fallback: str) -> str:
 
 def print_success(message: str) -> None:
     symbol = _display_symbol("✓", "OK")
-    print(f"{Colors.GREEN}{symbol} {message}{Colors.RESET}")
+    print(f"{Colors.GREEN}{symbol} {_display_text(message)}{Colors.RESET}")
 
 
 def print_error(message: str) -> None:
     symbol = _display_symbol("✗", "X")
-    print(f"{Colors.RED}{symbol} {message}{Colors.RESET}")
+    print(f"{Colors.RED}{symbol} {_display_text(message)}{Colors.RESET}")
 
 
 def print_warning(message: str) -> None:
     symbol = _display_symbol("⚠", "!")
-    print(f"{Colors.YELLOW}{symbol} {message}{Colors.RESET}")
+    print(f"{Colors.YELLOW}{symbol} {_display_text(message)}{Colors.RESET}")
 
 
 def _module_available(module_name: str) -> bool:
@@ -853,7 +866,7 @@ def run_all_examples(platform_name: str) -> bool:
         print()
         return False
 
-    print_success("All tests passed! ✨")
+    print_success("All tests passed!")
     return True
 
 
