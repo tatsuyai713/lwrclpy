@@ -30,6 +30,8 @@ _logger = logging.getLogger(__name__)
 
 _MAX_CALLBACKS_PER_DRAIN = env_int("LWRCLPY_MAX_CALLBACKS_PER_DRAIN", 16, minimum=1)
 _SKIP_SAMPLE = object()
+_LEAKED_NATIVE_LOANS: List[Any] = []
+_LEAKED_NATIVE_LOANS_LOCK = threading.Lock()
 
 
 def _content_filter_parts(content_filter_options):
@@ -488,9 +490,15 @@ class _LoanedSamples:
         return self._returned
 
     def _invalidate_without_return(self) -> None:
+        native = self._native
+        if native is not None:
+            # Destroy timeout means the reader can no longer be safely touched.
+            # Keep the SWIG loan object alive for process lifetime instead of
+            # letting its destructor/return path race the DDS reader teardown.
+            with _LEAKED_NATIVE_LOANS_LOCK:
+                _LEAKED_NATIVE_LOANS.append(native)
         self._returned = True
         self._release_cb = None
-        self._native = None
 
     def return_loan(self) -> bool:
         if self._returned:
