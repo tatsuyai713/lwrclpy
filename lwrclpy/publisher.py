@@ -22,6 +22,7 @@ from .utils import (
     _pubsub_type_supports_data_sharing,
     _retcode_is_ok,
     env_int,
+    set_fastdds_duration,
 )
 
 T = TypeVar('T')
@@ -109,8 +110,7 @@ def _wait_writer_acked(writer, timeout_sec: float) -> None:
     try:
         duration = fastdds.Duration_t()
         total_ns = int(timeout_sec * 1_000_000_000)
-        duration.seconds = total_ns // 1_000_000_000
-        duration.nanosec = total_ns % 1_000_000_000
+        set_fastdds_duration(duration, total_ns // 1_000_000_000, total_ns % 1_000_000_000)
         wait(duration)
     except Exception:
         pass
@@ -800,8 +800,11 @@ class Publisher:
             return False
         duration = fastdds.Duration_t()
         if timeout is None:
-            duration.seconds = getattr(fastdds, "DURATION_INFINITE_SEC", 0x7fffffff)
-            duration.nanosec = getattr(fastdds, "DURATION_INFINITE_NSEC", 0xffffffff)
+            set_fastdds_duration(
+                duration,
+                getattr(fastdds, "DURATION_INFINITE_SEC", 0x7fffffff),
+                getattr(fastdds, "DURATION_INFINITE_NSEC", 0xffffffff),
+            )
         else:
             if isinstance(timeout, Duration):
                 total_ns = timeout.nanoseconds
@@ -809,8 +812,7 @@ class Publisher:
                 total_ns = int(float(timeout) * 1_000_000_000)
             if total_ns < 0:
                 total_ns = 0
-            duration.seconds = total_ns // 1_000_000_000
-            duration.nanosec = total_ns % 1_000_000_000
+            set_fastdds_duration(duration, total_ns // 1_000_000_000, total_ns % 1_000_000_000)
         try:
             rc = self._writer.wait_for_acknowledgments(duration)
             return _retcode_is_ok(rc, none_is_ok=True)

@@ -45,6 +45,19 @@ def clear_topic_cache(participant=None) -> None:
                 _topic_cache.pop(key, None)
 
 
+def set_fastdds_duration(duration, seconds: int, nanosec: int) -> None:
+    """Set Fast DDS Duration_t fields across SWIG wrapper variants."""
+    for name, value in (("seconds", int(seconds)), ("nanosec", int(nanosec))):
+        current = getattr(duration, name, None)
+        if callable(current):
+            try:
+                current(value)
+                continue
+            except TypeError:
+                pass
+        setattr(duration, name, value)
+
+
 def service_topics(name: str, prefix: str = ""):
     cleaned = name.lstrip("/")
     req = f"{SERVICE_REQUEST_PREFIX}{cleaned}Request"
@@ -534,8 +547,7 @@ def get_or_create_topic(participant, name: str, type_name: str):
         # Try to reuse an existing Topic instance first
         try:
             duration = fastdds.Duration_t()
-            duration.seconds = 0
-            duration.nanosec = 0
+            set_fastdds_duration(duration, 0, 0)
             existing_topic = participant.find_topic(name, duration)
         except Exception:
             existing_topic = None
