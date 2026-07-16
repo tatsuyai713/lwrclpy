@@ -118,6 +118,12 @@ def shutdown(*, force_exit: bool = False):
 
     with _lock:
         if _shutdown_flag:
+            participant = _participant
+            try:
+                from .utils import clear_topic_cache
+                clear_topic_cache(participant)
+            except Exception:
+                pass
             _tracked_entities.clear()
 
             # Don't delete participant - let Fast DDS clean it up on process exit
@@ -244,6 +250,11 @@ class Context:
                 return
             
             self._shutdown_flag = True
+            try:
+                from .utils import clear_topic_cache
+                clear_topic_cache(self._participant)
+            except Exception:
+                pass
             self._participant = None
             self._initialized = False
     

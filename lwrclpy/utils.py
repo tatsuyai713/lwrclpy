@@ -25,6 +25,26 @@ def env_int(name: str, default: int, *, minimum: int = 0) -> int:
         return default
 
 
+def clear_topic_cache(participant=None) -> None:
+    """Drop cached Topic references.
+
+    The cache stores Topic objects together with their participant so repeated
+    publisher/subscription creation can reuse existing Fast DDS topics.  During
+    shutdown those strong references must be released; otherwise the Python
+    cache can keep the participant and its native background state alive after
+    all nodes have been destroyed.
+    """
+    with _cache_lock:
+        if participant is None:
+            _topic_cache.clear()
+            return
+        participant_id = id(participant)
+        for key, cached in list(_topic_cache.items()):
+            cached_participant = cached[0] if cached else None
+            if key[0] == participant_id or cached_participant is participant:
+                _topic_cache.pop(key, None)
+
+
 def service_topics(name: str, prefix: str = ""):
     cleaned = name.lstrip("/")
     req = f"{SERVICE_REQUEST_PREFIX}{cleaned}Request"
