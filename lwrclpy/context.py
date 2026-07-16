@@ -3,6 +3,7 @@ import os
 import atexit
 import weakref
 import warnings
+import logging
 from typing import List, Optional, Any
 
 try:
@@ -18,6 +19,7 @@ _shutdown_flag = False
 _participant = None
 _tracked_entities: List[weakref.ref] = []  # Track all entities for proper cleanup order
 _atexit_registered = False
+_logger = logging.getLogger(__name__)
 
 
 def _parse_domain_id(value: Any, *, source: str = "domain_id") -> int:
@@ -76,6 +78,24 @@ def init(args=None, *, domain_id: Optional[int] = None):
             _atexit_registered = True
 
 
+def _delete_participant(participant) -> None:
+    if participant is None or fastdds is None:
+        return
+    try:
+        delete_contained = getattr(participant, "delete_contained_entities", None)
+        if callable(delete_contained):
+            delete_contained()
+    except Exception:
+        _logger.debug("Fast DDS delete_contained_entities failed during shutdown", exc_info=True)
+    try:
+        factory = fastdds.DomainParticipantFactory.get_instance()
+        delete_participant = getattr(factory, "delete_participant", None)
+        if callable(delete_participant):
+            delete_participant(participant)
+    except Exception:
+        _logger.debug("Fast DDS delete_participant failed during shutdown", exc_info=True)
+
+
 def _atexit_shutdown():
     """Atexit handler for graceful shutdown."""
     try:
@@ -126,10 +146,9 @@ def shutdown(*, force_exit: bool = False):
                 pass
             _tracked_entities.clear()
 
-            # Don't delete participant - let Fast DDS clean it up on process exit
-            # Attempting to delete can cause "double free" errors
             _participant = None
             _initialized = False
+            _delete_participant(participant)
     
     # If force_exit is requested, use os._exit to bypass Python cleanup
     # This avoids "double free or corruption (fasttop)" errors in Fast DDS v3
@@ -255,6 +274,7 @@ class Context:
                 clear_topic_cache(self._participant)
             except Exception:
                 pass
+            _delete_participant(self._participant)
             self._participant = None
             self._initialized = False
     
