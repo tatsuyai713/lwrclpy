@@ -1064,6 +1064,7 @@ class Node:
             if self._destroyed:
                 return
             self._destroyed = True
+
         # Cancel timers first
         for t in self._timers:
             try:
@@ -1072,7 +1073,25 @@ class Node:
             except Exception:
                 pass
         self._timers.clear()
-        
+
+        # Stop guard-condition callbacks before DDS entities are torn down.
+        for gc in self._guard_conditions:
+            try:
+                self._unregister_entity_callback_group(gc)
+                gc.destroy()
+            except Exception:
+                pass
+        self._guard_conditions.clear()
+
+        # Drop queued callbacks before destroying DDS entities.  Dropped
+        # callbacks release pending timer flags and reader loans; doing this at
+        # the end can leave readers/writers in use while Fast DDS deletes them.
+        with self._callback_lock:
+            pending_callbacks = list(self._callback_queue)
+            self._callback_queue.clear()
+        for item in pending_callbacks:
+            self._notify_dropped_callback(item[0])
+
         # Destroy clients
         for client in self._clients:
             try:
@@ -1123,23 +1142,8 @@ class Node:
                 pass
         self._publishers.clear()
 
-        # Destroy guard conditions
-        for gc in self._guard_conditions:
-            try:
-                self._unregister_entity_callback_group(gc)
-                gc.destroy()
-            except Exception:
-                pass
-        self._guard_conditions.clear()
         self._entity_callback_groups.clear()
-        with self._callback_lock:
-            pending_callbacks = list(self._callback_queue)
-            self._callback_queue.clear()
-        # Notify owners of discarded callbacks (releases reader loans and
-        # pending flags held by queued-but-never-run callbacks).
-        for item in pending_callbacks:
-            self._notify_dropped_callback(item[0])
-        
+
         # Note: Topics are managed by Fast DDS and shared across multiple
         # DataWriters/DataReaders. We don't delete them explicitly to avoid
         # double-free issues. Fast DDS will clean them up when the participant

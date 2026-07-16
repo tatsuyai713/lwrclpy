@@ -35,6 +35,9 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
         return default
 
 
+_DESTROY_ACK_TIMEOUT = _env_float("LWRCLPY_DESTROY_ACK_TIMEOUT", 0.25)
+
+
 def _materialize_shadow_attributes(msg) -> bool:
     """Apply rclpy-style shadow attributes to their SWIG setters in-place."""
     inst_dict = getattr(msg, "__dict__", None)
@@ -95,6 +98,22 @@ def _write_checked(writer, msg) -> None:
     rc = writer.write(msg)
     if not _retcode_is_ok(rc, none_is_ok=True):
         raise RuntimeError(f"Fast DDS DataWriter.write failed: retcode={rc!r}")
+
+
+def _wait_writer_acked(writer, timeout_sec: float) -> None:
+    if writer is None or timeout_sec <= 0:
+        return
+    wait = getattr(writer, "wait_for_acknowledgments", None)
+    if not callable(wait):
+        return
+    try:
+        duration = fastdds.Duration_t()
+        total_ns = int(timeout_sec * 1_000_000_000)
+        duration.seconds = total_ns // 1_000_000_000
+        duration.nanosec = total_ns % 1_000_000_000
+        wait(duration)
+    except Exception:
+        pass
 
 
 def _force_data_sharing_on_writer(wq: "fastdds.DataWriterQos") -> bool:
@@ -837,6 +856,7 @@ class Publisher:
                 pass
         if writer is not None:
             try:
+                _wait_writer_acked(writer, _DESTROY_ACK_TIMEOUT)
                 delete_writer = getattr(publisher, "delete_datawriter", None) if publisher is not None else None
                 if callable(delete_writer):
                     delete_writer(writer)

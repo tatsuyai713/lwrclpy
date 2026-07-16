@@ -44,28 +44,6 @@ def _domain_id_from_env() -> int:
 _domain = _domain_id_from_env()
 
 
-def _delete_participant(participant) -> None:
-    if participant is None or fastdds is None:
-        return
-    if os.name != "nt":
-        return
-    if os.environ.get("LWRCLPY_SKIP_PARTICIPANT_DELETE") == "1":
-        return
-    try:
-        delete_contained = getattr(participant, "delete_contained_entities", None)
-        if callable(delete_contained):
-            delete_contained()
-    except Exception:
-        pass
-    try:
-        factory = fastdds.DomainParticipantFactory.get_instance()
-        delete_participant = getattr(factory, "delete_participant", None)
-        if callable(delete_participant):
-            delete_participant(participant)
-    except Exception:
-        pass
-
-
 def init(args=None, *, domain_id: Optional[int] = None):
     """Initialize lwrclpy context.
     
@@ -115,7 +93,6 @@ def shutdown(*, force_exit: bool = False):
     """
     global _initialized, _shutdown_flag, _participant, _tracked_entities
     entities_to_destroy = []
-    participant_to_delete = None
     with _lock:
         if not _initialized or _shutdown_flag:
             return
@@ -142,11 +119,11 @@ def shutdown(*, force_exit: bool = False):
     with _lock:
         if _shutdown_flag:
             _tracked_entities.clear()
-            participant_to_delete = _participant
+
+            # Don't delete participant - let Fast DDS clean it up on process exit
+            # Attempting to delete can cause "double free" errors
             _participant = None
             _initialized = False
-
-    _delete_participant(participant_to_delete)
     
     # If force_exit is requested, use os._exit to bypass Python cleanup
     # This avoids "double free or corruption (fasttop)" errors in Fast DDS v3
@@ -262,16 +239,13 @@ class Context:
     
     def shutdown(self):
         """Shutdown this context."""
-        participant_to_delete = None
         with self._lock:
             if not self._initialized or self._shutdown_flag:
                 return
             
             self._shutdown_flag = True
-            participant_to_delete = self._participant
             self._participant = None
             self._initialized = False
-        _delete_participant(participant_to_delete)
     
     def try_shutdown(self) -> bool:
         """Attempt to shutdown. Returns True if shutdown happened, False if already shut down."""
