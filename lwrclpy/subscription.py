@@ -241,17 +241,6 @@ def _resolve_loaned_samples_cls(msg_module, msg_ctor):
     return getattr(module, f"Lwrclpy_{msg_ctor.__name__}_LoanedSamples", None)
 
 
-def _attach_loan_to_sample(sample, loaned: "_LoanedSamples") -> bool:
-    """Keep a reader loan alive for as long as the callback message is alive."""
-    for setter in (setattr, object.__setattr__):
-        try:
-            setter(sample, "_lwrclpy_loaned_samples", loaned)
-            return True
-        except Exception:
-            continue
-    return False
-
-
 class MessageInfo:
     """Information about a received message (similar to rclpy.MessageInfo)."""
     __slots__ = (
@@ -692,9 +681,8 @@ class _ReaderListener(fastdds.DataReaderListener):
                         return None
             self._attach_cuda_ipc(sample)
             msg_info = loaned.info(0) if self._with_message_info else None
-            callback_owned_loan = None if _attach_loan_to_sample(sample, loaned) else loaned
             self._auto_loan_receive_count += 1
-            return sample, msg_info, callback_owned_loan
+            return sample, msg_info, loaned
         except Exception:
             loaned.return_loan()
             return None
