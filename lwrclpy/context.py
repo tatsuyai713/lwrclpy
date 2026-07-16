@@ -17,6 +17,7 @@ _lock = threading.RLock()
 _initialized = False
 _shutdown_flag = False
 _participant = None
+_retired_participants = []
 _tracked_entities: List[weakref.ref] = []  # Track all entities for proper cleanup order
 _atexit_registered = False
 _logger = logging.getLogger(__name__)
@@ -96,10 +97,24 @@ def _delete_participant(participant) -> None:
         _logger.debug("Fast DDS delete_participant failed during shutdown", exc_info=True)
 
 
+def _retire_participant(participant) -> None:
+    if participant is not None:
+        _retired_participants.append(participant)
+
+
+def _delete_retired_participants() -> None:
+    while _retired_participants:
+        _delete_participant(_retired_participants.pop())
+
+
 def _atexit_shutdown():
     """Atexit handler for graceful shutdown."""
     try:
         shutdown(force_exit=False)
+    except Exception:
+        pass
+    try:
+        _delete_retired_participants()
     except Exception:
         pass
 
@@ -148,7 +163,7 @@ def shutdown(*, force_exit: bool = False):
 
             _participant = None
             _initialized = False
-            _delete_participant(participant)
+            _retire_participant(participant)
     
     # If force_exit is requested, use os._exit to bypass Python cleanup
     # This avoids "double free or corruption (fasttop)" errors in Fast DDS v3
@@ -274,7 +289,7 @@ class Context:
                 clear_topic_cache(self._participant)
             except Exception:
                 pass
-            _delete_participant(self._participant)
+            _retire_participant(self._participant)
             self._participant = None
             self._initialized = False
     
