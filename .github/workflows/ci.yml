@@ -23,20 +23,64 @@ permissions:
   actions: read
 
 jobs:
+  resolve-build-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      reuse_build_run_id: ${{ steps.resolve.outputs.reuse_build_run_id }}
+    steps:
+      - name: Resolve reusable build artifacts
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVIDED_REUSE_BUILD_RUN_ID: ${{ inputs.reuse_build_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$PROVIDED_REUSE_BUILD_RUN_ID" ]; then
+            echo "Using provided build run: $PROVIDED_REUSE_BUILD_RUN_ID"
+            echo "reuse_build_run_id=$PROVIDED_REUSE_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          reuse_run_id=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] || [ -n "$RELEASE_TAG" ]; then
+            workflow_id="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows" \
+              --jq '.workflows[] | select(.path == ".github/workflows/ci.yml") | .id' \
+              | head -n 1)"
+            reuse_run_id="$(gh api \
+              --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
+              -f head_sha="$GITHUB_SHA" \
+              -f status=success \
+              -f per_page=20 \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // ""')"
+          fi
+
+          if [ -n "$reuse_run_id" ]; then
+            echo "Found reusable successful build run for $GITHUB_SHA: $reuse_run_id"
+          else
+            echo "No reusable successful build run found for $GITHUB_SHA"
+          fi
+          echo "reuse_build_run_id=$reuse_run_id" >> "$GITHUB_OUTPUT"
+
   build-ubuntu-wheels:
+    needs: resolve-build-artifacts
     uses: ./.github/workflows/build-ubuntu.yml
     with:
-      reuse_build_run_id: ${{ inputs.reuse_build_run_id }}
+      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
 
   build-macos-wheels:
+    needs: resolve-build-artifacts
     uses: ./.github/workflows/build-macos.yml
     with:
-      reuse_build_run_id: ${{ inputs.reuse_build_run_id }}
+      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
 
   build-windows-wheels:
+    needs: resolve-build-artifacts
     uses: ./.github/workflows/build-windows.yml
     with:
-      reuse_build_run_id: ${{ inputs.reuse_build_run_id }}
+      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
 
   test-ubuntu-wheels:
     needs: build-ubuntu-wheels

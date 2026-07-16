@@ -126,7 +126,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "${{ matrix.java-version }}"
-          cache: gradle
 
       - name: Restore Fast DDS build cache
         if: ${{ inputs.reuse_build_run_id == '' }}
