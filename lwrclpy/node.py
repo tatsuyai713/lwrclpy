@@ -1105,15 +1105,8 @@ class Node:
                 pass
         self._action_clients.clear()
         
-        # Destroy publishers
-        for pub in self._publishers:
-            try:
-                pub.destroy()
-            except Exception:
-                pass
-        self._publishers.clear()
-        
-        # Destroy subscriptions
+        # Destroy subscriptions before publishers so local readers release any
+        # matched writer state before Fast DDS deletes DataWriters.
         for sub in self._subscriptions:
             try:
                 self._unregister_entity_callback_group(sub)
@@ -1122,6 +1115,14 @@ class Node:
                 pass
         self._subscriptions.clear()
         
+        # Destroy publishers
+        for pub in self._publishers:
+            try:
+                pub.destroy()
+            except Exception:
+                pass
+        self._publishers.clear()
+
         # Destroy guard conditions
         for gc in self._guard_conditions:
             try:

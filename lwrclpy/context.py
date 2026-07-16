@@ -47,6 +47,8 @@ _domain = _domain_id_from_env()
 def _delete_participant(participant) -> None:
     if participant is None or fastdds is None:
         return
+    if os.name != "nt":
+        return
     if os.environ.get("LWRCLPY_SKIP_PARTICIPANT_DELETE") == "1":
         return
     try:
