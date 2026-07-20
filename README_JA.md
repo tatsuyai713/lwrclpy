@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci.yml/badge.svg)](https://github.com/tatsuyai713/lwrclpy/actions/workflows/ci.yml)
 
-[English](README_EN.md)
+[English](README.md)
 
 **lwrclpy**（Lightweight rclpy）は、Fast DDS v3上に直接構築したrclpy互換のPythonライブラリです。ROS 2をインストールせずに、rclpyと同じAPIでロボットアプリケーションを開発できます。
 
