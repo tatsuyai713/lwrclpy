@@ -41,6 +41,8 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/build_all.ps1 `
 
 The `fastdds` port pulls in `fastcdr`, `foonathan-memory`, `asio`, `tinyxml2`, OpenSSL, zlib, and the other native dependencies required by Fast DDS. Use the dynamic `x64-windows` or `arm64-windows` triplet so required DLLs can be copied into the wheel and repaired by `delvewheel`.
 
+During wheel packaging, OpenSSL DLLs are not copied from vcpkg. `make_pip_package_with_runtime.ps1` vendors the Authenticode-valid OpenSSL DLLs from the active Python runtime and copies them under the DLL names expected by the vcpkg-built Fast DDS binaries. Packaging fails if signed Python `libssl` or `libcrypto` DLLs cannot be found.
+
 Packaging-only entry point:
 
 ```powershell

@@ -201,6 +201,119 @@ function Copy-Tree($Source, $Destination) {
     Copy-Item (Join-Path $Source "*") $Destination -Recurse -Force
 }
 
+function Test-ValidAuthenticodeSignature($Path) {
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    return $signature.Status -eq "Valid"
+}
+
+function Get-PythonOpenSslDllRoots {
+    $rootsJson = python -c "import json, os, sys, sysconfig; roots=[sys.base_prefix, sys.prefix, os.path.dirname(sys.executable), sysconfig.get_config_var('BINDIR')]; print(json.dumps([r for r in dict.fromkeys(roots) if r]))"
+    if ($LASTEXITCODE -ne 0 -or -not $rootsJson) {
+        throw "Unable to query Python runtime paths for signed OpenSSL DLLs"
+    }
+
+    $roots = @($rootsJson | ConvertFrom-Json)
+    $expanded = New-Object System.Collections.Generic.List[string]
+    foreach ($root in $roots) {
+        if (-not $root) {
+            continue
+        }
+        $expanded.Add($root)
+        $expanded.Add((Join-Path $root "DLLs"))
+        $expanded.Add((Join-Path $root "Library\bin"))
+    }
+    return @($expanded.ToArray() | Where-Object { Test-Path $_ } | Select-Object -Unique)
+}
+
+function Get-OpenSslDllAbiToken($Name) {
+    if ($Name -match '^lib(?:ssl|crypto)-([^-]+)(?:-.*)?\.dll$') {
+        return $Matches[1]
+    }
+    return ""
+}
+
+function Get-SignedPythonOpenSslDlls($Kind) {
+    $matches = New-Object System.Collections.Generic.List[object]
+    foreach ($root in (Get-PythonOpenSslDllRoots)) {
+        Get-ChildItem -Path $root -Filter "lib$Kind*.dll" -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                if (Test-ValidAuthenticodeSignature $_.FullName) {
+                    $matches.Add($_)
+                }
+            }
+    }
+
+    $unique = @($matches.ToArray() | Sort-Object FullName -Unique)
+    if ($unique.Count -eq 0) {
+        throw "Signed Python lib$Kind DLL was not found. Refusing to package unsigned OpenSSL runtime DLLs."
+    }
+    return $unique
+}
+
+function Select-SignedPythonOpenSslDll($Kind, $ExpectedName) {
+    $unique = @(Get-SignedPythonOpenSslDlls $Kind)
+    $expectedAbi = Get-OpenSslDllAbiToken $ExpectedName
+    if ($expectedAbi) {
+        $compatible = @($unique | Where-Object { (Get-OpenSslDllAbiToken $_.Name) -eq $expectedAbi })
+        if ($compatible.Count -eq 0) {
+            $available = (($unique | ForEach-Object { $_.Name }) -join ", ")
+            throw "No signed Python lib$Kind DLL matches expected OpenSSL ABI '$expectedAbi' for $ExpectedName. Available signed DLLs: $available"
+        }
+        $unique = $compatible
+    }
+
+    if ($unique.Count -gt 1) {
+        Write-Host "[INFO] Multiple signed Python lib$Kind DLLs found; using $($unique[0].FullName)"
+    }
+    return $unique[0]
+}
+
+function Get-ExpectedOpenSslDllNames($DllRoots, $Kind, $FallbackName) {
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($root in $DllRoots) {
+        Get-ChildItem -Path $root -Filter "lib$Kind*.dll" -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $names.Add($_.Name) }
+    }
+
+    $unique = @($names.ToArray() | Sort-Object -Unique)
+    if ($unique.Count -eq 0) {
+        return @($FallbackName)
+    }
+    return $unique
+}
+
+function Copy-SignedPythonOpenSslDlls($Destination, $DllRoots) {
+    foreach ($kind in @("ssl", "crypto")) {
+        $fallback = @(Get-SignedPythonOpenSslDlls $kind)[0].Name
+        foreach ($name in (Get-ExpectedOpenSslDllNames $DllRoots $kind $fallback)) {
+            $source = Select-SignedPythonOpenSslDll $kind $name
+            $target = Join-Path $Destination $name
+            Copy-Item $source.FullName $target -Force
+            if (-not (Test-ValidAuthenticodeSignature $target)) {
+                throw "Copied OpenSSL DLL is not Authenticode-valid: $target"
+            }
+            Write-Host "[INFO] Vendored signed Python OpenSSL DLL: $($source.Name) -> $name"
+        }
+    }
+}
+
+function Remove-StagedOpenSslDllsOutsideVendor($Root, $VendorLib) {
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $vendorFull = [System.IO.Path]::GetFullPath($VendorLib).TrimEnd('\') + '\'
+    if (-not $vendorFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Vendor library path $VendorLib is not under staging root $Root"
+    }
+
+    Get-ChildItem -Path $Root -Recurse -File -Include "libssl*.dll", "libcrypto*.dll" |
+        Where-Object {
+            -not ([System.IO.Path]::GetFullPath($_.FullName).StartsWith($vendorFull, [System.StringComparison]::OrdinalIgnoreCase))
+        } |
+        ForEach-Object {
+            Write-Host "[INFO] Removing non-vendored OpenSSL DLL from staged wheel tree: $($_.FullName)"
+            Remove-Item -LiteralPath $_.FullName -Force
+        }
+}
+
 function Get-PackageVersion() {
     if ($PackageVersion) {
         return $PackageVersion.TrimStart("v")
@@ -294,13 +407,15 @@ $dllRoots = @(
     (Join-Path $FastDdsPrefix "Lib\site-packages\fastdds")
 ) | Where-Object { Test-Path $_ }
 
-$patterns = @("*fastdds*.dll", "*fastcdr*.dll", "*foonathan*.dll", "*tinyxml2*.dll", "libssl*.dll", "libcrypto*.dll", "zlib*.dll")
+$patterns = @("*fastdds*.dll", "*fastcdr*.dll", "*foonathan*.dll", "*tinyxml2*.dll", "zlib*.dll")
 foreach ($root in $dllRoots) {
     foreach ($pattern in $patterns) {
         Get-ChildItem -Path $root -Filter $pattern -File -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName (Join-Path $vendorLib $_.Name) -Force }
     }
 }
+Copy-SignedPythonOpenSslDlls $vendorLib $dllRoots
+Remove-StagedOpenSslDllsOutsideVendor $stagingRoot $vendorLib
 Patch-FastDdsInit $vendorFastdds
 Patch-FastDdsInit (Join-Path $stagingRoot "fastdds")
 
