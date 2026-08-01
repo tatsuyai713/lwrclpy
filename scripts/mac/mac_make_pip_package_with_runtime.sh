@@ -83,7 +83,7 @@ echo "[INFO] Package version: ${PKG_VERSION}"
 
 BUILD_ROOT="${BUILD_ROOT:-${REPO_ROOT}/._types_python_build_v3}"           # prebuilt DataTypes tree
 PY_INSTALL_ROOT="${PY_INSTALL_ROOT:-}"                                     # optional: already-installed DataTypes
-FASTDDS_PREFIX="${FASTDDS_PREFIX:-/opt/fast-dds-v3}"
+FASTDDS_PREFIX="${FASTDDS_PREFIX:-${PREFIX_V3:-/opt/fast-dds-v3}}"
 
 STAGING_ROOT="${REPO_ROOT}/._pip_pkg_lwrclpy_mac"
 DIST_DIR="${REPO_ROOT}/dist"
