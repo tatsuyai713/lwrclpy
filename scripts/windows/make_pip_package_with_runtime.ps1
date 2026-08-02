@@ -212,9 +212,23 @@ function Get-PythonOpenSslDllRoots {
         throw "Unable to query Python runtime paths for signed OpenSSL DLLs"
     }
 
-    $roots = @($rootsJson | ConvertFrom-Json)
+    $roots = New-Object System.Collections.Generic.List[string]
+    foreach ($root in @($rootsJson | ConvertFrom-Json)) {
+        if ($root) {
+            $roots.Add($root)
+        }
+    }
+
+    if ($env:RUNNER_TOOL_CACHE) {
+        $pythonToolCache = Join-Path $env:RUNNER_TOOL_CACHE "Python"
+        if (Test-Path $pythonToolCache) {
+            Get-ChildItem -Path $pythonToolCache -Filter "python.exe" -File -Recurse -ErrorAction SilentlyContinue |
+                ForEach-Object { $roots.Add($_.DirectoryName) }
+        }
+    }
+
     $expanded = New-Object System.Collections.Generic.List[string]
-    foreach ($root in $roots) {
+    foreach ($root in $roots.ToArray()) {
         if (-not $root) {
             continue
         }
@@ -227,6 +241,13 @@ function Get-PythonOpenSslDllRoots {
 
 function Get-OpenSslDllAbiToken($Name) {
     if ($Name -match '^lib(?:ssl|crypto)-([^-]+)(?:-.*)?\.dll$') {
+        return $Matches[1]
+    }
+    return ""
+}
+
+function Get-OpenSslDllArchitectureToken($Name) {
+    if ($Name -match '-(x64|arm64)\.dll$') {
         return $Matches[1]
     }
     return ""
@@ -252,12 +273,24 @@ function Get-SignedPythonOpenSslDlls($Kind) {
 
 function Select-SignedPythonOpenSslDll($Kind, $ExpectedName) {
     $unique = @(Get-SignedPythonOpenSslDlls $Kind)
+    $exact = @($unique | Where-Object { $_.Name -ieq $ExpectedName })
+    if ($exact.Count -gt 0) {
+        if ($exact.Count -gt 1) {
+            Write-Host "[INFO] Multiple exact signed Python lib$Kind DLLs found; using $($exact[0].FullName)"
+        }
+        return $exact[0]
+    }
+
     $expectedAbi = Get-OpenSslDllAbiToken $ExpectedName
+    $expectedArch = Get-OpenSslDllArchitectureToken $ExpectedName
     if ($expectedAbi) {
         $compatible = @($unique | Where-Object { (Get-OpenSslDllAbiToken $_.Name) -eq $expectedAbi })
+        if ($expectedArch) {
+            $compatible = @($compatible | Where-Object { (Get-OpenSslDllArchitectureToken $_.Name) -eq $expectedArch })
+        }
         if ($compatible.Count -eq 0) {
             $available = (($unique | ForEach-Object { $_.Name }) -join ", ")
-            throw "No signed Python lib$Kind DLL matches expected OpenSSL ABI '$expectedAbi' for $ExpectedName. Available signed DLLs: $available"
+            throw "No signed Python lib$Kind DLL matches expected OpenSSL ABI '$expectedAbi' and architecture '$expectedArch' for $ExpectedName. Available signed DLLs: $available"
         }
         $unique = $compatible
     }
