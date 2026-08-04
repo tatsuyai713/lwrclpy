@@ -44,35 +44,35 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: windows-2022
+            runner: windows-2025
             python-architecture: x64
             java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.10"
           - arch: x64
-            runner: windows-2022
+            runner: windows-2025
             python-architecture: x64
             java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.11"
           - arch: x64
-            runner: windows-2022
+            runner: windows-2025
             python-architecture: x64
             java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.12"
           - arch: x64
-            runner: windows-2022
+            runner: windows-2025
             python-architecture: x64
             java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.13"
           - arch: x64
-            runner: windows-2022
+            runner: windows-2025
             python-architecture: x64
             java-version: "17"
             vcpkg-triplet: x64-windows
