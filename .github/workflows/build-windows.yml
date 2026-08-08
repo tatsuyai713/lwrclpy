@@ -36,7 +36,19 @@ on:
         type: string
 
 jobs:
+  validate-packaging-scripts:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test OpenSSL runtime selection
+        shell: pwsh
+        run: scripts/windows/test_openssl_runtime_selection.ps1
+
   build:
+    needs: validate-packaging-scripts
     timeout-minutes: 240
     strategy:
       fail-fast: false

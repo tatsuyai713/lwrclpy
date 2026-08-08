@@ -5,7 +5,8 @@ param(
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } elseif ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { (Join-Path $BuildWorkRoot "vcpkg") }),
     [string]$VcpkgTriplet = $(if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows" }),
     [string]$BuildArch = $(if ($env:LWRCLPY_WINDOWS_BUILD_ARCH) { $env:LWRCLPY_WINDOWS_BUILD_ARCH } else { "x64" }),
-    [string]$PackageVersion = $(if ($env:PKG_VERSION) { $env:PKG_VERSION.TrimStart("v") } else { "" })
+    [string]$PackageVersion = $(if ($env:PKG_VERSION) { $env:PKG_VERSION.TrimStart("v") } else { "" }),
+    [switch]$FunctionsOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -253,6 +254,39 @@ function Get-OpenSslDllArchitectureToken($Name) {
     return ""
 }
 
+function Get-PeArchitecture($Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $reader = New-Object System.IO.BinaryReader($stream)
+    try {
+        if ($stream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5A4D) {
+            throw "Not a valid PE file: $Path"
+        }
+
+        $stream.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $peOffset = $reader.ReadUInt32()
+        if ($peOffset -gt ($stream.Length - 6)) {
+            throw "Invalid PE header offset in $Path"
+        }
+
+        $stream.Seek($peOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "Invalid PE signature in $Path"
+        }
+
+        $machine = $reader.ReadUInt16()
+        switch ($machine) {
+            0x014C { return "x86" }
+            0x01C4 { return "arm" }
+            0x8664 { return "x64" }
+            0xAA64 { return "arm64" }
+            default { return ("unknown-0x{0:X4}" -f $machine) }
+        }
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Get-SignedPythonOpenSslDlls($Kind) {
     $matches = New-Object System.Collections.Generic.List[object]
     foreach ($root in (Get-PythonOpenSslDllRoots)) {
@@ -273,7 +307,27 @@ function Get-SignedPythonOpenSslDlls($Kind) {
 
 function Select-SignedPythonOpenSslDll($Kind, $ExpectedName) {
     $unique = @(Get-SignedPythonOpenSslDlls $Kind)
-    $exact = @($unique | Where-Object { $_.Name -ieq $ExpectedName })
+    $expectedAbi = Get-OpenSslDllAbiToken $ExpectedName
+    $nameArch = Get-OpenSslDllArchitectureToken $ExpectedName
+    $expectedArch = $BuildArch
+    if ($nameArch -and $nameArch -ne $expectedArch) {
+        throw "OpenSSL DLL name $ExpectedName targets '$nameArch', but the configured build architecture is '$expectedArch'."
+    }
+
+    $compatible = @($unique)
+    if ($expectedAbi) {
+        $compatible = @($compatible | Where-Object { (Get-OpenSslDllAbiToken $_.Name) -eq $expectedAbi })
+    }
+    $compatible = @($compatible | Where-Object { (Get-PeArchitecture $_.FullName) -eq $expectedArch })
+
+    if ($compatible.Count -eq 0) {
+        $available = (($unique | ForEach-Object {
+            "$($_.Name) [ABI=$(Get-OpenSslDllAbiToken $_.Name), arch=$(Get-PeArchitecture $_.FullName)]"
+        }) -join ", ")
+        throw "No signed Python lib$Kind DLL matches expected OpenSSL ABI '$expectedAbi' and PE architecture '$expectedArch' for $ExpectedName. Available signed DLLs: $available"
+    }
+
+    $exact = @($compatible | Where-Object { $_.Name -ieq $ExpectedName })
     if ($exact.Count -gt 0) {
         if ($exact.Count -gt 1) {
             Write-Host "[INFO] Multiple exact signed Python lib$Kind DLLs found; using $($exact[0].FullName)"
@@ -281,24 +335,10 @@ function Select-SignedPythonOpenSslDll($Kind, $ExpectedName) {
         return $exact[0]
     }
 
-    $expectedAbi = Get-OpenSslDllAbiToken $ExpectedName
-    $expectedArch = Get-OpenSslDllArchitectureToken $ExpectedName
-    if ($expectedAbi) {
-        $compatible = @($unique | Where-Object { (Get-OpenSslDllAbiToken $_.Name) -eq $expectedAbi })
-        if ($expectedArch) {
-            $compatible = @($compatible | Where-Object { (Get-OpenSslDllArchitectureToken $_.Name) -eq $expectedArch })
-        }
-        if ($compatible.Count -eq 0) {
-            $available = (($unique | ForEach-Object { $_.Name }) -join ", ")
-            throw "No signed Python lib$Kind DLL matches expected OpenSSL ABI '$expectedAbi' and architecture '$expectedArch' for $ExpectedName. Available signed DLLs: $available"
-        }
-        $unique = $compatible
+    if ($compatible.Count -gt 1) {
+        Write-Host "[INFO] Multiple compatible signed Python lib$Kind DLLs found; using $($compatible[0].FullName)"
     }
-
-    if ($unique.Count -gt 1) {
-        Write-Host "[INFO] Multiple signed Python lib$Kind DLLs found; using $($unique[0].FullName)"
-    }
-    return $unique[0]
+    return $compatible[0]
 }
 
 function Get-ExpectedOpenSslDllNames($DllRoots, $Kind, $FallbackName) {
@@ -320,12 +360,18 @@ function Copy-SignedPythonOpenSslDlls($Destination, $DllRoots) {
         $fallback = @(Get-SignedPythonOpenSslDlls $kind)[0].Name
         foreach ($name in (Get-ExpectedOpenSslDllNames $DllRoots $kind $fallback)) {
             $source = Select-SignedPythonOpenSslDll $kind $name
-            $target = Join-Path $Destination $name
-            Copy-Item $source.FullName $target -Force
-            if (-not (Test-ValidAuthenticodeSignature $target)) {
-                throw "Copied OpenSSL DLL is not Authenticode-valid: $target"
+            $targetNames = @($name, $source.Name) | Select-Object -Unique
+            foreach ($targetName in $targetNames) {
+                $target = Join-Path $Destination $targetName
+                Copy-Item $source.FullName $target -Force
+                if (-not (Test-ValidAuthenticodeSignature $target)) {
+                    throw "Copied OpenSSL DLL is not Authenticode-valid: $target"
+                }
+                if ((Get-PeArchitecture $target) -ne $BuildArch) {
+                    throw "Copied OpenSSL DLL has the wrong PE architecture: $target"
+                }
+                Write-Host "[INFO] Vendored signed Python OpenSSL DLL: $($source.Name) -> $targetName"
             }
-            Write-Host "[INFO] Vendored signed Python OpenSSL DLL: $($source.Name) -> $name"
         }
     }
 }
@@ -360,6 +406,10 @@ function Get-PackageVersion() {
         return $latest.TrimStart("v")
     }
     return "0.0.0"
+}
+
+if ($FunctionsOnly) {
+    return
 }
 
 $PackageVersion = Get-PackageVersion
