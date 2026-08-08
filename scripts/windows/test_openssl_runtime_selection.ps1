@@ -1,3 +1,7 @@
+param(
+    [switch]$Integration
+)
+
 $ErrorActionPreference = "Stop"
 
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("lwrclpy-openssl-test-" + [guid]::NewGuid())
@@ -94,5 +98,54 @@ try {
 } finally {
     if (Test-Path $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
+    }
+}
+
+if ($Integration) {
+    . (Join-Path $PSScriptRoot "make_pip_package_with_runtime.ps1") `
+        -BuildWorkRoot $testRoot `
+        -BuildRoot (Join-Path $testRoot "generated-types") `
+        -FastDdsPrefix (Join-Path $testRoot "fastdds-prefix") `
+        -VcpkgRoot (Join-Path $testRoot "vcpkg") `
+        -BuildArch x64 `
+        -FunctionsOnly
+
+    try {
+        $actualExpectedRoot = Join-Path $testRoot "expected"
+        $actualDestination = Join-Path $testRoot "vendor"
+        New-Item -ItemType Directory -Path $actualExpectedRoot, $actualDestination -Force | Out-Null
+        [System.IO.File]::WriteAllBytes((Join-Path $actualExpectedRoot "libssl-3-x64.dll"), [byte[]]@())
+        [System.IO.File]::WriteAllBytes((Join-Path $actualExpectedRoot "libcrypto-3-x64.dll"), [byte[]]@())
+
+        foreach ($kind in @("ssl", "crypto")) {
+            $selected = Select-SignedPythonOpenSslDll $kind "lib$kind-3-x64.dll"
+            Assert-Equal "x64" (Get-PeArchitecture $selected.FullName) "Actual signed Python lib$kind architecture mismatch."
+            if (-not (Test-ValidAuthenticodeSignature $selected.FullName)) {
+                throw "Actual Python lib$kind DLL is not Authenticode-valid: $($selected.FullName)"
+            }
+        }
+
+        Copy-SignedPythonOpenSslDlls $actualDestination @($actualExpectedRoot)
+        foreach ($expectedFile in @(
+            "libssl-3-x64.dll",
+            "libssl-3.dll",
+            "libcrypto-3-x64.dll",
+            "libcrypto-3.dll"
+        )) {
+            $actualFile = Join-Path $actualDestination $expectedFile
+            if (-not (Test-Path $actualFile)) {
+                throw "Expected actual vendored DLL was not created: $expectedFile"
+            }
+            Assert-Equal "x64" (Get-PeArchitecture $actualFile) "Actual vendored DLL architecture mismatch."
+            if (-not (Test-ValidAuthenticodeSignature $actualFile)) {
+                throw "Actual vendored DLL is not Authenticode-valid: $actualFile"
+            }
+        }
+
+        Write-Host "Actual signed Python OpenSSL integration tests passed."
+    } finally {
+        if (Test-Path $testRoot) {
+            Remove-Item -LiteralPath $testRoot -Recurse -Force
+        }
     }
 }

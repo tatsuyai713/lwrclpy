@@ -43,9 +43,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up signed Python OpenSSL runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+
       - name: Test OpenSSL runtime selection
         shell: pwsh
-        run: scripts/windows/test_openssl_runtime_selection.ps1
+        run: scripts/windows/test_openssl_runtime_selection.ps1 -Integration
 
   build:
     needs: validate-packaging-scripts
