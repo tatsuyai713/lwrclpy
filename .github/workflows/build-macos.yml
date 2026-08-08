@@ -65,8 +65,7 @@ jobs:
             cmake \
             asio \
             tinyxml2 \
-            openssl@3 \
-            swig
+            openssl@3
 
       - name: Create virtual environment
         if: ${{ inputs.reuse_build_run_id == '' }}

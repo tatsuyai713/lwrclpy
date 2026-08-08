@@ -64,7 +64,7 @@ ASIO_INCLUDE_DIR="${ASIO_INCLUDE_DIR:-${BREW_PREFIX}/include}"
 
 log "Installing build deps via Homebrew…"
 retry 5 5 brew update
-retry 5 5 brew install ninja git pkg-config tinyxml2 wget curl swig gradle openssl@3 asio openjdk@17
+retry 5 5 brew install ninja git pkg-config tinyxml2 wget curl gradle openssl@3 asio openjdk@17
 
 # ===== cmake 3.x (avoid 4.x series) =====
 # Pin cmake to the latest 3.x to avoid incompatibilities with Fast DDS build scripts.
@@ -147,6 +147,14 @@ log "Creating venv (.venv) with ${PYBIN}…"
 source .venv/bin/activate
 retry 5 5 python -m pip install -U pip wheel
 retry 5 5 python -m pip install -U colcon-common-extensions vcstool empy
+retry 5 5 python -m pip install -U 'swig==4.1.1'
+
+SWIG_EXECUTABLE="$(command -v swig || true)"
+[[ -x "${SWIG_EXECUTABLE}" ]] || die "Pinned SWIG executable was not installed into the build venv"
+SWIG_VERSION="$(${SWIG_EXECUTABLE} -version | awk '/SWIG Version/ {print $3; exit}')"
+[[ "${SWIG_VERSION}" == "4.1.1" ]] || die "Expected SWIG 4.1.1, found ${SWIG_VERSION:-unknown} at ${SWIG_EXECUTABLE}"
+export SWIG_EXECUTABLE
+log "Using pinned SWIG ${SWIG_VERSION}: ${SWIG_EXECUTABLE}"
 
 # ===== Fetch repos =====
 if [[ ! -f "${REPOS_FILE}" ]]; then
@@ -319,6 +327,7 @@ CMAKE_COMMON_ARGS=(
   -DCMAKE_INSTALL_PREFIX="${PREFIX_V3}"
   -DCMAKE_INSTALL_RPATH="${PREFIX_V3}/lib;${PREFIX_V3}/lib64"
   -DPython3_EXECUTABLE="${PY_EXEC}"
+  -DSWIG_EXECUTABLE="${SWIG_EXECUTABLE}"
   -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}"
   -Dfoonathan_memory_DIR="${FOONATHAN_DIR}"
   -Dfastcdr_DIR="${FASTCDR_DIR}"

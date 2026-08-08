@@ -27,6 +27,22 @@ function Invoke-Step($Message, [scriptblock]$Block) {
     & $Block
 }
 
+function Invoke-ExternalWithRetry($Description, [scriptblock]$Block, [int]$Attempts = 4) {
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        & $Block
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            return
+        }
+        if ($attempt -eq $Attempts) {
+            throw "$Description failed after $Attempts attempts (exit code $exitCode)"
+        }
+        $delay = 10 * $attempt
+        Write-Warning "$Description failed on attempt $attempt/$Attempts (exit code $exitCode); retrying in $delay seconds"
+        Start-Sleep -Seconds $delay
+    }
+}
+
 function Ensure-Vcpkg($Root) {
     $exe = Join-Path $Root "vcpkg.exe"
     if (Test-Path $exe) {
@@ -226,19 +242,27 @@ Invoke-Step "Patching Fast-DDS-python CMake dependencies" {
 $genSrc = Join-Path $srcDir "Fast-DDS-Gen"
 Invoke-Step "Building fastddsgen from $genSrc" {
     Push-Location $genSrc
-    $gradleJavaHomeArg = Require-Java17ForGradle
-    if (Test-Path ".\gradlew.bat") {
-        .\gradlew.bat --no-daemon $gradleJavaHomeArg clean assemble
-        if ($LASTEXITCODE -ne 0) { throw "fastddsgen assemble failed" }
-        .\gradlew.bat --no-daemon $gradleJavaHomeArg install --install_path="$GenPrefix"
-        if ($LASTEXITCODE -ne 0) { throw "fastddsgen install failed" }
-    } else {
-        .\gradlew --no-daemon $gradleJavaHomeArg clean assemble
-        if ($LASTEXITCODE -ne 0) { throw "fastddsgen assemble failed" }
-        .\gradlew --no-daemon $gradleJavaHomeArg install --install_path="$GenPrefix"
-        if ($LASTEXITCODE -ne 0) { throw "fastddsgen install failed" }
+    try {
+        $gradleJavaHomeArg = Require-Java17ForGradle
+        $env:GRADLE_OPTS = "$env:GRADLE_OPTS -Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=120000".Trim()
+        if (Test-Path ".\gradlew.bat") {
+            Invoke-ExternalWithRetry "fastddsgen assemble" {
+                .\gradlew.bat --no-daemon $gradleJavaHomeArg clean assemble
+            }
+            Invoke-ExternalWithRetry "fastddsgen install" {
+                .\gradlew.bat --no-daemon $gradleJavaHomeArg install --install_path="$GenPrefix"
+            }
+        } else {
+            Invoke-ExternalWithRetry "fastddsgen assemble" {
+                .\gradlew --no-daemon $gradleJavaHomeArg clean assemble
+            }
+            Invoke-ExternalWithRetry "fastddsgen install" {
+                .\gradlew --no-daemon $gradleJavaHomeArg install --install_path="$GenPrefix"
+            }
+        }
+    } finally {
+        Pop-Location
     }
-    Pop-Location
 }
 
 $fastddsgen = Join-Path $GenPrefix "bin\fastddsgen.bat"
