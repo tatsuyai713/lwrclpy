@@ -72,7 +72,7 @@ jobs:
         run: |
           python -m venv build_venv
           source build_venv/bin/activate
-          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install --upgrade pip wheel setuptools 'swig==4.1.1'
 
       - name: Install FastDDS v3, Generate Python types, and Build wheel
         if: ${{ inputs.reuse_build_run_id == '' }}
@@ -82,6 +82,9 @@ jobs:
           export GEN_PREFIX="${GITHUB_WORKSPACE}/.lwrclpy-cache/fast-dds-gen-v3"
           export WS="${GITHUB_WORKSPACE}/.lwrclpy-cache/fastdds_python_ws"
           export LWRCLPY_USE_FASTDDS_CACHE=1
+          export SWIG_EXECUTABLE="${VIRTUAL_ENV}/bin/swig"
+          test -x "${SWIG_EXECUTABLE}"
+          "${SWIG_EXECUTABLE}" -version
           bash scripts/mac/mac_install_fastdds_v3_colcon.sh
           export PATH="${GEN_PREFIX}/bin:$PATH"
           export FASTDDSGEN_BIN="${GEN_PREFIX}/bin/fastddsgen"
