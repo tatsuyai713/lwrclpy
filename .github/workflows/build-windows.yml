@@ -145,7 +145,7 @@ jobs:
           $javaHomeVariable = if ($env:LWRCLPY_WINDOWS_BUILD_ARCH -eq "arm64") {
             "JAVA_HOME_21_AARCH64"
           } else {
-            "JAVA_HOME_17_X64"
+            "JAVA_HOME_21_X64"
           }
           $javaHome = [Environment]::GetEnvironmentVariable($javaHomeVariable)
           if ([string]::IsNullOrWhiteSpace($javaHome) -or -not (Test-Path "$javaHome\bin\java.exe")) {
