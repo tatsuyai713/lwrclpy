@@ -64,63 +64,54 @@ jobs:
           - arch: x64
             runner: windows-2025
             python-architecture: x64
-            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.10"
           - arch: x64
             runner: windows-2025
             python-architecture: x64
-            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.11"
           - arch: x64
             runner: windows-2025
             python-architecture: x64
-            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.12"
           - arch: x64
             runner: windows-2025
             python-architecture: x64
-            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.13"
           - arch: x64
             runner: windows-2025
             python-architecture: x64
-            java-version: "17"
             vcpkg-triplet: x64-windows
             build-root: C:\lwrclpy_windows_build_x64
             python-version: "3.14"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
-            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.11"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
-            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.12"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
-            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.13"
           - arch: arm64
             runner: windows-11-arm
             python-architecture: arm64
-            java-version: "21"
             vcpkg-triplet: arm64-windows
             build-root: C:\lwrclpy_windows_build_arm64
             python-version: "3.14"
@@ -145,12 +136,27 @@ jobs:
           python-version: "${{ matrix.python-version }}"
           architecture: "${{ matrix.python-architecture }}"
 
-      - name: Set up Java 17
+      - name: Select preinstalled Java
         if: ${{ inputs.reuse_build_run_id == '' }}
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "${{ matrix.java-version }}"
+        shell: pwsh
+        env:
+          LWRCLPY_WINDOWS_BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          $javaHomeVariable = if ($env:LWRCLPY_WINDOWS_BUILD_ARCH -eq "arm64") {
+            "JAVA_HOME_21_AARCH64"
+          } else {
+            "JAVA_HOME_17_X64"
+          }
+          $javaHome = [Environment]::GetEnvironmentVariable($javaHomeVariable)
+          if ([string]::IsNullOrWhiteSpace($javaHome) -or -not (Test-Path "$javaHome\bin\java.exe")) {
+            throw "The GitHub runner did not provide a usable $javaHomeVariable installation"
+          }
+          "JAVA_HOME=$javaHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$javaHome\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$javaHome\bin\java.exe" -version
+          if ($LASTEXITCODE -ne 0) {
+            throw "The preinstalled Java runtime failed with exit code $LASTEXITCODE"
+          }
 
       - name: Restore Fast DDS build cache
         if: ${{ inputs.reuse_build_run_id == '' }}
