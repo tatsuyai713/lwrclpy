@@ -7,6 +7,11 @@ on:
         description: "Run ID of the build workflow to fetch artifacts from"
         required: true
         type: string
+      reuse_test_run_id:
+        description: "Existing successful workflow run ID whose test result can be reused"
+        required: false
+        default: ""
+        type: string
   workflow_dispatch:
     inputs:
       build_run_id:
@@ -65,17 +70,20 @@ jobs:
       LWRCLPY_TEST_USE_INSTALLED: "1"
     steps:
       - name: Checkout code
+        if: ${{ inputs.reuse_test_run_id == '' }}
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Set up Python ${{ matrix.python-version }}
+        if: ${{ inputs.reuse_test_run_id == '' }}
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
           architecture: "${{ matrix.python-architecture }}"
 
       - name: Download wheel artifact
+        if: ${{ inputs.reuse_test_run_id == '' }}
         uses: actions/download-artifact@v4
         with:
           name: wheel-windows-${{ matrix.arch }}-py${{ matrix.python-version }}
@@ -85,6 +93,7 @@ jobs:
           repository: ${{ github.repository }}
 
       - name: Install wheel
+        if: ${{ inputs.reuse_test_run_id == '' }}
         shell: pwsh
         run: |
           python -m venv test_venv
@@ -100,6 +109,7 @@ jobs:
           python -m pip install $wheel.FullName
 
       - name: Run unit tests
+        if: ${{ inputs.reuse_test_run_id == '' }}
         shell: pwsh
         timeout-minutes: 15
         run: |
@@ -117,6 +127,7 @@ jobs:
           }
 
       - name: Run example tests
+        if: ${{ inputs.reuse_test_run_id == '' }}
         shell: pwsh
         timeout-minutes: 75
         run: |
@@ -126,6 +137,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+      - name: Reuse successful test result
+        if: ${{ inputs.reuse_test_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: test-log-windows-${{ matrix.arch }}-py${{ matrix.python-version }}
+          path: .
+          run-id: ${{ inputs.reuse_test_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
 
       - name: Upload test log
         if: always()

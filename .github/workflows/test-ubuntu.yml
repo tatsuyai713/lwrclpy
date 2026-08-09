@@ -7,6 +7,11 @@ on:
         description: "Run ID of the build workflow to fetch artifacts from"
         required: true
         type: string
+      reuse_test_run_id:
+        description: "Existing successful workflow run ID whose test result can be reused"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   test:
@@ -28,9 +33,11 @@ jobs:
       LWRCLPY_TEST_TIMEOUT_SCALE: "2.0"
     steps:
       - name: Checkout code
+        if: ${{ inputs.reuse_test_run_id == '' }}
         uses: actions/checkout@v4
 
       - name: Checkout submodules
+        if: ${{ inputs.reuse_test_run_id == '' }}
         run: |
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git submodule sync --recursive
@@ -44,11 +51,13 @@ jobs:
           git submodule update --init --recursive --depth=1 --jobs=1
 
       - name: Set up Python ${{ matrix.python-version }}
+        if: ${{ inputs.reuse_test_run_id == '' }}
         uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python-version }}"
 
       - name: Download wheel artifact
+        if: ${{ inputs.reuse_test_run_id == '' }}
         uses: actions/download-artifact@v4
         with:
           name: wheel-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}
@@ -58,6 +67,7 @@ jobs:
           repository: ${{ github.repository }}
 
       - name: Install wheel
+        if: ${{ inputs.reuse_test_run_id == '' }}
         run: |
           python -m venv test_venv
           source test_venv/bin/activate
@@ -73,6 +83,7 @@ jobs:
           pip install "$WHEEL_FILE"
 
       - name: Run unit tests
+        if: ${{ inputs.reuse_test_run_id == '' }}
         timeout-minutes: 15
         run: |
           set -euo pipefail
@@ -91,6 +102,7 @@ jobs:
           done
 
       - name: Run example tests
+        if: ${{ inputs.reuse_test_run_id == '' }}
         timeout-minutes: 75
         run: |
           set -x
@@ -100,6 +112,16 @@ jobs:
           TEST_EXIT_CODE=${PIPESTATUS[0]}
           echo "Test exit code: $TEST_EXIT_CODE"
           exit $TEST_EXIT_CODE
+
+      - name: Reuse successful test result
+        if: ${{ inputs.reuse_test_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: test-log-ubuntu-${{ matrix.platform.arch }}-py${{ matrix.python-version }}
+          path: .
+          run-id: ${{ inputs.reuse_test_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
 
       - name: Upload test log
         if: always()

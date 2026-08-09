@@ -92,21 +92,32 @@ jobs:
           scripts/ci/select_platforms.sh "${changed_files[@]}" | tee -a "$GITHUB_OUTPUT"
 
   resolve-build-artifacts:
+    needs: detect-platforms
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      reuse_build_run_id: ${{ steps.resolve.outputs.reuse_build_run_id }}
+      ubuntu_reuse_run_id: ${{ steps.resolve.outputs.ubuntu_reuse_run_id }}
+      macos_reuse_run_id: ${{ steps.resolve.outputs.macos_reuse_run_id }}
+      windows_reuse_run_id: ${{ steps.resolve.outputs.windows_reuse_run_id }}
     steps:
+      - name: Checkout CI helpers
+        uses: actions/checkout@v4
+
       - name: Resolve reusable build artifacts
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           PROVIDED_REUSE_BUILD_RUN_ID: ${{ inputs.reuse_build_run_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RUN_UBUNTU: ${{ needs.detect-platforms.outputs.ubuntu }}
+          RUN_MACOS: ${{ needs.detect-platforms.outputs.macos }}
+          RUN_WINDOWS: ${{ needs.detect-platforms.outputs.windows }}
         run: |
           if [ -n "$PROVIDED_REUSE_BUILD_RUN_ID" ]; then
             echo "Using provided build run: $PROVIDED_REUSE_BUILD_RUN_ID"
-            echo "reuse_build_run_id=$PROVIDED_REUSE_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "ubuntu_reuse_run_id=$PROVIDED_REUSE_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "macos_reuse_run_id=$PROVIDED_REUSE_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "windows_reuse_run_id=$PROVIDED_REUSE_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -127,61 +138,86 @@ jobs:
 
           if [ -n "$reuse_run_id" ]; then
             echo "Found reusable successful build run for $GITHUB_SHA: $reuse_run_id"
+            ubuntu_reuse_run_id="$reuse_run_id"
+            macos_reuse_run_id="$reuse_run_id"
+            windows_reuse_run_id="$reuse_run_id"
           else
-            echo "No reusable successful build run found for $GITHUB_SHA"
+            ubuntu_reuse_run_id=""
+            macos_reuse_run_id=""
+            windows_reuse_run_id=""
+
+            if [ "$RUN_UBUNTU" != "true" ]; then
+              ubuntu_reuse_run_id="$(scripts/ci/find_reusable_run.sh ubuntu "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+            fi
+            if [ "$RUN_MACOS" != "true" ]; then
+              macos_reuse_run_id="$(scripts/ci/find_reusable_run.sh macos "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+            fi
+            if [ "$RUN_WINDOWS" != "true" ]; then
+              windows_reuse_run_id="$(scripts/ci/find_reusable_run.sh windows "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+            fi
           fi
-          echo "reuse_build_run_id=$reuse_run_id" >> "$GITHUB_OUTPUT"
+          echo "ubuntu_reuse_run_id=$ubuntu_reuse_run_id" >> "$GITHUB_OUTPUT"
+          echo "macos_reuse_run_id=$macos_reuse_run_id" >> "$GITHUB_OUTPUT"
+          echo "windows_reuse_run_id=$windows_reuse_run_id" >> "$GITHUB_OUTPUT"
+          echo "Ubuntu reuse run: ${ubuntu_reuse_run_id:-none}"
+          echo "macOS reuse run: ${macos_reuse_run_id:-none}"
+          echo "Windows reuse run: ${windows_reuse_run_id:-none}"
 
   build-ubuntu-wheels:
-    if: ${{ needs.detect-platforms.outputs.ubuntu == 'true' }}
     needs:
       - detect-platforms
       - resolve-build-artifacts
     uses: ./.github/workflows/build-ubuntu.yml
     with:
-      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
+      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.ubuntu_reuse_run_id }}
 
   build-macos-wheels:
-    if: ${{ needs.detect-platforms.outputs.macos == 'true' }}
     needs:
       - detect-platforms
       - resolve-build-artifacts
     uses: ./.github/workflows/build-macos.yml
     with:
-      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
+      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.macos_reuse_run_id }}
 
   build-windows-wheels:
-    if: ${{ needs.detect-platforms.outputs.windows == 'true' }}
     needs:
       - detect-platforms
       - resolve-build-artifacts
     uses: ./.github/workflows/build-windows.yml
     with:
-      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
+      reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.windows_reuse_run_id }}
 
   test-ubuntu-wheels:
-    needs: build-ubuntu-wheels
+    needs:
+      - build-ubuntu-wheels
+      - resolve-build-artifacts
     uses: ./.github/workflows/test-ubuntu.yml
     with:
       build_run_id: ${{ needs.build-ubuntu-wheels.outputs.run_id }}
+      reuse_test_run_id: ${{ needs.resolve-build-artifacts.outputs.ubuntu_reuse_run_id }}
 
   test-macos-wheels:
-    needs: build-macos-wheels
+    needs:
+      - build-macos-wheels
+      - resolve-build-artifacts
     uses: ./.github/workflows/test-macos.yml
     with:
       build_run_id: ${{ needs.build-macos-wheels.outputs.run_id }}
+      reuse_test_run_id: ${{ needs.resolve-build-artifacts.outputs.macos_reuse_run_id }}
 
   test-windows-wheels:
-    needs: build-windows-wheels
+    needs:
+      - build-windows-wheels
+      - resolve-build-artifacts
     uses: ./.github/workflows/test-windows.yml
     with:
       build_run_id: ${{ needs.build-windows-wheels.outputs.run_id }}
+      reuse_test_run_id: ${{ needs.resolve-build-artifacts.outputs.windows_reuse_run_id }}
 
   release-wheels:
     if: >-
       ${{
         always() &&
-        needs.detect-platforms.outputs.all == 'true' &&
         needs.test-ubuntu-wheels.result == 'success' &&
         needs.test-macos-wheels.result == 'success' &&
         needs.test-windows-wheels.result == 'success' &&
