@@ -9,6 +9,16 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "Platform workflows to run"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - ubuntu
+          - macos
+          - windows
       release_tag:
         description: "Release tag to create or replace"
         required: false
@@ -22,7 +32,65 @@ permissions:
   contents: write
   actions: read
 
+concurrency:
+  group: wheel-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
 jobs:
+  detect-platforms:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      all: ${{ steps.platforms.outputs.all }}
+      ubuntu: ${{ steps.platforms.outputs.ubuntu }}
+      macos: ${{ steps.platforms.outputs.macos }}
+      windows: ${{ steps.platforms.outputs.windows }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select affected platforms
+        id: platforms
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "$REQUESTED_PLATFORM" in
+              ubuntu) scripts/ci/select_platforms.sh .github/workflows/build-ubuntu.yml ;;
+              macos) scripts/ci/select_platforms.sh .github/workflows/build-macos.yml ;;
+              windows) scripts/ci/select_platforms.sh .github/workflows/build-windows.yml ;;
+              all) scripts/ci/select_platforms.sh --all ;;
+              *) echo "Unsupported platform selection: $REQUESTED_PLATFORM" >&2; exit 1 ;;
+            esac | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            scripts/ci/select_platforms.sh --all | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            diff_base="$BASE_SHA"
+          else
+            diff_base="$BEFORE_SHA"
+          fi
+
+          if [[ -z "$diff_base" || "$diff_base" =~ ^0+$ ]] || ! git cat-file -e "${diff_base}^{commit}" 2>/dev/null; then
+            scripts/ci/select_platforms.sh --all | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -d '' -t changed_files < <(git diff --name-only -z "$diff_base" "$GITHUB_SHA")
+          printf 'Changed file: %s\n' "${changed_files[@]}"
+          scripts/ci/select_platforms.sh "${changed_files[@]}" | tee -a "$GITHUB_OUTPUT"
+
   resolve-build-artifacts:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -65,19 +133,28 @@ jobs:
           echo "reuse_build_run_id=$reuse_run_id" >> "$GITHUB_OUTPUT"
 
   build-ubuntu-wheels:
-    needs: resolve-build-artifacts
+    if: ${{ needs.detect-platforms.outputs.ubuntu == 'true' }}
+    needs:
+      - detect-platforms
+      - resolve-build-artifacts
     uses: ./.github/workflows/build-ubuntu.yml
     with:
       reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
 
   build-macos-wheels:
-    needs: resolve-build-artifacts
+    if: ${{ needs.detect-platforms.outputs.macos == 'true' }}
+    needs:
+      - detect-platforms
+      - resolve-build-artifacts
     uses: ./.github/workflows/build-macos.yml
     with:
       reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
 
   build-windows-wheels:
-    needs: resolve-build-artifacts
+    if: ${{ needs.detect-platforms.outputs.windows == 'true' }}
+    needs:
+      - detect-platforms
+      - resolve-build-artifacts
     uses: ./.github/workflows/build-windows.yml
     with:
       reuse_build_run_id: ${{ needs.resolve-build-artifacts.outputs.reuse_build_run_id }}
@@ -101,8 +178,18 @@ jobs:
       build_run_id: ${{ needs.build-windows-wheels.outputs.run_id }}
 
   release-wheels:
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
+    if: >-
+      ${{
+        always() &&
+        needs.detect-platforms.outputs.all == 'true' &&
+        needs.test-ubuntu-wheels.result == 'success' &&
+        needs.test-macos-wheels.result == 'success' &&
+        needs.test-windows-wheels.result == 'success' &&
+        github.event_name != 'pull_request' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
+      }}
     needs:
+      - detect-platforms
       - test-ubuntu-wheels
       - test-macos-wheels
       - test-windows-wheels
